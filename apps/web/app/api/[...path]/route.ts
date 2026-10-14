@@ -1,0 +1,51 @@
+import { NextRequest, NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
+
+async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
+  const host = request.headers.get("host");
+  if (!host || !/^(localhost|127\.0\.0\.1)(:[0-9]{1,5})?$/.test(host)) {
+    return NextResponse.json({ detail: "This foundation is available only on localhost" }, { status: 403 });
+  }
+  const origin = request.headers.get("origin");
+  if (request.method === "POST" && origin && origin !== `${request.nextUrl.protocol}//${host}`) {
+    return NextResponse.json({ detail: "Untrusted request origin" }, { status: 403 });
+  }
+  const { path } = await context.params;
+  const joined = path.join("/");
+  const accountPath = /^accounts\/[a-f0-9-]{36}$/;
+  const analyzePath = /^accounts\/[a-f0-9-]{36}\/analyze$/;
+  const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
+  const allowed = request.method === "GET"
+    ? joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
+    : joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
+  if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
+  try {
+    const body = request.method === "POST" ? await request.text() : undefined;
+    if (body && body.length > 4096) {
+      return NextResponse.json({ detail: "Request too large" }, { status: 413 });
+    }
+    const upstream = await fetch(`http://127.0.0.1:8000/api/${joined}`, {
+      method: request.method, body, cache: "no-store",
+      headers: {
+        "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}),
+        ...(request.headers.get("x-vitaai-request") === "1" ? { "X-VitaAi-Request": "1" } : {}),
+        ...(request.cookies.get("vitaai_session") ? { Cookie: `vitaai_session=${encodeURIComponent(request.cookies.get("vitaai_session")!.value)}` } : {}),
+      },
+      signal: AbortSignal.timeout(70000),
+    });
+    if (upstream.status >= 500) {
+      return NextResponse.json({ detail: "API failed to complete the request" }, { status: 502 });
+    }
+    const response = NextResponse.json(await upstream.json(), { status: upstream.status });
+    response.headers.set("Cache-Control", "no-store");
+    for (const cookie of upstream.headers.getSetCookie()) {
+      if (cookie.startsWith("vitaai_session=")) response.headers.append("Set-Cookie", cookie);
+    }
+    return response;
+  } catch {
+    return NextResponse.json({ detail: "API unavailable. Check the local API server." }, { status: 503 });
+  }
+}
+
+export { proxy as GET, proxy as POST };

@@ -1,0 +1,14 @@
+{
+  "name": "vitaai",
+  "private": true,
+  "workspaces": ["apps/web"],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/web",
+    "build": "npm run build --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/web",
+    "lint": "npm run lint --workspace apps/web",
+    "contracts": "node scripts/generate-api-types.mjs"
+  },
+  "devDependencies": {"openapi-typescript": "7.13.0"},
+  "engines": {"node": ">=20.9"}
+}
