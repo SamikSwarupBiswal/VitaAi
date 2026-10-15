@@ -16,13 +16,17 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const accountPath = /^accounts\/[a-f0-9-]{36}$/;
   const analyzePath = /^accounts\/[a-f0-9-]{36}\/analyze$/;
   const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
+  const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
+  const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes))?)?|actions/${uuid}(?:/history)?|executions/${uuid}|receipts/${uuid})$`);
+  const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|outcomes))?|actions/${uuid}/(?:submit|review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
+  const workflowPath = request.method === "GET" ? workflowRead.test(joined) : workflowWrite.test(joined);
   const allowed = request.method === "GET"
-    ? joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
-    : joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
+    ? workflowPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
+    : workflowPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
   try {
     const body = request.method === "POST" ? await request.text() : undefined;
-    if (body && body.length > 4096) {
+    if (body && body.length > (workflowPath ? 262144 : 4096)) {
       return NextResponse.json({ detail: "Request too large" }, { status: 413 });
     }
     const upstream = await fetch(`http://127.0.0.1:8000/api/${joined}`, {
