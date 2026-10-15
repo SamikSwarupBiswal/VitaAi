@@ -56,6 +56,12 @@ from .workflow_storage import (
     versions,
 )
 
+SIMULATION_TEMPLATES = {
+    "account-action-1": "hubspot_task_create",
+    "account-note-1": "hubspot_note_create",
+    "account-outlook-draft-1": "outlook_draft_create",
+}
+
 
 class Workflow:
     policy_version = "governance-1"
@@ -198,7 +204,7 @@ class Workflow:
                 # Foundation model output is analysis/drafts, not a validated executable plan. Do not relabel it.
                 raise PolicyDenied("structured_model_planning_pending")
             binding = evidence_binding(view)
-            step = PlanStep(id=uuid4(), kind="hubspot_task_create", content=proposal.rationale,
+            step = PlanStep(id=uuid4(), kind=body.action_kind, content=proposal.rationale,
                             evidence_ids=tuple(proposal.evidence_ids))
             alternative = Alternative(id=uuid4(), rationale=proposal.rationale, evidence_ids=step.evidence_ids,
                                       steps=(step,), risks=("Simulation only; no customer action occurs.",))
@@ -215,20 +221,29 @@ class Workflow:
             plan = self._get(connection, actor, plans, body.plan_id, Plan)
             self._version(plan, body.expected_revision)
             self._plan_check(connection, actor, plan)
+            alternative = next(item for item in plan.alternatives if item.id == plan.selected_alternative_id)
+            kind = SIMULATION_TEMPLATES[body.template]
+            if len(alternative.steps) != 1 or alternative.steps[0].kind != kind:
+                raise PolicyDenied("template_plan_mismatch")
             mission = Mission(**self._base(actor), account_id=plan.account_id, owner_id=actor.id,
                               template=body.template, plan_id=plan.id, plan_revision=plan.revision,
                               evidence=plan.evidence, status="draft", current_step="Review",
-                              allowed_kinds=tuple(dict.fromkeys(step.kind for item in plan.alternatives for step in item.steps)))
+                              allowed_kinds=(kind,))
             self._put(connection, missions, mission, new=True, plan_id=str(plan.id))
             self._audit(connection, actor, mission, "mission_created", mission_id=mission.id)
             return mission
 
-    def _destination(self, actor, account_id, connector_id):
-        if connector_id != "simulation-hubspot":
+    def _destination(self, actor, account_id, connector_id, kind):
+        expected = "simulation-microsoft" if kind == "outlook_draft_create" else "simulation-hubspot"
+        if connector_id != expected:
             raise PolicyDenied("connector_unavailable", 503)
-        return DestinationBinding(connector_id=connector_id, provider="hubspot", configuration_revision=1,
+        mailbox = ({"delegated_user_id": actor.id, "mailbox_id": "simulation-mailbox:" + actor.id}
+                   if kind == "outlook_draft_create" else {})
+        return DestinationBinding(connector_id=connector_id,
+                                  provider="microsoft" if kind == "outlook_draft_create" else "hubspot",
+                                  configuration_revision=1,
                                   tenant_id="simulation:" + actor.organization_id, target_account_id=account_id,
-                                  target_resource_id="simulation:" + str(account_id))
+                                  target_resource_id="simulation:" + str(account_id), **mailbox)
 
     def prepare(self, actor_id: str, mission_id, body: PrepareRequest) -> ActionPreview:
         with self._transaction(actor_id) as (connection, actor):
@@ -248,7 +263,7 @@ class Workflow:
                 raise PolicyDenied("action_already_claimed", 409)
             content_revision = mission.content_revision + 1
             # State-only transitions do not change the approved mission content revision.
-            destination = self._destination(actor, mission.account_id, body.connector_id)
+            destination = self._destination(actor, mission.account_id, body.connector_id, body.payload.kind)
             action = ActionPreview(**self._base(actor, id=previous.id if previous else uuid4(),
                 created_at=previous.created_at if previous else self.clock(),
                 revision=previous.revision + 1 if previous else 1), mission_id=mission.id,
@@ -272,7 +287,11 @@ class Workflow:
         if (action.mission_revision != mission.content_revision or action.plan_revision != plan.revision
                 or mission.plan_id != plan.id or mission.evidence != plan.evidence):
             raise PolicyDenied("mission_binding_changed", 409)
-        destination = self._destination(actor, mission.account_id, action.destination.connector_id)
+        # Mailbox identity belongs to the reviewed preparation, not the reviewer or executor.
+        preparer = self._actor(connection, action.preparer_id) if action.payload.kind == "outlook_draft_create" else actor
+        if preparer.organization_id != actor.organization_id:
+            raise PolicyDenied("mailbox_membership_changed", 409)
+        destination = self._destination(preparer, mission.account_id, action.destination.connector_id, action.payload.kind)
         if (action.mode != "simulation" or action.policy_version != self.policy_version
                 or action.destination != destination or action.evidence != evidence_binding(view)
                 or action.payload_hash != payload_hash(action.payload) or action.binding_hash != binding_hash(action)):

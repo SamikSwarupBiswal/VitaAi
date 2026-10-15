@@ -37,16 +37,69 @@ class WorkflowApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def create(self):
+    def create(self, payload=None, template="account-action-1", connector="simulation-hubspot"):
+        payload = payload or {"kind": "hubspot_task_create", "title": "Review support", "body": "Exact task body\n "}
         self.login("seller")
         account = self.client.get("/api/portfolio").json()["accounts"][0]
         plan = self.post("/api/plans", {"account_id": account["account"]["id"], "expected_revision": 1,
-            "expected_snapshot_hash": account["assessment"]["snapshot_hash"], "intent": "risk"})
-        mission = self.post("/api/missions", {"plan_id": plan["id"], "expected_revision": plan["revision"]})
+            "expected_snapshot_hash": account["assessment"]["snapshot_hash"], "intent": "risk",
+            "action_kind": payload["kind"]})
+        mission = self.post("/api/missions", {"plan_id": plan["id"], "expected_revision": plan["revision"],
+                                               "template": template})
         action = self.post(f'/api/missions/{mission["id"]}/prepare', {"expected_revision": mission["revision"],
-            "alternative_id": plan["selected_alternative_id"], "connector_id": "simulation-hubspot",
-            "payload": {"kind": "hubspot_task_create", "title": "Review support", "body": "Exact task body\n "}})
+            "alternative_id": plan["selected_alternative_id"], "connector_id": connector, "payload": payload})
         return plan, mission, action
+
+    def test_note_and_outlook_http_review_execution_and_replay(self):
+        for index, (payload, template, connector) in enumerate([
+                ({"kind": "hubspot_note_create", "body": "Exact note\n "}, "account-note-1", "simulation-hubspot"),
+                ({"kind": "outlook_draft_create", "to": ["buyer@example.com"], "subject": " Review ",
+                  "body_text": "Exact draft\n "}, "account-outlook-draft-1", "simulation-microsoft")]):
+            with self.subTest(kind=payload["kind"]):
+                self.client.cookies.clear()
+                _, _, action = self.create(payload, template, connector)
+                seller_session = self.client.cookies.get("vitaai_session")
+                seller_id = self.client.get("/api/auth/session").json()["actor"]["id"]
+                submitted = self.post(f'/api/actions/{action["id"]}/submit', {
+                    "expected_revision": action["revision"], "binding_hash": action["binding_hash"]})
+                self.client.cookies.clear()
+                self.login("reviewer")
+                decision = self.post(f'/api/actions/{action["id"]}/review', {
+                    "expected_revision": submitted["revision"], "binding_hash": submitted["binding_hash"],
+                    "decision": "approved"})
+                self.client.cookies.clear()
+                self.client.cookies.set("vitaai_session", seller_session)
+                request = {"expected_revision": submitted["revision"], "decision_id": decision["id"],
+                           "idempotency_key": f"http-kind-{index}"}
+                execution = self.post(f'/api/actions/{action["id"]}/execute', request)
+                self.assertEqual(execution["status"], "succeeded")
+                self.assertEqual(self.post(f'/api/actions/{action["id"]}/execute', request), execution)
+                receipt = self.client.get(f'/api/receipts/{execution["receipt_id"]}').json()
+                self.assertEqual((receipt["mode"], receipt["verification"]), ("simulation", "verified"))
+                if payload["kind"] == "outlook_draft_create":
+                    self.assertEqual(receipt["destination"]["mailbox_id"], "simulation-mailbox:" + seller_id)
+                self.assertEqual(self.client.get(f'/api/actions/{action["id"]}').json()["payload"],
+                                 {"schema_version": "1", **payload})
+
+    def test_outlook_input_validation_and_server_owned_destination(self):
+        payload = {"kind": "outlook_draft_create", "to": ["buyer@example.com"], "subject": "Review", "body_text": "Draft"}
+        plan, mission, _ = self.create(payload, "account-outlook-draft-1", "simulation-microsoft")
+        current = self.client.get(f'/api/missions/{mission["id"]}').json()
+        body = {"expected_revision": current["revision"], "alternative_id": plan["selected_alternative_id"],
+                "connector_id": "simulation-microsoft", "payload": payload}
+        for changes in ({"to": ["buyer@example.com", "BUYER@example.com"]}, {"to": ["invalid"]},
+                        {"subject": "Review\r\nBcc:other@example.com"}, {"body_text": "bad\u0000"},
+                        {"send": True}):
+            with self.subTest(changes=changes):
+                response = self.client.post(f'/api/missions/{mission["id"]}/prepare', headers=HEADERS,
+                                            json={**body, "payload": {**payload, **changes}})
+                self.assertEqual(response.status_code, 422)
+        for field in ("destination", "mailbox_id", "delegated_user_id"):
+            response = self.client.post(f'/api/missions/{mission["id"]}/prepare', headers=HEADERS,
+                                        json={**body, field: "sentinel-forged-mailbox"})
+            self.assertEqual(response.status_code, 422)
+            self.assertNotIn("sentinel-forged-mailbox", response.text)
+        self.assertEqual(self.client.get(f'/api/missions/{mission["id"]}').json(), current)
 
     def test_authenticated_http_journey_and_restart(self):
         plan, mission, action = self.create()

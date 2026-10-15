@@ -43,6 +43,7 @@ Hash = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
 Revision = Annotated[StrictInt, Field(ge=1)]
 UTCTime = Annotated[AwareDatetime, AfterValidator(utc)]
 Kind = Literal["hubspot_task_create", "hubspot_note_create", "outlook_draft_create"]
+Template = Literal["account-action-1", "account-note-1", "account-outlook-draft-1"]
 Mode = Literal["simulation", "live"]
 Decision = Literal["approved", "rejected", "revision_required"]
 MissionStatus = Literal["draft", "prepared", "awaiting_review", "approved", "rejected", "revision_required",
@@ -156,7 +157,7 @@ class Plan(Record):
 class Mission(Record):
     account_id: UUID
     owner_id: Reference
-    template: Literal["account-action-1"]
+    template: Template
     plan_id: UUID
     plan_revision: Revision
     content_revision: Revision = 1
@@ -319,11 +320,12 @@ class PlanRequest(RevisionRequest):
     expected_snapshot_hash: Hash
     intent: Literal["attention", "risk", "growth", "renewal", "manual_review", "monitor"]
     model_run_id: UUID | None = None
+    action_kind: Kind = "hubspot_task_create"
 
 
 class MissionRequest(RevisionRequest):
     plan_id: UUID
-    template: Literal["account-action-1"] = "account-action-1"
+    template: Template = "account-action-1"
 
 
 class PrepareRequest(RevisionRequest):

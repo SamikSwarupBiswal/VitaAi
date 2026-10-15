@@ -1106,9 +1106,9 @@ export interface components {
             owner_id: string;
             /**
              * Template
-             * @constant
+             * @enum {string}
              */
-            template: "account-action-1";
+            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1";
             /**
              * Plan Id
              * Format: uuid
@@ -1158,9 +1158,9 @@ export interface components {
             /**
              * Template
              * @default account-action-1
-             * @constant
+             * @enum {string}
              */
-            template: "account-action-1";
+            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1";
         };
         /** ModelRun */
         ModelRun: {
@@ -1522,6 +1522,12 @@ export interface components {
             intent: "attention" | "risk" | "growth" | "renewal" | "manual_review" | "monitor";
             /** Model Run Id */
             model_run_id?: string | null;
+            /**
+             * Action Kind
+             * @default hubspot_task_create
+             * @enum {string}
+             */
+            action_kind: "hubspot_task_create" | "hubspot_note_create" | "outlook_draft_create";
         };
         /** PlanStep */
         PlanStep: {

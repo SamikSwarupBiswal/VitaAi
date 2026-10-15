@@ -24,7 +24,9 @@ from vita_api.workflow import Workflow
 from vita_api.workflow_contracts import (
     ExecuteRequest,
     MissionRequest,
+    NotePayload,
     OutcomeRequest,
+    OutlookPayload,
     PlanRequest,
     PrepareRequest,
     ReviewRequest,
@@ -69,24 +71,147 @@ class Stage2Tests(unittest.TestCase):
             self.pg_admin.dispose()
         self.temp.cleanup()
 
-    def prepare(self):
+    def prepare(self, payload=None, template="account-action-1", connector="simulation-hubspot"):
+        payload = payload or TaskPayload(title="Review account", body="Exact reviewed body\n ")
         self.plan = self.workflow.create_plan(self.seller.id, PlanRequest(
-            account_id=self.account.id, expected_revision=1, expected_snapshot_hash=self.snapshot, intent="risk"))
-        self.mission = self.workflow.create_mission(self.seller.id, MissionRequest(plan_id=self.plan.id, expected_revision=1))
+            account_id=self.account.id, expected_revision=1, expected_snapshot_hash=self.snapshot, intent="risk",
+            action_kind=payload.kind))
+        self.mission = self.workflow.create_mission(self.seller.id, MissionRequest(
+            plan_id=self.plan.id, expected_revision=1, template=template))
         self.action = self.workflow.prepare(self.seller.id, self.mission.id, PrepareRequest(
             expected_revision=self.mission.revision, alternative_id=self.plan.selected_alternative_id,
-            connector_id="simulation-hubspot", payload=TaskPayload(title="Review account", body="Exact reviewed body\n ")))
+            connector_id=connector, payload=payload))
         self.mission = self.workflow.get_mission(self.seller.id, self.mission.id)
         return self.action
 
-    def approve(self):
-        self.prepare()
+    def approve(self, **preparation):
+        self.prepare(**preparation)
         self.action = self.workflow.submit(self.seller.id, self.action.id, SubmitRequest(
             expected_revision=self.action.revision, binding_hash=self.action.binding_hash))
         self.decision = self.workflow.review(self.reviewer.id, self.action.id, ReviewRequest(
             expected_revision=self.action.revision, binding_hash=self.action.binding_hash, decision="approved"))
         return ExecuteRequest(expected_revision=self.action.revision, decision_id=self.decision.id,
                               idempotency_key="request-1")
+
+    def test_note_and_outlook_exact_readback_replay_and_restart(self):
+        cases = [(NotePayload(body="Résumé: evidence\n "), "account-note-1", "simulation-hubspot"),
+                 (OutlookPayload(to=("buyer@example.com", "owner@example.org"), subject=" Review ",
+                                 body_text="Exact draft\n "), "account-outlook-draft-1", "simulation-microsoft")]
+        for index, (payload, template, connector) in enumerate(cases):
+            with self.subTest(kind=payload.kind):
+                request = self.approve(payload=payload, template=template, connector=connector)
+                request = request.model_copy(update={"idempotency_key": f"kind-{index}"})
+                destination = self.action.destination
+                if payload.kind == "outlook_draft_create":
+                    self.assertEqual(destination.delegated_user_id, self.seller.id)
+                    self.assertEqual(destination.mailbox_id, "simulation-mailbox:" + self.seller.id)
+                else:
+                    self.assertIsNone(destination.mailbox_id)
+                # Reviewer/executor identity must never replace the preparer's mailbox.
+                result = self.workflow.execute(self.reviewer.id, self.action.id, request)
+                receipt = self.workflow.get_receipt(self.seller.id, result.receipt_id)
+                self.assertEqual((result.status, receipt.mode, receipt.verification),
+                                 ("succeeded", "simulation", "verified"))
+                self.assertEqual(receipt.destination, destination)
+                restarted = Workflow(self.store, clock=lambda: self.now)
+                self.assertEqual(restarted.get_action(self.seller.id, self.action.id).payload, payload)
+                self.assertEqual(restarted.execute(self.seller.id, self.action.id, request), result)
+                with self.assertRaises(PolicyDenied):
+                    restarted.execute(self.seller.id, self.action.id,
+                                      request.model_copy(update={"idempotency_key": f"another-{index}"}))
+                with self.store.engine.connect() as connection:
+                    canonical = connection.execute(select(resources.c.canonical_payload).where(
+                        resources.c.execution_id == str(result.id))).scalar_one()
+                    self.assertEqual(canonical, restarted.canonical_payload(self.seller.id, self.action.id))
+
+    def test_template_kind_and_connector_must_match_plan(self):
+        self.prepare()
+        with self.assertRaises(PolicyDenied) as failure:
+            self.workflow.create_mission(self.seller.id, MissionRequest(
+                plan_id=self.plan.id, expected_revision=1, template="account-note-1"))
+        self.assertEqual(failure.exception.code, "template_plan_mismatch")
+        for payload, connector in [(NotePayload(body="unplanned"), "simulation-hubspot"),
+                                   (TaskPayload(title="x", body="x"), "simulation-microsoft"),
+                                   (TaskPayload(title="x", body="x"), "live-hubspot")]:
+            with self.subTest(kind=payload.kind, connector=connector), self.assertRaises(PolicyDenied):
+                self.workflow.prepare(self.seller.id, self.mission.id, PrepareRequest(
+                    expected_revision=self.mission.revision, alternative_id=self.plan.selected_alternative_id,
+                    connector_id=connector, payload=payload))
+
+    def test_outlook_edits_invalidate_approval_and_preserve_slot_history(self):
+        original = OutlookPayload(to=("first@example.com", "second@example.com"), subject="Review", body_text="Draft")
+        request = self.approve(payload=original, template="account-outlook-draft-1", connector="simulation-microsoft")
+        for changes in ({"to": tuple(reversed(original.to))}, {"subject": "Changed"}, {"body_text": "Draft\n "}):
+            mission = self.workflow.get_mission(self.seller.id, self.mission.id)
+            previous = self.action
+            self.action = self.workflow.prepare(self.seller.id, mission.id, PrepareRequest(
+                expected_revision=mission.revision, alternative_id=self.plan.selected_alternative_id,
+                connector_id="simulation-microsoft", payload=original.model_copy(update=changes)))
+            self.assertEqual(self.action.slot_id, previous.slot_id)
+            self.assertNotEqual(self.action.binding_hash, previous.binding_hash)
+            with self.assertRaises(PolicyDenied):
+                self.workflow.execute(self.seller.id, self.action.id, request)
+        self.assertEqual(self.workflow.action_history(self.seller.id, self.action.id)[1].payload, original)
+        with self.store.engine.connect() as connection:
+            self.assertIsNone(connection.execute(select(resources.c.id)).first())
+
+    def test_outlook_mailbox_configuration_change_blocks_creation(self):
+        request = self.approve(payload=OutlookPayload(to=("buyer@example.com",), subject="Review", body_text="Draft"),
+                               template="account-outlook-draft-1", connector="simulation-microsoft")
+        resolve = self.workflow._destination
+
+        def changed(*args, **kwargs):
+            return resolve(*args, **kwargs).model_copy(update={"mailbox_id": "another-mailbox",
+                                                              "configuration_revision": 2})
+
+        with patch.object(self.workflow, "_destination", side_effect=changed), self.assertRaises(PolicyDenied):
+            self.workflow.execute(self.seller.id, self.action.id, request)
+        with self.store.engine.connect() as connection:
+            self.assertIsNone(connection.execute(select(claims.c.id)).first())
+
+    def test_note_and_outlook_retain_authorization_and_uncertainty(self):
+        viewer = self.identity.create_user("viewer-kinds", "test-password-long", SAMPLE_ORG, "viewer")
+        for index, (payload, template, connector) in enumerate([
+                (NotePayload(body="Evidence"), "account-note-1", "simulation-hubspot"),
+                (OutlookPayload(to=("buyer@example.com",), subject="Review", body_text="Draft"),
+                 "account-outlook-draft-1", "simulation-microsoft")]):
+            request = self.approve(payload=payload, template=template, connector=connector)
+            request = request.model_copy(update={"idempotency_key": f"timeout-{index}"})
+            with self.assertRaises(PolicyDenied):
+                self.workflow.execute(viewer.id, self.action.id, request)
+            self.workflow.simulation_profile = "timeout_after"
+            execution = self.workflow.execute(self.seller.id, self.action.id, request)
+            self.assertEqual(execution.status, "result_unknown")
+            self.assertEqual(self.workflow.execute(self.seller.id, self.action.id, request), execution)
+            reconciled = self.workflow.reconcile(self.reviewer.id, execution.id, execution.revision)
+            self.assertEqual(reconciled.status, "succeeded")
+
+    def test_outlook_preparer_change_requires_new_mailbox_review(self):
+        payload = OutlookPayload(to=("buyer@example.com",), subject="Review", body_text="Draft")
+        request = self.approve(payload=payload, template="account-outlook-draft-1", connector="simulation-microsoft")
+        another = self.identity.create_user("another-seller", "test-password-long", SAMPLE_ORG, "seller")
+        mission = self.workflow.get_mission(self.seller.id, self.mission.id)
+        edited = self.workflow.prepare(another.id, mission.id, PrepareRequest(
+            expected_revision=mission.revision, alternative_id=self.plan.selected_alternative_id,
+            connector_id="simulation-microsoft", payload=payload))
+        self.assertEqual(edited.slot_id, self.action.slot_id)
+        self.assertEqual(edited.destination.delegated_user_id, another.id)
+        self.assertNotEqual(edited.binding_hash, self.action.binding_hash)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.execute(another.id, edited.id, request.model_copy(update={"expected_revision": edited.revision}))
+        submitted = self.workflow.submit(another.id, edited.id, SubmitRequest(
+            expected_revision=edited.revision, binding_hash=edited.binding_hash))
+        decision = self.workflow.review(self.reviewer.id, edited.id, ReviewRequest(
+            expected_revision=submitted.revision, binding_hash=submitted.binding_hash, decision="approved"))
+        # A subsequent organization transfer invalidates the reviewed mailbox even for another executor.
+        with self.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == another.id).values(organization_id="other-org"))
+        with self.assertRaises(PolicyDenied) as failure:
+            self.workflow.execute(self.seller.id, edited.id, ExecuteRequest(
+                expected_revision=submitted.revision, decision_id=decision.id, idempotency_key="mailbox-transfer"))
+        self.assertEqual(failure.exception.code, "mailbox_membership_changed")
+        with self.store.engine.connect() as connection:
+            self.assertIsNone(connection.execute(select(resources.c.id)).first())
 
     def test_simulation_receipt_independent_outcome_and_restart(self):
         body = self.approve()
