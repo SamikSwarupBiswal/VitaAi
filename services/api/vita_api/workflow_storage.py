@@ -1,4 +1,4 @@
-"""Database constraints for organization-scoped workflow records (migration 0003)."""
+"""Database constraints for organization-scoped workflow records (migrations 0003-0004)."""
 from sqlalchemy import (
     JSON,
     Column,
@@ -29,9 +29,11 @@ missions = record("workflow_missions", Column("plan_id", String(80), nullable=Fa
                   reference("plan_id", "workflow_plans"))
 actions = record("workflow_actions", Column("mission_id", String(80), nullable=False),
                  Column("plan_id", String(80), nullable=False), Column("slot_id", String(80), nullable=False),
+                 Column("step_id", String(80), nullable=True),
                  Column("canonical_payload", Text, nullable=False),
                  reference("mission_id", "workflow_missions"), reference("plan_id", "workflow_plans"),
-                 UniqueConstraint("organization_id", "mission_id"), UniqueConstraint("organization_id", "slot_id"))
+                 UniqueConstraint("organization_id", "mission_id", "step_id"),
+                 UniqueConstraint("organization_id", "slot_id"))
 decisions = record("workflow_decisions", Column("action_id", String(80), nullable=False),
                    Column("reviewer_session_hash", String(64), nullable=True),
                    Column("action_revision", Integer, nullable=False), reference("action_id", "workflow_actions"),

@@ -10,7 +10,9 @@ from threading import Barrier
 from unittest.mock import patch
 from uuid import uuid4
 
-from sqlalchemy import create_engine, select, update
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import MetaData, create_engine, inspect, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
@@ -92,6 +94,239 @@ class Stage2Tests(unittest.TestCase):
             expected_revision=self.action.revision, binding_hash=self.action.binding_hash, decision="approved"))
         return ExecuteRequest(expected_revision=self.action.revision, decision_id=self.decision.id,
                               idempotency_key="request-1")
+
+    def multi(self, choice_index=0):
+        plan = self.workflow.create_plan(self.seller.id, PlanRequest(
+            account_id=self.account.id, expected_revision=1, expected_snapshot_hash=self.snapshot,
+            intent="risk", strategy="follow_up"))
+        self.assertEqual(len(plan.alternatives), 2)
+        choice = plan.alternatives[choice_index]
+        mission = self.workflow.create_mission(self.seller.id, MissionRequest(
+            plan_id=plan.id, expected_revision=1, template="account-follow-up-1", alternative_id=choice.id))
+        for step in choice.steps:
+            payload = (TaskPayload(title="Exact task", body="Task\n ") if step.kind == "hubspot_task_create" else
+                       OutlookPayload(to=("buyer@example.com",), subject="Exact draft", body_text="Draft\n ")
+                       if step.kind == "outlook_draft_create" else NotePayload(body="Exact note\n "))
+            self.workflow.prepare(self.seller.id, mission.id, PrepareRequest(
+                expected_revision=mission.revision, alternative_id=choice.id, step_id=step.id,
+                connector_id="simulation-microsoft" if step.kind == "outlook_draft_create" else "simulation-hubspot",
+                payload=payload))
+            mission = self.workflow.get_mission(self.seller.id, mission.id)
+        by_step = {action.step_id: action for action in self.workflow.list_actions(self.seller.id, mission.id)}
+        requests = []
+        for step in choice.steps:
+            action = by_step[step.id]
+            action = self.workflow.submit(self.seller.id, action.id, SubmitRequest(
+                expected_revision=action.revision, binding_hash=action.binding_hash))
+            decision = self.workflow.review(self.reviewer.id, action.id, ReviewRequest(
+                expected_revision=action.revision, binding_hash=action.binding_hash, decision="approved"))
+            requests.append((action, ExecuteRequest(expected_revision=action.revision,
+                decision_id=decision.id, idempotency_key=str(action.id))))
+        return plan, mission, requests
+
+    def test_multi_dependencies_replay_and_outcome_aggregation(self):
+        for index in (0, 1):
+            plan, mission, ((first, request), (second, dependent)) = self.multi(index)
+            with self.assertRaises(PolicyDenied) as failure:
+                self.workflow.execute(self.seller.id, second.id, dependent)
+            self.assertEqual(failure.exception.code, "dependency_not_satisfied")
+            result = self.workflow.execute(self.seller.id, first.id, request)
+            self.assertEqual(result.status, "succeeded")
+            self.assertNotEqual(self.workflow.get_mission(self.seller.id, mission.id).status, "executed")
+            with self.assertRaises(PolicyDenied):
+                self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(
+                    expected_revision=self.workflow.get_mission(self.seller.id, mission.id).revision,
+                    receipt_id=result.receipt_id, kind="follow_up_required", basis="manual_report",
+                    evidence_ids=plan.evidence.evidence_ids, note="Not finished"))
+            restarted = Workflow(self.store, clock=lambda: self.now)
+            self.assertEqual(restarted.execute(self.seller.id, first.id, request), result)
+            result2 = restarted.execute(self.seller.id, second.id, dependent)
+            self.assertEqual(result2.status, "succeeded")
+            self.assertEqual(restarted.get_mission(self.seller.id, mission.id).status, "executed")
+            self.assertNotEqual(first.slot_id, second.slot_id)
+            with self.assertRaises(PolicyDenied):
+                restarted.execute(self.seller.id, second.id, dependent.model_copy(update={"idempotency_key": "new"}))
+
+    def test_upgrade_0003_preserves_unknown_claim_and_history(self):
+        request = self.approve()
+        self.workflow.simulation_profile = "timeout_after"
+        execution = self.workflow.execute(self.seller.id, self.action.id, request)
+        snapshot = {}
+        source = MetaData()
+        source.reflect(self.store.engine)
+        with self.store.engine.connect() as connection:
+            for table in source.sorted_tables:
+                if table.name != "alembic_version":
+                    snapshot[table.name] = [dict(row) for row in connection.execute(select(table)).mappings()]
+        for table_name in ("workflow_actions", "workflow_missions", "workflow_versions"):
+            for row in snapshot[table_name]:
+                row["payload"].pop("step_id", None)
+                row["payload"].pop("alternative_id", None)
+        # Construct a populated historical schema without depending on a downgrade implementation.
+        legacy_schema = None
+        legacy_url = f"sqlite:///{Path(self.temp.name) / 'legacy.sqlite'}"
+        if self.pg_admin is not None:
+            legacy_schema = "vitaai_legacy_" + uuid4().hex
+            with self.pg_admin.begin() as connection:
+                connection.execute(CreateSchema(legacy_schema))
+            legacy_url = make_url(os.environ["VITAAI_POSTGRES_TEST_URL"]).update_query_dict({
+                "options": "-csearch_path=" + legacy_schema,
+            }).render_as_string(hide_password=False)
+        legacy = Store(legacy_url)
+        config = Config()
+        config.set_main_option("script_location", str(Path(__file__).parents[1] / "migrations"))
+        try:
+            with legacy.engine.begin() as connection:
+                config.attributes["connection"] = connection
+                command.upgrade(config, "0003")
+            old = MetaData()
+            old.reflect(legacy.engine)
+            with legacy.engine.begin() as connection:
+                for table in old.sorted_tables:
+                    if snapshot.get(table.name):
+                        connection.execute(table.insert(), [
+                            {key: value for key, value in row.items() if key in table.c}
+                            for row in snapshot[table.name]])
+            legacy.initialize()
+            self.assertIn("step_id", {column["name"] for column in inspect(legacy.engine).get_columns("workflow_actions")})
+            preserved = MetaData()
+            preserved.reflect(legacy.engine)
+            with legacy.engine.connect() as connection:
+                for name, rows in snapshot.items():
+                    columns = [column for column in preserved.tables[name].c if column.name in source.tables[name].c]
+                    actual = [dict(row) for row in connection.execute(select(*columns)).mappings()]
+                    if name == "workflow_actions":
+                        # Historical 0003 rows did not have this column; it remains nullable for their exact hashes.
+                        for row in actual:
+                            row["step_id"] = None
+                    self.assertEqual(sorted(actual, key=lambda row: str(row.get("id", row))),
+                                     sorted(rows, key=lambda row: str(row.get("id", row))))
+            restarted = Workflow(legacy, clock=lambda: self.now)
+            self.assertEqual(restarted.get_action(self.seller.id, self.action.id), self.action)
+            self.assertEqual(restarted.action_history(self.seller.id, self.action.id),
+                             self.workflow.action_history(self.seller.id, self.action.id))
+            self.assertEqual(restarted.execute(self.seller.id, self.action.id, request), execution)
+            self.assertEqual(restarted.reconcile(self.reviewer.id, execution.id, execution.revision).status, "succeeded")
+            with self.assertRaises(PolicyDenied):
+                restarted.execute(self.seller.id, self.action.id, request.model_copy(update={"idempotency_key": "new"}))
+            if legacy.engine.dialect.name == "sqlite":
+                with legacy.engine.connect() as connection:
+                    self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+                    self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
+        finally:
+            legacy.engine.dispose()
+            if legacy_schema:
+                with self.pg_admin.begin() as connection:
+                    connection.execute(DropSchema(legacy_schema, cascade=True))
+
+    def test_multi_unknown_dependency_and_frozen_edits(self):
+        plan, mission, ((first, request), (second, dependent)) = self.multi()
+        self.workflow.simulation_profile = "timeout_before"
+        result = self.workflow.execute(self.seller.id, first.id, request)
+        result = self.workflow.reconcile(self.reviewer.id, result.id, result.revision)
+        self.assertEqual(result.status, "result_unknown")
+        with self.assertRaises(PolicyDenied):
+            self.workflow.execute(self.seller.id, second.id, dependent)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.prepare(self.seller.id, mission.id, PrepareRequest(
+                expected_revision=self.workflow.get_mission(self.seller.id, mission.id).revision,
+                alternative_id=plan.selected_alternative_id, step_id=second.step_id,
+                connector_id="simulation-hubspot", payload=NotePayload(body="replacement")))
+        self.assertEqual(self.workflow.get_mission(self.seller.id, mission.id).status, "reconciliation_required")
+
+    def test_multi_edit_invalidates_sibling_and_denies_role_scope_and_step(self):
+        plan, mission, ((first, old), (second, _)) = self.multi()
+        viewer = self.identity.create_user("multi-viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        outsider = self.identity.create_user("multi-other", "test-password-long", "other", "admin")
+        body = PrepareRequest(expected_revision=self.workflow.get_mission(self.seller.id, mission.id).revision,
+            alternative_id=plan.selected_alternative_id, step_id=second.step_id,
+            connector_id="simulation-hubspot", payload=NotePayload(body="Changed"))
+        for actor in (viewer, outsider):
+            with self.assertRaises(PolicyDenied):
+                self.workflow.prepare(actor.id, mission.id, body)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.prepare(self.seller.id, mission.id, body.model_copy(update={"step_id": uuid4()}))
+        self.workflow.prepare(self.seller.id, mission.id, body)
+        sibling = self.workflow.get_action(self.seller.id, first.id)
+        self.assertEqual(sibling.status, "draft")
+        self.assertGreater(sibling.revision, first.revision)
+        self.assertEqual(sibling.slot_id, first.slot_id)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.execute(self.seller.id, first.id, old)
+
+    def test_multi_rejection_blocks_all_claims_and_safe_retry_unlocks_dependency(self):
+        _, mission, ((first, request), (second, dependent)) = self.multi()
+        self.workflow.simulation_profile = "reject"
+        failed = self.workflow.execute(self.seller.id, first.id, request)
+        self.assertEqual(self.workflow.get_mission(self.seller.id, mission.id).status, "execution_failed")
+        with self.assertRaises(PolicyDenied):
+            self.workflow.execute(self.seller.id, second.id, dependent)
+        self.workflow.simulation_profile = "success"
+        retried = self.workflow.retry(self.seller.id, failed.id, ExecuteRequest(
+            expected_revision=failed.revision, decision_id=request.decision_id, idempotency_key=request.idempotency_key))
+        self.assertEqual((retried.id, retried.attempt, retried.status), (failed.id, 2, "succeeded"))
+        self.assertEqual(self.workflow.execute(self.seller.id, second.id, dependent).status, "succeeded")
+
+    def test_multi_rejected_sibling_cannot_authorize_first_action(self):
+        plan, mission, ((first, _), (second, _)) = self.multi()
+        self.workflow.prepare(self.seller.id, mission.id, PrepareRequest(
+            expected_revision=self.workflow.get_mission(self.seller.id, mission.id).revision,
+            alternative_id=plan.selected_alternative_id, step_id=first.step_id,
+            connector_id="simulation-hubspot", payload=TaskPayload(title="Changed", body="New")))
+        current = {item.step_id: item for item in self.workflow.list_actions(self.seller.id, mission.id)}
+        requests = []
+        for step in plan.alternatives[0].steps:
+            item = current[step.id]
+            item = self.workflow.submit(self.seller.id, item.id, SubmitRequest(
+                expected_revision=item.revision, binding_hash=item.binding_hash))
+            decision = self.workflow.review(self.reviewer.id, item.id, ReviewRequest(
+                expected_revision=item.revision, binding_hash=item.binding_hash,
+                decision="rejected" if item.id == second.id else "approved",
+                reason="Revise this note" if item.id == second.id else None))
+            requests.append((item, ExecuteRequest(expected_revision=item.revision,
+                decision_id=decision.id, idempotency_key="rejected-multi")))
+        with self.assertRaises(PolicyDenied) as failure:
+            self.workflow.claim(self.seller.id, requests[0][0].id, requests[0][1])
+        self.assertEqual(failure.exception.code, "mission_not_approved")
+        self.assertEqual(self.workflow.get_mission(self.seller.id, mission.id).status, "rejected")
+
+    def test_multi_concurrent_claim_is_unique(self):
+        _, _, ((first, request), _) = self.multi()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.workflow.execute(self.seller.id, first.id, request), range(2)))
+        self.assertEqual(results[0].id, results[1].id)
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(resources.c.id).where(
+                resources.c.execution_id == str(results[0].id))).all()), 1)
+
+    def test_multi_revoked_sibling_review_blocks_first_dispatch(self):
+        _, _, ((first, request), (second, _)) = self.multi()
+        other = self.identity.create_user("multi-reviewer", "test-password-long", SAMPLE_ORG, "reviewer")
+        with self.store.engine.begin() as connection:
+            row = connection.execute(select(decisions.c.payload).where(decisions.c.action_id == str(second.id))).scalar_one()
+            row["reviewer_id"] = other.id
+            connection.execute(update(decisions).where(decisions.c.action_id == str(second.id)).values(payload=row))
+        execution, _ = self.workflow.claim(self.seller.id, first.id, request)
+        with self.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == other.id).values(enabled=False))
+        with self.assertRaises(PolicyDenied):
+            self.workflow.mark_dispatching(self.seller.id, execution.id)
+
+    def test_sqlite_migration_failure_rolls_back_and_restores_foreign_keys(self):
+        from vita_api.migrate import upgrade
+
+        if self.store.engine.dialect.name != "sqlite":
+            self.skipTest("SQLite transaction/pragma behavior")
+
+        def fail(config, target):
+            config.attributes["connection"].exec_driver_sql("CREATE TABLE migration_rollback_probe(id INTEGER)")
+            raise RuntimeError("injected migration failure")
+
+        with patch("vita_api.migrate.command.upgrade", side_effect=fail), self.assertRaisesRegex(RuntimeError, "injected"):
+            upgrade(self.store.engine)
+        with self.store.engine.connect() as connection:
+            self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+        self.assertNotIn("migration_rollback_probe", inspect(self.store.engine).get_table_names())
 
     def test_note_and_outlook_exact_readback_replay_and_restart(self):
         cases = [(NotePayload(body="Résumé: evidence\n "), "account-note-1", "simulation-hubspot"),

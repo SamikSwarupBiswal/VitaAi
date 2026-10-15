@@ -43,7 +43,7 @@ Hash = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
 Revision = Annotated[StrictInt, Field(ge=1)]
 UTCTime = Annotated[AwareDatetime, AfterValidator(utc)]
 Kind = Literal["hubspot_task_create", "hubspot_note_create", "outlook_draft_create"]
-Template = Literal["account-action-1", "account-note-1", "account-outlook-draft-1"]
+Template = Literal["account-action-1", "account-note-1", "account-outlook-draft-1", "account-follow-up-1"]
 Mode = Literal["simulation", "live"]
 Decision = Literal["approved", "rejected", "revision_required"]
 MissionStatus = Literal["draft", "prepared", "awaiting_review", "approved", "rejected", "revision_required",
@@ -160,6 +160,7 @@ class Mission(Record):
     template: Template
     plan_id: UUID
     plan_revision: Revision
+    alternative_id: UUID | None = None
     content_revision: Revision = 1
     evidence: EvidenceBinding
     status: MissionStatus
@@ -232,6 +233,7 @@ class ActionPreview(Record):
     plan_revision: Revision
     evidence: EvidenceBinding
     slot_id: UUID
+    step_id: UUID | None = None
     destination: DestinationBinding
     payload: Payload
     payload_hash: Hash
@@ -321,15 +323,18 @@ class PlanRequest(RevisionRequest):
     intent: Literal["attention", "risk", "growth", "renewal", "manual_review", "monitor"]
     model_run_id: UUID | None = None
     action_kind: Kind = "hubspot_task_create"
+    strategy: Literal["single_action", "follow_up"] | None = None
 
 
 class MissionRequest(RevisionRequest):
     plan_id: UUID
     template: Template = "account-action-1"
+    alternative_id: UUID | None = None
 
 
 class PrepareRequest(RevisionRequest):
     alternative_id: UUID
+    step_id: UUID | None = None
     connector_id: Reference
     payload: Payload
 

@@ -81,6 +81,10 @@ def install_workflow_routes(app, store, identity, settings):
     def get_audit(mission_id: UUID, actor: Current, workflow: Service):
         return workflow.audit(actor.id, mission_id)
 
+    @router.get("/api/missions/{mission_id}/actions", response_model=list[ActionPreview])
+    def list_actions(mission_id: UUID, actor: Current, workflow: Service):
+        return workflow.list_actions(actor.id, mission_id)
+
     @router.post("/api/missions/{mission_id}/prepare", response_model=ActionPreview)
     def prepare(mission_id: UUID, body: PrepareRequest, actor: Current, workflow: Service):
         return workflow.prepare(actor.id, mission_id, body)

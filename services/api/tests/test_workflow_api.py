@@ -101,6 +101,51 @@ class WorkflowApiTests(unittest.TestCase):
             self.assertNotIn("sentinel-forged-mailbox", response.text)
         self.assertEqual(self.client.get(f'/api/missions/{mission["id"]}').json(), current)
 
+    def test_multiple_action_http_alternative_and_dependency_journey(self):
+        self.login("seller")
+        seller_session = self.client.cookies.get("vitaai_session")
+        account = self.client.get("/api/portfolio").json()["accounts"][0]
+        plan = self.post("/api/plans", {"account_id": account["account"]["id"], "expected_revision": 1,
+            "expected_snapshot_hash": account["assessment"]["snapshot_hash"], "intent": "risk", "strategy": "follow_up"})
+        choice = plan["alternatives"][1]
+        mission = self.post("/api/missions", {"plan_id": plan["id"], "expected_revision": plan["revision"],
+            "template": "account-follow-up-1", "alternative_id": choice["id"]})
+        self.assertEqual(mission["alternative_id"], choice["id"])
+        for step in choice["steps"]:
+            payload = ({"kind": "outlook_draft_create", "to": ["buyer@example.com"], "subject": "Review",
+                        "body_text": "Exact draft\n "} if step["kind"] == "outlook_draft_create" else
+                       {"kind": "hubspot_note_create", "body": "Exact note\n "})
+            current = self.client.get(f'/api/missions/{mission["id"]}').json()
+            self.post(f'/api/missions/{mission["id"]}/prepare', {"expected_revision": current["revision"],
+                "alternative_id": choice["id"], "step_id": step["id"], "payload": payload,
+                "connector_id": "simulation-microsoft" if step["kind"] == "outlook_draft_create" else "simulation-hubspot"})
+        response = self.client.get(f'/api/missions/{mission["id"]}/actions')
+        self.assertEqual(response.status_code, 200, response.text)
+        by_step = {item["step_id"]: item for item in response.json()}
+        submitted = [self.post(f'/api/actions/{by_step[step["id"]]["id"]}/submit', {
+            "expected_revision": by_step[step["id"]]["revision"], "binding_hash": by_step[step["id"]]["binding_hash"]})
+            for step in choice["steps"]]
+        self.client.cookies.clear()
+        self.login("reviewer")
+        decisions = [self.post(f'/api/actions/{item["id"]}/review', {
+            "expected_revision": item["revision"], "binding_hash": item["binding_hash"], "decision": "approved"})
+            for item in submitted]
+        self.client.cookies.clear()
+        self.client.cookies.set("vitaai_session", seller_session)
+        requests = [{"expected_revision": item["revision"], "decision_id": decision["id"],
+                     "idempotency_key": item["id"]} for item, decision in zip(submitted, decisions, strict=True)]
+        denied = self.client.post(f'/api/actions/{submitted[1]["id"]}/execute', headers=HEADERS, json=requests[1])
+        self.assertEqual((denied.status_code, denied.json()["detail"]["code"]), (409, "dependency_not_satisfied"))
+        for item, request in zip(submitted, requests, strict=True):
+            execution = self.post(f'/api/actions/{item["id"]}/execute', request)
+            self.assertEqual(execution["status"], "succeeded")
+        current = self.client.get(f'/api/missions/{mission["id"]}').json()
+        self.assertEqual(current["status"], "executed")
+        self.post(f'/api/missions/{mission["id"]}/outcomes', {"expected_revision": current["revision"],
+            "receipt_id": execution["receipt_id"], "kind": "follow_up_required", "basis": "manual_report",
+            "evidence_ids": plan["evidence"]["evidence_ids"], "note": "Follow up on simulated preparation."})
+        self.assertEqual(self.client.get(f'/api/missions/{mission["id"]}').json()["status"], "completed")
+
     def test_authenticated_http_journey_and_restart(self):
         plan, mission, action = self.create()
         seller_session = self.client.cookies.get("vitaai_session")

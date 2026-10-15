@@ -272,6 +272,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/missions/{mission_id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Actions */
+        get: operations["list_actions_api_missions__mission_id__actions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/missions/{mission_id}/prepare": {
         parameters: {
             query?: never;
@@ -561,6 +578,8 @@ export interface components {
              * Format: uuid
              */
             slot_id: string;
+            /** Step Id */
+            step_id?: string | null;
             destination: components["schemas"]["DestinationBinding"];
             /** Payload */
             payload: components["schemas"]["TaskPayload"] | components["schemas"]["NotePayload"] | components["schemas"]["OutlookPayload"];
@@ -1108,7 +1127,7 @@ export interface components {
              * Template
              * @enum {string}
              */
-            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1";
+            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1" | "account-follow-up-1";
             /**
              * Plan Id
              * Format: uuid
@@ -1116,6 +1135,8 @@ export interface components {
             plan_id: string;
             /** Plan Revision */
             plan_revision: number;
+            /** Alternative Id */
+            alternative_id?: string | null;
             /**
              * Content Revision
              * @default 1
@@ -1160,7 +1181,9 @@ export interface components {
              * @default account-action-1
              * @enum {string}
              */
-            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1";
+            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1" | "account-follow-up-1";
+            /** Alternative Id */
+            alternative_id?: string | null;
         };
         /** ModelRun */
         ModelRun: {
@@ -1528,6 +1551,8 @@ export interface components {
              * @enum {string}
              */
             action_kind: "hubspot_task_create" | "hubspot_note_create" | "outlook_draft_create";
+            /** Strategy */
+            strategy?: ("single_action" | "follow_up") | null;
         };
         /** PlanStep */
         PlanStep: {
@@ -1602,6 +1627,8 @@ export interface components {
              * Format: uuid
              */
             alternative_id: string;
+            /** Step Id */
+            step_id?: string | null;
             /** Connector Id */
             connector_id: string;
             /** Payload */
@@ -2372,6 +2399,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditEvent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_actions_api_missions__mission_id__actions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionPreview"][];
                 };
             };
             /** @description Validation Error */

@@ -2,7 +2,7 @@
 import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 from sqlalchemy import func, select, text, update
 
@@ -161,13 +161,88 @@ class Workflow:
                   sequence=audit.sequence)
         return audit
 
-    def _move(self, connection, actor, mission, status, step, event=None, **changes):
+    def _move(self, connection, actor, mission, status, step, event=None, *, aggregate=False, **changes):
+        if aggregate and (mission.template != "account-follow-up-1" or mission.status in {"outcome_recorded", "completed"}
+                or status not in {"prepared", "awaiting_review", "approved", "rejected", "revision_required",
+                                  "executing", "executed", "execution_failed", "reconciliation_required"}):
+            raise PolicyDenied("invalid_mission_transition", 409)
         updated = Mission.model_validate({**mission.model_dump(), "revision": mission.revision + 1,
-                                         "status": transition(mission.status, status), "current_step": step, **changes})
+                                         "status": status if aggregate else
+                                         transition(mission.status, status), "current_step": step, **changes})
         audit = self._audit(connection, actor, updated, event or status, mission_id=mission.id, before=mission.status)
         updated = updated.model_copy(update={"transition_ids": (*updated.transition_ids, audit.id)})
         self._put(connection, missions, updated)
         return updated
+
+    def _actions(self, connection, actor, mission_id):
+        values = connection.execute(select(actions.c.payload).where(actions.c.organization_id == actor.organization_id,
+            actions.c.mission_id == str(mission_id))).scalars()
+        return [ActionPreview.model_validate(value) for value in values]
+
+    def _claim_for(self, connection, actor, action):
+        value = connection.execute(select(claims.c.payload).where(claims.c.organization_id == actor.organization_id,
+            claims.c.action_id == str(action.id))).scalar()
+        return Execution.model_validate(value) if value else None
+
+    def _decision_for(self, connection, actor, action):
+        value = connection.execute(select(decisions.c.payload).where(decisions.c.organization_id == actor.organization_id,
+            decisions.c.action_id == str(action.id), decisions.c.action_revision == action.revision)).scalar()
+        return ReviewDecision.model_validate(value) if value else None
+
+    def _alternative(self, connection, actor, mission):
+        plan = self._get(connection, actor, plans, mission.plan_id, Plan)
+        return next(item for item in plan.alternatives if item.id == (mission.alternative_id or plan.selected_alternative_id))
+
+    def _all_approved(self, connection, actor, mission):
+        current = self._actions(connection, actor, mission.id)
+        expected = {step.id for step in self._alternative(connection, actor, mission).steps}
+        if {action.step_id for action in current} != expected:
+            raise PolicyDenied("mission_not_approved", 409)
+        for action in current:
+            decision = self._decision_for(connection, actor, action)
+            if (action.status != "submitted" or action.mission_revision != mission.content_revision
+                    or decision is None or decision.decision != "approved" or decision.binding_hash != action.binding_hash):
+                raise PolicyDenied("mission_not_approved", 409)
+            execution = self._claim_for(connection, actor, action)
+            if execution is None or execution.status != "succeeded":
+                self._dispatch_check(connection, actor, action, decision, check_mission=False)
+
+    def _dependencies(self, connection, actor, mission, action):
+        step = next(item for item in self._alternative(connection, actor, mission).steps if item.id == action.step_id)
+        by_step = {item.step_id: item for item in self._actions(connection, actor, mission.id)}
+        for dependency in step.dependencies:
+            prerequisite = by_step.get(dependency)
+            execution = self._claim_for(connection, actor, prerequisite) if prerequisite else None
+            if execution is None or execution.status != "succeeded" or execution.receipt_id is None:
+                raise PolicyDenied("dependency_not_satisfied", 409)
+            receipt = self._get(connection, actor, receipts, execution.receipt_id, Receipt)
+            if (receipt.verification != "verified" or receipt.result != "succeeded"
+                    or receipt.binding_hash != prerequisite.binding_hash or receipt.execution_id != execution.id):
+                raise PolicyDenied("dependency_not_satisfied", 409)
+
+    def _refresh(self, connection, actor, mission):
+        # Multi-action state is a projection of durable per-action reviews/claims, never a UI assertion.
+        current = self._actions(connection, actor, mission.id)
+        executions = [self._claim_for(connection, actor, item) for item in current]
+        statuses = {item.status for item in executions if item}
+        complete = len(current) == len(self._alternative(connection, actor, mission).steps)
+        if "result_unknown" in statuses:
+            status = "reconciliation_required"
+        elif statuses & {"claimed", "dispatching"}:
+            status = "executing"
+        elif "failed" in statuses:
+            status = "execution_failed"
+        elif complete and all(item and item.status == "succeeded" for item in executions):
+            status = "executed"
+        else:
+            reviews = [self._decision_for(connection, actor, item) for item in current]
+            verdicts = {item.decision for item in reviews if item}
+            status = ("rejected" if "rejected" in verdicts else "revision_required" if "revision_required" in verdicts else
+                      "prepared" if not complete or any(item.status == "draft" for item in current) else
+                      "approved" if all(item and item.decision == "approved" for item in reviews) else "awaiting_review")
+        step = "Execution" if status in {"executing", "reconciliation_required", "execution_failed"} else (
+            "Outcome" if status == "executed" else "Approval")
+        return self._move(connection, actor, mission, status, step, event="mission_aggregated", aggregate=True)
 
     def _view(self, connection, actor, account_id):
         row = connection.execute(select(accounts.c.payload).where(accounts.c.organization_id == actor.organization_id,
@@ -208,9 +283,22 @@ class Workflow:
                             evidence_ids=tuple(proposal.evidence_ids))
             alternative = Alternative(id=uuid4(), rationale=proposal.rationale, evidence_ids=step.evidence_ids,
                                       steps=(step,), risks=("Simulation only; no customer action occurs.",))
+            alternatives = (alternative,)
+            if body.strategy == "follow_up":
+                if body.action_kind != "hubspot_task_create":
+                    raise PolicyDenied("strategy_kind_mismatch")
+                alternatives = []
+                for kind, rationale in (("hubspot_task_create", "Create an internal follow-up task, then record a note."),
+                                        ("outlook_draft_create", "Prepare an unsent follow-up draft, then record a note.")):
+                    first = PlanStep(id=uuid4(), kind=kind, content=proposal.rationale, evidence_ids=step.evidence_ids)
+                    note = PlanStep(id=uuid4(), kind="hubspot_note_create", content="Record the follow-up preparation.",
+                                    evidence_ids=step.evidence_ids, dependencies=(first.id,))
+                    alternatives.append(Alternative(id=uuid4(), rationale=rationale, evidence_ids=step.evidence_ids,
+                        steps=(first, note), risks=("Simulation only; no customer action occurs.",)))
+                alternatives = tuple(alternatives)
             plan = Plan(**self._base(actor), account_id=body.account_id, evidence=binding, author_id=actor.id,
-                        source="deterministic", status="valid", alternatives=(alternative,),
-                        selected_alternative_id=alternative.id, caveats=tuple(view.assessment.caveats), validation="valid")
+                        source="deterministic", status="valid", alternatives=alternatives,
+                        selected_alternative_id=alternatives[0].id, caveats=tuple(view.assessment.caveats), validation="valid")
             check_plan(plan, view)
             self._put(connection, plans, plan, new=True, account_id=str(plan.account_id))
             self._audit(connection, actor, plan, "plan_created")
@@ -221,14 +309,22 @@ class Workflow:
             plan = self._get(connection, actor, plans, body.plan_id, Plan)
             self._version(plan, body.expected_revision)
             self._plan_check(connection, actor, plan)
-            alternative = next(item for item in plan.alternatives if item.id == plan.selected_alternative_id)
-            kind = SIMULATION_TEMPLATES[body.template]
-            if len(alternative.steps) != 1 or alternative.steps[0].kind != kind:
+            selected = body.alternative_id or plan.selected_alternative_id
+            alternative = next((item for item in plan.alternatives if item.id == selected), None)
+            if alternative is None:
+                raise PolicyDenied("alternative_not_in_plan")
+            kinds = tuple(step.kind for step in alternative.steps)
+            multi = body.template == "account-follow-up-1"
+            matches = (kinds in (("hubspot_task_create", "hubspot_note_create"),
+                                 ("outlook_draft_create", "hubspot_note_create")) and
+                       alternative.steps[1].dependencies == (alternative.steps[0].id,) and
+                       not alternative.steps[0].dependencies) if multi else kinds == (SIMULATION_TEMPLATES[body.template],)
+            if not matches:
                 raise PolicyDenied("template_plan_mismatch")
             mission = Mission(**self._base(actor), account_id=plan.account_id, owner_id=actor.id,
                               template=body.template, plan_id=plan.id, plan_revision=plan.revision,
                               evidence=plan.evidence, status="draft", current_step="Review",
-                              allowed_kinds=(kind,))
+                              alternative_id=selected, allowed_kinds=tuple(dict.fromkeys(kinds)))
             self._put(connection, missions, mission, new=True, plan_id=str(plan.id))
             self._audit(connection, actor, mission, "mission_created", mission_id=mission.id)
             return mission
@@ -253,11 +349,18 @@ class Workflow:
             self._plan_check(connection, actor, plan)
             if mission.plan_revision != plan.revision or mission.evidence != plan.evidence:
                 raise PolicyDenied("mission_plan_changed", 409)
-            if body.alternative_id != plan.selected_alternative_id or body.payload.kind not in mission.allowed_kinds:
+            selected = mission.alternative_id or plan.selected_alternative_id
+            alternative = next(item for item in plan.alternatives if item.id == selected)
+            multi = mission.template == "account-follow-up-1"
+            step = next((item for item in alternative.steps if item.id == body.step_id), None) if body.step_id else (
+                alternative.steps[0] if len(alternative.steps) == 1 else None)
+            if (body.alternative_id != selected or step is None or step.kind != body.payload.kind
+                    or body.payload.kind not in mission.allowed_kinds):
                 raise PolicyDenied("action_not_in_plan")
-            existing = connection.execute(select(actions.c.payload).where(actions.c.organization_id == actor.organization_id,
-                actions.c.mission_id == str(mission.id))).scalar()
-            previous = ActionPreview.model_validate(existing) if existing else None
+            existing = self._actions(connection, actor, mission.id)
+            if multi and (mission.status == "completed" or any(self._claim_for(connection, actor, item) for item in existing)):
+                raise PolicyDenied("mission_actions_frozen", 409)
+            previous = next((item for item in existing if not multi or item.step_id == step.id), None)
             if previous and connection.execute(select(claims.c.id).where(claims.c.organization_id == actor.organization_id,
                     claims.c.action_id == str(previous.id))).first():
                 raise PolicyDenied("action_already_claimed", 409)
@@ -268,14 +371,26 @@ class Workflow:
                 created_at=previous.created_at if previous else self.clock(),
                 revision=previous.revision + 1 if previous else 1), mission_id=mission.id,
                 mission_revision=content_revision, plan_id=plan.id, plan_revision=plan.revision, evidence=plan.evidence,
-                slot_id=previous.slot_id if previous else uuid4(), destination=destination, payload=body.payload,
+                slot_id=previous.slot_id if previous else uuid5(mission.id, str(step.id)),
+                step_id=step.id if multi else None, destination=destination, payload=body.payload,
                 payload_hash=payload_hash(body.payload), binding_hash="0" * 64, policy_version=self.policy_version,
                 mode="simulation", preparer_id=actor.id, status="draft")
             action = action.model_copy(update={"binding_hash": binding_hash(action)})
             if previous:
                 self._audit(connection, actor, previous, "approval_invalidated", mission_id=mission.id, after="superseded")
             self._put(connection, actions, action, new=previous is None, mission_id=str(mission.id), plan_id=str(plan.id),
-                      slot_id=str(action.slot_id), canonical_payload=canonical_json(action.payload).decode("utf-8"))
+                      slot_id=str(action.slot_id), step_id=str(action.step_id) if action.step_id else None,
+                      canonical_payload=canonical_json(action.payload).decode("utf-8"))
+            if multi:
+                # Each preview binds the same final mission content; edits invalidate every review.
+                for sibling in existing:
+                    if sibling.id == action.id:
+                        continue
+                    updated = sibling.model_copy(update={"revision": sibling.revision + 1,
+                        "mission_revision": content_revision, "status": "draft"})
+                    updated = updated.model_copy(update={"binding_hash": binding_hash(updated)})
+                    self._put(connection, actions, updated)
+                    self._audit(connection, actor, updated, "approval_invalidated", mission_id=mission.id, after="draft")
             self._move(connection, actor, mission, "prepared", "Approval", content_revision=content_revision)
             self._audit(connection, actor, action, "action_prepared", mission_id=mission.id)
             return action
@@ -287,6 +402,11 @@ class Workflow:
         if (action.mission_revision != mission.content_revision or action.plan_revision != plan.revision
                 or mission.plan_id != plan.id or mission.evidence != plan.evidence):
             raise PolicyDenied("mission_binding_changed", 409)
+        if mission.template == "account-follow-up-1":
+            alternative = next(item for item in plan.alternatives if item.id == mission.alternative_id)
+            step = next((item for item in alternative.steps if item.id == action.step_id), None)
+            if step is None or step.kind != action.payload.kind or action.slot_id != uuid5(mission.id, str(step.id)):
+                raise PolicyDenied("action_not_in_plan")
         # Mailbox identity belongs to the reviewed preparation, not the reviewer or executor.
         preparer = self._actor(connection, action.preparer_id) if action.payload.kind == "outlook_draft_create" else actor
         if preparer.organization_id != actor.organization_id:
@@ -312,7 +432,8 @@ class Workflow:
             submitted = action.model_copy(update={"revision": action.revision + 1, "status": "submitted"})
             submitted = submitted.model_copy(update={"binding_hash": binding_hash(submitted)})
             self._put(connection, actions, submitted)
-            self._move(connection, actor, mission, "awaiting_review", "Approval")
+            self._refresh(connection, actor, mission) if mission.template == "account-follow-up-1" else self._move(
+                connection, actor, mission, "awaiting_review", "Approval")
             self._audit(connection, actor, submitted, "action_submitted", mission_id=mission.id)
             return submitted
 
@@ -322,7 +443,8 @@ class Workflow:
             self._version(action, body.expected_revision)
             mission, _, _ = self._context(connection, actor, action)
             if (action.status != "submitted" or action.binding_hash != body.binding_hash
-                    or mission.status != "awaiting_review"):
+                    or (mission.template != "account-follow-up-1" and mission.status != "awaiting_review")
+                    or self._decision_for(connection, actor, action) is not None):
                 raise PolicyDenied("review_not_available", 409)
             if self.separation_of_duties and actor.id == action.preparer_id:
                 raise PolicyDenied("separation_of_duties", 403)
@@ -333,11 +455,12 @@ class Workflow:
                                       expires_at=decided_at + timedelta(minutes=30), reason=body.reason)
             self._put(connection, decisions, decision, new=True, action_id=str(action.id), action_revision=action.revision,
                       reviewer_session_hash=token_digest(self.session_token) if self.session_required else None)
-            self._move(connection, actor, mission, body.decision, "Approval")
+            self._refresh(connection, actor, mission) if mission.template == "account-follow-up-1" else self._move(
+                connection, actor, mission, body.decision, "Approval")
             self._audit(connection, actor, decision, "review_decided", mission_id=mission.id)
             return decision
 
-    def _dispatch_check(self, connection, actor, action, decision):
+    def _dispatch_check(self, connection, actor, action, decision, *, check_mission=True):
         mission, view, destination = self._context(connection, actor, action)
         reviewer = self._actor(connection, decision.reviewer_id)
         session_hash = connection.execute(select(decisions.c.reviewer_session_hash).where(
@@ -351,6 +474,9 @@ class Workflow:
         check_execution(actor=actor, reviewer=reviewer, action=action, decision=decision,
                         evidence=evidence_binding(view), destination=destination, policy_version=self.policy_version,
                         now=self.clock(), separation_of_duties=self.separation_of_duties)
+        if check_mission and mission.template == "account-follow-up-1":
+            self._all_approved(connection, actor, mission)
+            self._dependencies(connection, actor, mission, action)
         return mission
 
     def claim(self, actor_id: str, action_id, body: ExecuteRequest) -> tuple[Execution, bool]:
@@ -370,7 +496,7 @@ class Workflow:
                 raise PolicyDenied("logical_action_claimed", 409)
             decision = self._get(connection, actor, decisions, body.decision_id, ReviewDecision)
             mission = self._dispatch_check(connection, actor, action, decision)
-            if mission.status != "approved":
+            if mission.template != "account-follow-up-1" and mission.status != "approved":
                 raise PolicyDenied("mission_not_approved", 409)
             execution = Execution(**self._base(actor), action_id=action.id, action_revision=action.revision,
                                   decision_id=decision.id, binding_hash=action.binding_hash,
@@ -378,7 +504,8 @@ class Workflow:
                                   requesting_actor_id=actor.id, attempt=1, status="claimed", claimed_at=self.clock())
             self._put(connection, claims, execution, new=True, action_id=str(action.id), decision_id=str(decision.id),
                       logical_action_key=execution.logical_action_key, idempotency_key=execution.idempotency_key)
-            self._move(connection, actor, mission, "executing", "Execution")
+            self._refresh(connection, actor, mission) if mission.template == "account-follow-up-1" else self._move(
+                connection, actor, mission, "executing", "Execution")
             self._audit(connection, actor, execution, "execution_claimed", mission_id=mission.id)
             return execution, True
 
@@ -414,7 +541,9 @@ class Workflow:
                                                "finished_at": self.clock(), "receipt_id": receipt.id})
         self._put(connection, claims, updated)
         status = {"succeeded": "executed", "failed": "execution_failed", "result_unknown": "reconciliation_required"}[result]
-        if mission.status != status:
+        if mission.template == "account-follow-up-1":
+            self._refresh(connection, actor, mission)
+        elif mission.status != status:
             self._move(connection, actor, mission, status, "Outcome" if result != "result_unknown" else "Execution")
         self._audit(connection, actor, updated, "execution_" + result, mission_id=mission.id)
         return updated
@@ -438,7 +567,8 @@ class Workflow:
             action = self._get(connection, actor, actions, execution.action_id, ActionPreview)
             decision = self._get(connection, actor, decisions, execution.decision_id, ReviewDecision)
             mission = self._dispatch_check(connection, actor, action, decision)
-            if mission.status != "execution_failed" or connection.execute(select(resources.c.id).where(
+            if (mission.status == "completed" or
+                    (mission.template != "account-follow-up-1" and mission.status != "execution_failed")) or connection.execute(select(resources.c.id).where(
                     resources.c.organization_id == actor.organization_id,
                     resources.c.execution_id == str(execution.id))).first():
                 raise PolicyDenied("retry_not_safe", 409)
@@ -446,7 +576,8 @@ class Workflow:
                 "attempt": execution.attempt + 1, "claimed_at": self.clock(), "dispatched_at": None,
                 "finished_at": None, "receipt_id": None})
             self._put(connection, claims, execution)
-            self._move(connection, actor, mission, "executing", "Execution")
+            self._refresh(connection, actor, mission) if mission.template == "account-follow-up-1" else self._move(
+                connection, actor, mission, "executing", "Execution")
             self._audit(connection, actor, execution, "retry_claimed", mission_id=mission.id)
         return self._run_claimed(actor_id, action.id, execution)
 
@@ -505,6 +636,12 @@ class Workflow:
             self._version(mission, body.expected_revision)
             if mission.status not in {"executed", "execution_failed"}:
                 raise PolicyDenied("outcome_not_available", 409)
+            if mission.template == "account-follow-up-1":
+                current = self._actions(connection, actor, mission.id)
+                executions = [self._claim_for(connection, actor, item) for item in current]
+                if (len(current) != len(self._alternative(connection, actor, mission).steps)
+                        or any(item is None or item.status not in {"succeeded", "failed"} for item in executions)):
+                    raise PolicyDenied("outcome_not_available", 409)
             if body.basis != "manual_report":
                 raise PolicyDenied("provider_business_observation_pending")
             if not set(body.evidence_ids) <= set(mission.evidence.evidence_ids):
@@ -544,6 +681,11 @@ class Workflow:
 
     def get_action(self, actor_id, action_id):
         return self._read(actor_id, actions, action_id, ActionPreview)
+
+    def list_actions(self, actor_id, mission_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            self._get(connection, actor, missions, mission_id, Mission)
+            return sorted(self._actions(connection, actor, mission_id), key=lambda item: (item.created_at, str(item.id)))
 
     def action_history(self, actor_id, action_id):
         with self._transaction(actor_id, write=False) as (connection, actor):

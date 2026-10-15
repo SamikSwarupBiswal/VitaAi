@@ -63,13 +63,17 @@ def check_plan(plan: Plan, view: AccountView, model_run: ModelRun | None = None)
 
 
 def binding_hash(action: ActionPreview) -> str:
-    return digest({"schema_version": action.schema_version, "action_id": str(action.id), "action_revision": action.revision,
+    binding = {"schema_version": action.schema_version, "action_id": str(action.id), "action_revision": action.revision,
                        "organization_id": action.organization_id, "mission_id": str(action.mission_id),
                        "mission_revision": action.mission_revision, "plan_id": str(action.plan_id),
                        "plan_revision": action.plan_revision, "slot_id": str(action.slot_id),
                        "evidence": action.evidence.model_dump(mode="json"),
                        "destination": action.destination.model_dump(mode="json"), "policy_version": action.policy_version,
-                       "mode": action.mode, "kind": action.payload.kind, "payload_hash": payload_hash(action.payload)})
+                       "mode": action.mode, "kind": action.payload.kind, "payload_hash": payload_hash(action.payload)}
+    # Preserve hashes issued before step bindings existed.
+    if action.step_id is not None:
+        binding["step_id"] = str(action.step_id)
+    return digest(binding)
 
 
 def logical_action_key(action: ActionPreview) -> str:
