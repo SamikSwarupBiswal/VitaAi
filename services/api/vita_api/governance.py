@@ -114,7 +114,7 @@ TRANSITIONS = {
     "approved": {"executing", "prepared"}, "rejected": {"prepared"}, "revision_required": {"prepared"},
     "executing": {"executed", "execution_failed", "reconciliation_required"},
     "reconciliation_required": {"executed", "execution_failed"},
-    "execution_failed": {"prepared", "outcome_recorded"}, "executed": {"outcome_recorded"},
+    "execution_failed": {"prepared", "outcome_recorded", "executing"}, "executed": {"outcome_recorded"},
     "outcome_recorded": {"completed"}, "completed": set(),
 }
 

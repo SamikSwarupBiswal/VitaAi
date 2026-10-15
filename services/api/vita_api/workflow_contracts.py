@@ -159,6 +159,7 @@ class Mission(Record):
     template: Literal["account-action-1"]
     plan_id: UUID
     plan_revision: Revision
+    content_revision: Revision = 1
     evidence: EvidenceBinding
     status: MissionStatus
     current_step: Literal["Review", "Evidence", "Outreach", "CRM Note", "Approval", "Execution", "Outcome"]
@@ -378,6 +379,7 @@ class Outcome(Record):
 
 
 class AuditEvent(Record):
+    sequence: Revision
     entity_id: UUID
     entity_revision: Revision
     actor_id: Reference

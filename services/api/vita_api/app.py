@@ -18,6 +18,7 @@ from .pipeline import Pipeline, PipelineRequest, PipelineRun
 from .sample import SAMPLE_ORG, sample_records
 from .scoring import assess
 from .storage import Store
+from .workflow_api import WORKFLOW_PREFIXES, install_workflow_routes, safe_error
 
 
 def create_app(settings: Settings | None = None, provider: AdvisoryProvider | None = None) -> FastAPI:
@@ -43,6 +44,8 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     async def validation_error(request: Request, error: RequestValidationError):
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
+        if request.url.path.startswith(WORKFLOW_PREFIXES):
+            return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
 
@@ -178,6 +181,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             raise HTTPException(404, "Pipeline run not found")
         return run
 
+    install_workflow_routes(app, store, identity, settings)
     return app
 
 
