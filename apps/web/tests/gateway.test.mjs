@@ -65,7 +65,7 @@ test("governed workflow routes preserve method, session, body and safe denial", 
   const routes = {
     GET: [`plans/${id}`, `plans/runs/${id}`, "missions", `missions/${id}`, `missions/${id}/audit`,
       `missions/${id}/actions`, `missions/${id}/outcomes`, `actions/${id}`, `actions/${id}/history`,
-      `executions/${id}`, `receipts/${id}`],
+      `actions/${id}/decisions`, `actions/${id}/executions`, `executions/${id}`, `receipts/${id}`],
     POST: ["plans", "plans/generate", "missions", `missions/${id}/prepare`, `missions/${id}/outcomes`,
       `actions/${id}/submit`, `actions/${id}/review`, `actions/${id}/execute`, `executions/${id}/reconcile`,
       `executions/${id}/retry`],

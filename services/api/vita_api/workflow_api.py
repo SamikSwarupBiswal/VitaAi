@@ -114,6 +114,14 @@ def install_workflow_routes(app, store, identity, settings, provider=None):
     def review(action_id: UUID, body: ReviewRequest, actor: Current, workflow: Service):
         return workflow.review(actor.id, action_id, body)
 
+    @router.get("/api/actions/{action_id}/decisions", response_model=list[ReviewDecision])
+    def list_decisions(action_id: UUID, actor: Current, workflow: Service):
+        return workflow.list_decisions(actor.id, action_id)
+
+    @router.get("/api/actions/{action_id}/executions", response_model=list[Execution])
+    def list_executions(action_id: UUID, actor: Current, workflow: Service):
+        return workflow.list_executions(actor.id, action_id)
+
     @router.post("/api/actions/{action_id}/execute", response_model=Execution)
     def execute(action_id: UUID, body: ExecuteRequest, actor: Current, workflow: Service):
         return workflow.execute(actor.id, action_id, body)

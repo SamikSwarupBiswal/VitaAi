@@ -811,6 +811,20 @@ class Workflow:
                 versions.c.entity_type == actions.name).order_by(versions.c.revision)).scalars()
             return [ActionPreview.model_validate(row) for row in rows]
 
+    def list_decisions(self, actor_id, action_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            self._get(connection, actor, actions, action_id, ActionPreview)
+            rows = connection.execute(select(decisions.c.payload).where(
+                decisions.c.organization_id == actor.organization_id, decisions.c.action_id == str(action_id))
+                .order_by(decisions.c.action_revision)).scalars()
+            return [ReviewDecision.model_validate(row) for row in rows]
+
+    def list_executions(self, actor_id, action_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            action = self._get(connection, actor, actions, action_id, ActionPreview)
+            execution = self._claim_for(connection, actor, action)
+            return [execution] if execution else []
+
     def get_execution(self, actor_id, execution_id):
         return self._read(actor_id, claims, execution_id, Execution)
 

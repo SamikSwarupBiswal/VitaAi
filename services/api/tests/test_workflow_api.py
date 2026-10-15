@@ -56,6 +56,37 @@ class WorkflowApiTests(unittest.TestCase):
             "alternative_id": plan["selected_alternative_id"], "connector_id": connector, "payload": payload})
         return plan, mission, action
 
+    def test_action_recovery_reads_include_invalidated_reviews_and_enforce_scope(self):
+        plan, mission, action = self.create()
+        paths = [f'/api/actions/{action["id"]}/{suffix}' for suffix in ("decisions", "executions")]
+        for path in paths:
+            self.assertEqual(self.client.get(path).json(), [])
+        submitted = self.post(f'/api/actions/{action["id"]}/submit', {
+            "expected_revision": action["revision"], "binding_hash": action["binding_hash"]})
+        self.login("reviewer")
+        decision = self.post(f'/api/actions/{action["id"]}/review', {
+            "expected_revision": submitted["revision"], "binding_hash": submitted["binding_hash"],
+            "decision": "revision_required", "reason": "Clarify the task"})
+        current = self.client.get(f'/api/missions/{mission["id"]}').json()
+        self.post(f'/api/missions/{mission["id"]}/prepare', {"expected_revision": current["revision"],
+            "alternative_id": plan["selected_alternative_id"], "connector_id": "simulation-hubspot",
+            "payload": {"kind": "hubspot_task_create", "title": "Clarified", "body": "New body"}})
+        audit = self.client.get(f'/api/missions/{mission["id"]}/audit').json()
+        self.assertEqual(self.client.get(paths[0]).json(), [decision])
+        self.assertEqual(self.client.get(paths[1]).json(), [])
+        self.assertEqual(self.client.get(f'/api/missions/{mission["id"]}/audit').json(), audit)
+        identity = Identity(self.app.state.store.engine)
+        identity.create_user("viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        identity.create_user("foreign", "test-password-long", "other-org", "viewer")
+        self.login("viewer")
+        self.assertEqual(self.client.get(paths[0]).json(), [decision])
+        self.login("foreign")
+        for path in paths:
+            self.assertEqual(self.client.get(path).status_code, 404)
+        self.client.cookies.clear()
+        for path in paths:
+            self.assertEqual(self.client.get(path).status_code, 401)
+
     def test_planning_http_persistence_scope_safe_failure_and_unapproved_plan(self):
         def generate(view, intent, kind, strategy):
             ids = (view.evidence[0].id,)

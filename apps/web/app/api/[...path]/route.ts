@@ -17,7 +17,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const analyzePath = /^accounts\/[a-f0-9-]{36}\/analyze$/;
   const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
-  const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes))?)?|actions/${uuid}(?:/history)?|executions/${uuid}|receipts/${uuid})$`);
+  const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes))?)?|actions/${uuid}(?:/(?:history|decisions|executions))?|executions/${uuid}|receipts/${uuid})$`);
   const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|outcomes))?|actions/${uuid}/(?:submit|review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
   const workflowPath = request.method === "GET" ? workflowRead.test(joined) : workflowWrite.test(joined);
   const allowed = request.method === "GET"

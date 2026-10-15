@@ -138,6 +138,22 @@ class Stage2Tests(unittest.TestCase):
             task="planning", status="succeeded", validation="schema_and_references_valid", started_at=NOW,
             latency_ms=1, planning=output, request_id="fixture-planning", input_tokens=10, output_tokens=20)
 
+    def test_action_recovery_reads_are_scoped_durable_and_do_not_mutate(self):
+        request = self.approve()
+        self.assertEqual(self.workflow.list_executions(self.seller.id, self.action.id), [])
+        execution = self.workflow.execute(self.seller.id, self.action.id, request)
+        before = self.workflow.audit(self.seller.id, self.mission.id)
+        restarted = Workflow(self.store, clock=lambda: self.now)
+        self.assertEqual(restarted.list_decisions(self.seller.id, self.action.id), [self.decision])
+        self.assertEqual(restarted.list_executions(self.reviewer.id, self.action.id), [execution])
+        self.assertEqual(restarted.audit(self.seller.id, self.mission.id), before)
+        foreign = self.identity.create_user("foreign", "test-password-long", "other-org", "viewer")
+        for operation in (restarted.list_decisions, restarted.list_executions):
+            for action_id in (self.action.id, uuid4()):
+                with self.assertRaises(PolicyDenied) as error:
+                    operation(foreign.id, action_id)
+                self.assertEqual(error.exception.status_code, 404)
+
     def planning_request(self, **changes):
         return PlanRequest(account_id=self.account.id, expected_revision=1, expected_snapshot_hash=self.snapshot,
                            intent="risk", **changes)
