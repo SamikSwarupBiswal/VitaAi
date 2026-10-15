@@ -125,6 +125,10 @@ def install_workflow_routes(app, store, identity, settings):
     def outcome(mission_id: UUID, body: OutcomeRequest, actor: Current, workflow: Service):
         return workflow.outcome(actor.id, mission_id, body)
 
+    @router.get("/api/missions/{mission_id}/outcomes", response_model=list[Outcome])
+    def list_outcomes(mission_id: UUID, actor: Current, workflow: Service):
+        return workflow.list_outcomes(actor.id, mission_id)
+
     @router.post("/api/executions/{execution_id}/retry", response_model=Execution)
     def retry(execution_id: UUID, body: ExecuteRequest, actor: Current, workflow: Service):
         return workflow.retry(actor.id, execution_id, body)

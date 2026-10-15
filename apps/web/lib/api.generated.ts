@@ -449,7 +449,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Outcomes */
+        get: operations["list_outcomes_api_missions__mission_id__outcomes_get"];
         put?: never;
         /** Outcome */
         post: operations["outcome_api_missions__mission_id__outcomes_post"];
@@ -1326,6 +1327,8 @@ export interface components {
             schema_version: "1";
             /** Expected Revision */
             expected_revision: number;
+            /** Supersedes Id */
+            supersedes_id?: string | null;
             /** Receipt Id */
             receipt_id?: string | null;
             /** Manual Action Reference */
@@ -2729,6 +2732,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Execution"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_outcomes_api_missions__mission_id__outcomes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Outcome"][];
                 };
             };
             /** @description Validation Error */

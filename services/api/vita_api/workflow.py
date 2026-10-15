@@ -462,6 +462,8 @@ class Workflow:
 
     def _dispatch_check(self, connection, actor, action, decision, *, check_mission=True):
         mission, view, destination = self._context(connection, actor, action)
+        if mission.status in {"outcome_recorded", "completed"}:
+            raise PolicyDenied("mission_completed", 409)
         reviewer = self._actor(connection, decision.reviewer_id)
         session_hash = connection.execute(select(decisions.c.reviewer_session_hash).where(
             decisions.c.organization_id == actor.organization_id, decisions.c.id == str(decision.id))).scalar_one()
@@ -634,14 +636,29 @@ class Workflow:
         with self._transaction(actor_id) as (connection, actor):
             mission = self._get(connection, actor, missions, mission_id, Mission)
             self._version(mission, body.expected_revision)
-            if mission.status not in {"executed", "execution_failed"}:
+            history = self._outcomes(connection, actor, mission.id)
+            previous = history[-1] if history else None
+            correction = previous is not None
+            if ((correction and (mission.status != "completed" or body.supersedes_id != previous.id))
+                    or (not correction and body.supersedes_id is not None)):
+                raise PolicyDenied("outcome_correction_changed", 409)
+            manual = body.manual_action_reference is not None
+            allowed = {"executed", "execution_failed", "completed"} if correction else {"executed", "execution_failed"}
+            if manual and not correction:
+                allowed |= {"draft", "prepared"}
+            if mission.status not in allowed:
                 raise PolicyDenied("outcome_not_available", 409)
-            if mission.template == "account-follow-up-1":
-                current = self._actions(connection, actor, mission.id)
-                executions = [self._claim_for(connection, actor, item) for item in current]
-                if (len(current) != len(self._alternative(connection, actor, mission).steps)
-                        or any(item is None or item.status not in {"succeeded", "failed"} for item in executions)):
-                    raise PolicyDenied("outcome_not_available", 409)
+            current = self._actions(connection, actor, mission.id)
+            executions = [self._claim_for(connection, actor, item) for item in current]
+            if any(item and item.status not in {"succeeded", "failed"} for item in executions):
+                raise PolicyDenied("outcome_not_available", 409)
+            if (mission.template == "account-follow-up-1" and not manual
+                    and (len(current) != len(self._alternative(connection, actor, mission).steps)
+                         or any(item is None for item in executions))):
+                raise PolicyDenied("outcome_not_available", 409)
+            # Manually resolving a failed workflow is a follow-up disposition, not completion of skipped writes.
+            if manual and any(item and item.status == "failed" for item in executions) and body.kind != "follow_up_required":
+                raise PolicyDenied("failed_execution_requires_follow_up")
             if body.basis != "manual_report":
                 raise PolicyDenied("provider_business_observation_pending")
             if not set(body.evidence_ids) <= set(mission.evidence.evidence_ids):
@@ -654,13 +671,31 @@ class Workflow:
                 # Simulation cannot establish actual customer contact/revenue change.
                 if receipt.mode == "simulation" and body.kind != "follow_up_required":
                     raise PolicyDenied("simulation_has_no_business_outcome")
-            outcome = Outcome(**self._base(actor), mission_id=mission.id, observer_id=actor.id,
-                              observed_at=self.clock(), report=body)
+            outcome = Outcome(**self._base(actor, revision=previous.revision + 1 if previous else 1),
+                              mission_id=mission.id, observer_id=actor.id, observed_at=self.clock(), report=body,
+                              supersedes_id=previous.id if previous else None)
             self._put(connection, outcomes, outcome, new=True, mission_id=str(mission.id),
                       receipt_id=str(body.receipt_id) if body.receipt_id else None)
-            mission = self._move(connection, actor, mission, "outcome_recorded", "Outcome")
-            self._move(connection, actor, mission, "completed", "Outcome")
+            audit = self._audit(connection, actor, outcome, "outcome_corrected" if correction else "outcome_reported",
+                                mission_id=mission.id, after="manual_report")
+            if correction:
+                updated = mission.model_copy(update={"revision": mission.revision + 1,
+                    "transition_ids": (*mission.transition_ids, audit.id)})
+                self._put(connection, missions, updated)
+            else:
+                mission = self._move(connection, actor, mission, "outcome_recorded", "Outcome")
+                self._move(connection, actor, mission, "completed", "Outcome")
             return outcome
+
+    def _outcomes(self, connection, actor, mission_id):
+        values = connection.execute(select(outcomes.c.payload).where(outcomes.c.organization_id == actor.organization_id,
+            outcomes.c.mission_id == str(mission_id)).order_by(outcomes.c.revision)).scalars()
+        return [Outcome.model_validate(value) for value in values]
+
+    def list_outcomes(self, actor_id, mission_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            self._get(connection, actor, missions, mission_id, Mission)
+            return self._outcomes(connection, actor, mission_id)
 
     def _read(self, actor_id, table, entity_id, contract):
         with self._transaction(actor_id, write=False) as (connection, actor):

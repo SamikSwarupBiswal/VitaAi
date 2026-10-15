@@ -174,6 +174,27 @@ class WorkflowApiTests(unittest.TestCase):
             self.assertEqual(restarted.get(f'/api/missions/{mission["id"]}').json()["status"], "completed")
             self.assertEqual(restarted.get(f'/api/executions/{execution["id"]}').json(), execution)
 
+    def test_manual_outcome_correction_http_history_and_replay_denial(self):
+        plan, mission, action = self.create()
+        current = self.client.get(f'/api/missions/{mission["id"]}').json()
+        body = {"expected_revision": current["revision"], "manual_action_reference": "manual:human-account-review",
+            "kind": "follow_up_required", "basis": "manual_report", "evidence_ids": plan["evidence"]["evidence_ids"],
+            "note": "Reviewed manually; no simulated execution."}
+        original = self.post(f'/api/missions/{mission["id"]}/outcomes', body)
+        current = self.client.get(f'/api/missions/{mission["id"]}').json()
+        correction_body = {**body, "expected_revision": current["revision"], "supersedes_id": original["id"],
+                           "note": "Corrected follow-up description."}
+        corrected = self.post(f'/api/missions/{mission["id"]}/outcomes', correction_body)
+        self.assertEqual(corrected["supersedes_id"], original["id"])
+        self.assertEqual(self.client.get(f'/api/missions/{mission["id"]}/outcomes').json(), [original, corrected])
+        replay = self.client.post(f'/api/missions/{mission["id"]}/outcomes', headers=HEADERS, json=correction_body)
+        self.assertEqual(replay.status_code, 409)
+        submit = self.client.post(f'/api/actions/{action["id"]}/submit', headers=HEADERS, json={
+            "expected_revision": action["revision"], "binding_hash": action["binding_hash"]})
+        self.assertEqual(submit.status_code, 409)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get(f'/api/missions/{mission["id"]}/outcomes').status_code, 401)
+
     def test_absent_session_and_authority_tampering_have_safe_errors(self):
         self.assertEqual(self.client.get("/api/missions").status_code, 401)
         _, mission, action = self.create()

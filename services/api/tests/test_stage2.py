@@ -359,6 +359,91 @@ class Stage2Tests(unittest.TestCase):
                         resources.c.execution_id == str(result.id))).scalar_one()
                     self.assertEqual(canonical, restarted.canonical_payload(self.seller.id, self.action.id))
 
+    def test_manual_only_outcome_and_append_only_correction(self):
+        self.prepare()
+        body = OutcomeRequest(expected_revision=self.mission.revision, manual_action_reference="manual:reviewed-evidence",
+            kind="follow_up_required", basis="manual_report", evidence_ids=self.plan.evidence.evidence_ids,
+            note="Human reviewed the evidence; no adapter execution.")
+        original = self.workflow.outcome(self.seller.id, self.mission.id, body)
+        mission = self.workflow.get_mission(self.seller.id, self.mission.id)
+        self.assertEqual(mission.status, "completed")
+        corrected = self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(
+            **{**body.model_dump(), "expected_revision": mission.revision, "supersedes_id": original.id,
+               "note": "Corrected follow-up context."}))
+        self.assertEqual(corrected.supersedes_id, original.id)
+        self.assertEqual(self.workflow.list_outcomes(self.seller.id, mission.id), [original, corrected])
+        with self.assertRaises(PolicyDenied):
+            self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(
+                **{**body.model_dump(), "expected_revision": self.workflow.get_mission(self.seller.id, mission.id).revision,
+                   "supersedes_id": original.id, "note": "Stale correction"}))
+        with self.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(claims.c.id)).all(), [])
+            self.assertEqual(connection.execute(select(resources.c.id)).all(), [])
+        with self.assertRaises(PolicyDenied):
+            self.workflow.submit(self.seller.id, self.action.id, SubmitRequest(
+                expected_revision=self.action.revision, binding_hash=self.action.binding_hash))
+
+    def test_manual_failure_resolution_preserves_failed_and_unexecuted_actions(self):
+        plan, mission, ((first, request), (second, _)) = self.multi()
+        self.workflow.simulation_profile = "reject"
+        failed = self.workflow.execute(self.seller.id, first.id, request)
+        self.now += timedelta(hours=1)
+        report = self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(
+            expected_revision=self.workflow.get_mission(self.seller.id, mission.id).revision,
+            manual_action_reference="manual:operator-follow-up", kind="follow_up_required", basis="manual_report",
+            evidence_ids=plan.evidence.evidence_ids, note="Operator will address failed prerequisite outside this mission."))
+        self.assertIsNone(report.report.receipt_id)
+        self.assertEqual(self.workflow.get_execution(self.seller.id, failed.id).status, "failed")
+        with self.store.engine.connect() as connection:
+            self.assertIsNone(connection.execute(select(claims.c.id).where(claims.c.action_id == str(second.id))).first())
+        with self.assertRaises(PolicyDenied):
+            self.workflow.retry(self.seller.id, failed.id, ExecuteRequest(expected_revision=failed.revision,
+                decision_id=request.decision_id, idempotency_key=request.idempotency_key))
+
+    def test_manual_unknown_mission_cannot_complete(self):
+        plan, mission, ((first, request), _) = self.multi()
+        self.workflow.simulation_profile = "timeout_before"
+        unknown = self.workflow.execute(self.seller.id, first.id, request)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(
+                expected_revision=self.workflow.get_mission(self.seller.id, mission.id).revision,
+                manual_action_reference="manual:cannot-conceal-unknown", kind="follow_up_required", basis="manual_report",
+                evidence_ids=plan.evidence.evidence_ids, note="Unknown must remain open."))
+        self.assertEqual(self.workflow.get_execution(self.seller.id, unknown.id).status, "result_unknown")
+
+    def test_outcome_correction_concurrency_scope_and_rejected_manual_denial(self):
+        self.prepare()
+        body = OutcomeRequest(expected_revision=self.mission.revision, manual_action_reference="manual:review",
+            kind="follow_up_required", basis="manual_report", evidence_ids=self.plan.evidence.evidence_ids, note="Manual")
+        original = self.workflow.outcome(self.seller.id, self.mission.id, body)
+        current = self.workflow.get_mission(self.seller.id, self.mission.id)
+        correction = OutcomeRequest(**{**body.model_dump(), "expected_revision": current.revision,
+                                       "supersedes_id": original.id, "note": "Correction"})
+        outsider = self.identity.create_user("outcome-other", "test-password-long", "other", "admin")
+        with self.assertRaises(PolicyDenied):
+            self.workflow.list_outcomes(outsider.id, current.id)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.outcome(outsider.id, current.id, correction)
+
+        def correct(_):
+            try:
+                return self.workflow.outcome(self.seller.id, current.id, correction)
+            except PolicyDenied as error:
+                return error.code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(correct, range(2)))
+        self.assertEqual(sum(not isinstance(result, str) for result in results), 1)
+        self.assertEqual(len(self.workflow.list_outcomes(self.seller.id, current.id)), 2)
+        self.prepare()
+        self.action = self.workflow.submit(self.seller.id, self.action.id, SubmitRequest(
+            expected_revision=self.action.revision, binding_hash=self.action.binding_hash))
+        self.workflow.review(self.reviewer.id, self.action.id, ReviewRequest(
+            expected_revision=self.action.revision, binding_hash=self.action.binding_hash, decision="rejected", reason="Revise"))
+        with self.assertRaises(PolicyDenied):
+            self.workflow.outcome(self.seller.id, self.mission.id, OutcomeRequest(
+                **{**body.model_dump(), "expected_revision": self.workflow.get_mission(self.seller.id, self.mission.id).revision}))
+
     def test_template_kind_and_connector_must_match_plan(self):
         self.prepare()
         with self.assertRaises(PolicyDenied) as failure:

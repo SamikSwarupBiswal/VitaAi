@@ -360,6 +360,7 @@ class ExecuteRequest(RevisionRequest):
 
 
 class OutcomeRequest(RevisionRequest):
+    supersedes_id: UUID | None = None
     receipt_id: UUID | None = None
     manual_action_reference: Reference | None = None
     kind: Literal["meeting_booked", "customer_contacted", "renewal_risk_reduced", "opportunity_created",
