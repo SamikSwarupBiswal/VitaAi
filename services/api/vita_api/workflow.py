@@ -1,7 +1,8 @@
-"""Durable governed simulation. No live adapter, credentials, or network dispatch exists here."""
+"""Durable governed simulation and advisory planning. No external action dispatch exists here."""
 import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from uuid import uuid4, uuid5
 
 from sqlalchemy import func, select, text, update
@@ -67,7 +68,7 @@ class Workflow:
     policy_version = "governance-1"
 
     def __init__(self, store, *, clock=None, simulation_profile="success", separation_of_duties=False,
-                 session_token=None, session_required=False):
+                 session_token=None, session_required=False, provider=None):
         self.engine = store.engine
         self.clock = clock or (lambda: datetime.now(UTC))
         if simulation_profile not in {"success", "reject", "timeout_after", "timeout_before", "mismatch"}:
@@ -76,6 +77,7 @@ class Workflow:
         self.separation_of_duties = separation_of_duties
         self.session_token = session_token
         self.session_required = session_required
+        self.provider = provider
 
     def _actor(self, connection, actor_id):
         row = connection.execute(select(users).where(users.c.id == actor_id, users.c.enabled.is_(True))
@@ -266,18 +268,97 @@ class Workflow:
         check_plan(plan, view, run)
         return view
 
+    def _planning_view(self, connection, actor, body):
+        view = self._view(connection, actor, body.account_id)
+        if (view.account.revision != body.expected_revision
+                or view.assessment.snapshot_hash != body.expected_snapshot_hash):
+            raise PolicyDenied("account_snapshot_changed", 409)
+        proposal = action_role(view, governance_role(view.assessment), body.intent)
+        if proposal.kind in {"monitor", "manual_review"} or body.intent in {"manual_review", "monitor"}:
+            raise PolicyDenied("no_executable_action")
+        if view.assessment.confidence < 100:
+            raise PolicyDenied("evidence_requires_review")
+        if body.strategy == "follow_up" and body.action_kind != "hubspot_task_create":
+            raise PolicyDenied("strategy_kind_mismatch")
+        return view, proposal
+
+    def get_planning_run(self, actor_id, run_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            run = self._get(connection, actor, runs, run_id, ModelRun)
+            if run.task != "planning":
+                raise PolicyDenied("record_not_found", 404)
+            return run
+
+    def generate_plan(self, actor_id: str, body: PlanRequest) -> ModelRun:
+        if body.model_run_id is not None:
+            raise PolicyDenied("generation_requires_new_run")
+        with self._transaction(actor_id) as (connection, actor):
+            view, _ = self._planning_view(connection, actor, body)
+        # Provider latency must not hold a database transaction or pass mutable authoritative state.
+        started = perf_counter()
+        run = ModelRun(id=str(uuid4()), organization_id=actor.organization_id, account_id=view.account.id,
+            account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash, task="planning",
+            model=None, status="unconfigured", validation="not_run", started_at=self.clock(), latency_ms=0)
+        if self.provider is not None:
+            try:
+                result = self.provider.plan(view.model_copy(deep=True), body.intent, body.action_kind,
+                                            body.strategy or "single_action")
+            except (RuntimeError, OSError):
+                # Provider exceptions can include headers or bodies; retain only a fixed safe failure code.
+                run.status, run.error_code = "failed", "planning_provider_failed"
+            else:
+                try:
+                    result = ModelRun.model_validate(result.model_dump(mode="json"))
+                    for field in ("provider", "model", "request_id", "input_tokens", "output_tokens"):
+                        setattr(run, field, getattr(result, field))
+                    if (result.task != "planning" or result.organization_id != actor.organization_id
+                            or result.account_id != view.account.id or result.account_revision != view.account.revision
+                            or result.snapshot_hash != view.assessment.snapshot_hash
+                            or result.analysis is not None or result.drafts is not None):
+                        raise ValueError("Planning envelope mismatch")
+                    if result.status == "succeeded":
+                        if result.validation != "schema_and_references_valid" or result.planning is None:
+                            raise ValueError("Planning validation required")
+                        result.planning.check_request([factor.evidence_id for factor in view.assessment.factors
+                            if factor.evidence_id], body.intent, body.action_kind, body.strategy or "single_action")
+                    elif result.planning is not None or result.validation == "schema_and_references_valid":
+                        raise ValueError("Failure cannot carry valid planning")
+                    run = result.model_copy(update={"id": run.id, "started_at": run.started_at})
+                except (ValueError, TypeError, AttributeError):
+                    run.status, run.validation, run.error_code = "invalid_output", "rejected", "invalid_planning_output"
+        run.latency_ms = round((perf_counter() - started) * 1000)
+        with self._transaction(actor_id) as (connection, current):
+            if current.organization_id != actor.organization_id:
+                raise PolicyDenied("membership_changed", 409)
+            try:
+                self._planning_view(connection, current, body)
+            except PolicyDenied:
+                run.status, run.validation, run.error_code = "invalid_output", "rejected", "planning_context_changed"
+                run.planning = None
+            connection.execute(runs.insert().values(id=run.id, organization_id=run.organization_id,
+                account_id=run.account_id, started_at=run.started_at.isoformat(), payload=run.model_dump(mode="json")))
+        return run
+
     def create_plan(self, actor_id: str, body: PlanRequest) -> Plan:
         with self._transaction(actor_id) as (connection, actor):
-            view = self._view(connection, actor, body.account_id)
-            if (view.account.revision != body.expected_revision
-                    or view.assessment.snapshot_hash != body.expected_snapshot_hash):
-                raise PolicyDenied("account_snapshot_changed", 409)
-            proposal = action_role(view, governance_role(view.assessment), body.intent)
-            if proposal.kind in {"monitor", "manual_review"} or body.intent == "manual_review":
-                raise PolicyDenied("no_executable_action")
+            view, proposal = self._planning_view(connection, actor, body)
             if body.model_run_id:
-                # Foundation model output is analysis/drafts, not a validated executable plan. Do not relabel it.
-                raise PolicyDenied("structured_model_planning_pending")
+                run = self._get(connection, actor, runs, body.model_run_id, ModelRun)
+                if run.planning is None:
+                    raise PolicyDenied("model_run_not_valid")
+                try:
+                    run.planning.check_request([factor.evidence_id for factor in view.assessment.factors
+                        if factor.evidence_id], body.intent, body.action_kind, body.strategy or "single_action")
+                except ValueError:
+                    raise PolicyDenied("model_run_not_valid") from None
+                plan = Plan(**self._base(actor), account_id=body.account_id, evidence=evidence_binding(view),
+                    author_id=actor.id, source="model", model_run_id=body.model_run_id, status="valid",
+                    alternatives=run.planning.alternatives, selected_alternative_id=run.planning.selected_alternative_id,
+                    caveats=tuple(dict.fromkeys([*view.assessment.caveats, *run.planning.caveats])), validation="valid")
+                check_plan(plan, view, run)
+                self._put(connection, plans, plan, new=True, account_id=str(plan.account_id))
+                self._audit(connection, actor, plan, "plan_created")
+                return plan
             binding = evidence_binding(view)
             step = PlanStep(id=uuid4(), kind=body.action_kind, content=proposal.rationale,
                             evidence_ids=tuple(proposal.evidence_ids))

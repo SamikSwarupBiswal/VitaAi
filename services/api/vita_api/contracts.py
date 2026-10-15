@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_core import PydanticCustomError
 
+from .workflow_contracts import PlanningOutput
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -106,7 +108,7 @@ class ModelRun(Contract):
     account_revision: int
     snapshot_hash: str
     provider: str = Field(default="nebius", pattern=r"^[a-z][a-z0-9_-]{0,63}$")
-    task: Literal["analysis", "drafts"] = "analysis"
+    task: Literal["analysis", "drafts", "planning"] = "analysis"
     model: str | None
     status: Literal["unconfigured", "failed", "invalid_output", "succeeded"]
     validation: Literal["not_run", "rejected", "schema_and_references_valid"]
@@ -118,6 +120,7 @@ class ModelRun(Contract):
     error_code: str | None = None
     analysis: Analysis | None = None
     drafts: CommunicationDrafts | None = None
+    planning: PlanningOutput | None = None
 
 
 class AccountView(Contract):

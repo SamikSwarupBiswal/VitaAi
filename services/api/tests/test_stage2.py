@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from alembic import command
@@ -17,7 +17,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from vita_api.governance import PolicyDenied
+from vita_api.contracts import ModelRun
+from vita_api.governance import PolicyDenied, check_plan
 from vita_api.identity import Identity, users
 from vita_api.sample import SAMPLE_ORG, sample_records
 from vita_api.scoring import assess
@@ -29,6 +30,7 @@ from vita_api.workflow_contracts import (
     NotePayload,
     OutcomeRequest,
     OutlookPayload,
+    PlanningOutput,
     PlanRequest,
     PrepareRequest,
     ReviewRequest,
@@ -123,6 +125,134 @@ class Stage2Tests(unittest.TestCase):
             requests.append((action, ExecuteRequest(expected_revision=action.revision,
                 decision_id=decision.id, idempotency_key=str(action.id))))
         return plan, mission, requests
+
+    def planning_run(self, view, intent, action_kind, strategy):
+        step, choice = uuid4(), uuid4()
+        output = PlanningOutput.model_validate({"intent": intent, "action_kind": action_kind, "strategy": strategy,
+            "alternatives": [{"id": choice, "rationale": "Evidence-linked proposal", "risks": ["Simulation only"],
+                "evidence_ids": [view.evidence[0].id], "steps": [{"id": step, "kind": action_kind,
+                    "content": "Model recommendation\n ", "evidence_ids": [view.evidence[0].id]}]}],
+            "selected_alternative_id": choice, "caveats": ["Requires human review"]})
+        return ModelRun(id=str(uuid4()), organization_id=view.account.organization_id, account_id=view.account.id,
+            account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash, model="fixture-only",
+            task="planning", status="succeeded", validation="schema_and_references_valid", started_at=NOW,
+            latency_ms=1, planning=output, request_id="fixture-planning", input_tokens=10, output_tokens=20)
+
+    def planning_request(self, **changes):
+        return PlanRequest(account_id=self.account.id, expected_revision=1, expected_snapshot_hash=self.snapshot,
+                           intent="risk", **changes)
+
+    def test_model_planning_persists_exact_output_without_approval(self):
+        provider = Mock()
+        provider.plan.side_effect = self.planning_run
+        workflow = Workflow(self.store, clock=lambda: self.now, provider=provider)
+        run = workflow.generate_plan(self.seller.id, self.planning_request())
+        self.assertEqual(run.status, "succeeded")
+        restarted = Workflow(self.store, clock=lambda: self.now)
+        self.assertEqual(restarted.get_planning_run(self.seller.id, run.id), run)
+        plan = restarted.create_plan(self.seller.id, self.planning_request(model_run_id=run.id))
+        self.assertEqual((plan.source, str(plan.model_run_id)), ("model", run.id))
+        self.assertEqual(plan.alternatives, run.planning.alternatives)
+        self.assertIn("Requires human review", plan.caveats)
+        mission = restarted.create_mission(self.seller.id, MissionRequest(
+            plan_id=plan.id, expected_revision=1, template="account-action-1"))
+        self.assertEqual(mission.status, "draft")
+        action = restarted.prepare(self.seller.id, mission.id, PrepareRequest(expected_revision=mission.revision,
+            alternative_id=plan.selected_alternative_id, connector_id="simulation-hubspot",
+            payload=TaskPayload(title="Reviewed title", body="Human edits model recommendation")))
+        with self.assertRaises(PolicyDenied):
+            restarted.execute(self.seller.id, action.id, ExecuteRequest(expected_revision=action.revision,
+                decision_id=uuid4(), idempotency_key="no-model-approval"))
+        view = provider.plan.call_args.args[0]
+        changed = plan.model_copy(update={"selected_alternative_id": uuid4()})
+        with self.assertRaises(PolicyDenied):
+            check_plan(changed, view, run)
+
+    def test_model_planning_denies_wrong_task_request_and_scope(self):
+        provider = Mock()
+        provider.plan.side_effect = self.planning_run
+        workflow = Workflow(self.store, clock=lambda: self.now, provider=provider)
+        run = workflow.generate_plan(self.seller.id, self.planning_request())
+        with self.assertRaises(PolicyDenied):
+            workflow.create_plan(self.seller.id, self.planning_request(model_run_id=run.id, action_kind="hubspot_note_create"))
+        foreign = self.identity.create_user("foreign-plan", "test-password-long", "other-org", "seller")
+        with self.assertRaises(PolicyDenied):
+            workflow.get_planning_run(foreign.id, run.id)
+        with self.store.engine.begin() as connection:
+            from vita_api.storage import runs
+            connection.execute(update(runs).where(runs.c.id == run.id).values(
+                payload={**run.model_dump(mode="json"), "task": "analysis", "planning": None}))
+        with self.assertRaises(PolicyDenied):
+            workflow.create_plan(self.seller.id, self.planning_request(model_run_id=run.id))
+
+    def test_model_planning_failure_untrusted_output_and_no_call_denials(self):
+        provider = Mock()
+        workflow = Workflow(self.store, clock=lambda: self.now, provider=provider)
+        viewer = self.identity.create_user("plan-viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        for actor, body in ((viewer.id, self.planning_request()),
+                            (self.seller.id, self.planning_request().model_copy(update={"expected_revision": 99})),
+                            (self.seller.id, self.planning_request().model_copy(update={"intent": "monitor"}))):
+            with self.assertRaises(PolicyDenied):
+                workflow.generate_plan(actor, body)
+        provider.plan.assert_not_called()
+        for change in ({"task": "analysis"}, {"snapshot_hash": "0" * 64}, {"organization_id": "foreign"},
+                       {"planning": None}, {"validation": "not_run"}):
+            provider.plan.side_effect = lambda *args, changes=change: self.planning_run(*args).model_copy(update=changes)
+            run = workflow.generate_plan(self.seller.id, self.planning_request())
+            self.assertEqual((run.status, run.validation, run.planning), ("invalid_output", "rejected", None))
+            self.assertEqual(workflow.get_planning_run(self.seller.id, run.id), run)
+            with self.assertRaises(PolicyDenied):
+                workflow.create_plan(self.seller.id, self.planning_request(model_run_id=run.id))
+        provider.plan.side_effect = RuntimeError("sentinel-provider-secret")
+        failed = workflow.generate_plan(self.seller.id, self.planning_request())
+        self.assertEqual(failed.status, "failed")
+        self.assertNotIn("sentinel-provider-secret", failed.model_dump_json())
+        unconfigured = self.workflow.generate_plan(self.seller.id, self.planning_request())
+        self.assertEqual(unconfigured.status, "unconfigured")
+
+    def test_model_planning_rechecks_snapshot_after_network_and_isolates_input(self):
+        provider = Mock()
+        workflow = Workflow(self.store, clock=lambda: self.now, provider=provider)
+
+        def mutate_input(view, *args):
+            run = self.planning_run(view, *args)
+            view.account.revision = 999
+            return run
+
+        provider.plan.side_effect = mutate_input
+        run = workflow.generate_plan(self.seller.id, self.planning_request())
+        self.assertEqual(run.account_revision, 1)
+        self.assertEqual(run.status, "succeeded")
+
+        def change_account(view, *args):
+            run = self.planning_run(view, *args)
+            with self.store.engine.begin() as connection:
+                changed = self.account.model_copy(update={"revision": 2})
+                connection.execute(update(accounts).where(accounts.c.id == self.account.id).values(
+                    revision=2, payload=changed.model_dump(mode="json")))
+            return run
+
+        provider.plan.side_effect = change_account
+        stale = workflow.generate_plan(self.seller.id, self.planning_request())
+        self.assertEqual((stale.status, stale.error_code), ("invalid_output", "planning_context_changed"))
+        self.assertEqual(stale.account_revision, 1)
+        self.assertIsNone(stale.planning)
+
+    def test_planning_history_does_not_replace_latest_account_analysis(self):
+        from vita_api.storage import runs
+        with self.store.engine.connect() as connection:
+            view = self.workflow._view(connection, self.seller, self.account.id)
+        historical = self.planning_run(view, "risk", "hubspot_task_create", "single_action").model_copy(
+            update={"task": "analysis", "planning": None, "started_at": NOW - timedelta(minutes=1)})
+        self.store.save_run(historical)
+        # Pre-task-discriminator rows must retain the historical default analysis semantics.
+        with self.store.engine.begin() as connection:
+            payload = historical.model_dump(mode="json")
+            payload.pop("task")
+            connection.execute(update(runs).where(runs.c.id == historical.id).values(payload=payload))
+        generated = self.workflow.generate_plan(self.seller.id, self.planning_request())
+        self.assertEqual(generated.status, "unconfigured")
+        self.assertEqual(self.store.latest_run(SAMPLE_ORG, self.account.id), historical)
 
     def test_multi_dependencies_replay_and_outcome_aggregation(self):
         for index in (0, 1):

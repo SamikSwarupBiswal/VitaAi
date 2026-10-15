@@ -2,6 +2,7 @@
 import json
 import unittest
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import httpx
 
@@ -50,6 +51,72 @@ class CommunicationTests(unittest.TestCase):
         self.assertIsNone(run.analysis)
         self.assertEqual(run.drafts.action_kind, "support_escalation")
         self.assertEqual(self.view.model_dump(mode="json"), before)
+
+    def planning(self):
+        alternatives = []
+        for kind in ("hubspot_task_create", "outlook_draft_create"):
+            first, second = str(uuid4()), str(uuid4())
+            evidence = [self.view.evidence[0].id]
+            alternatives.append({"id": str(uuid4()), "rationale": "Review the sourced account evidence.",
+                "evidence_ids": evidence, "risks": ["Preparation is not customer contact."], "steps": [
+                    {"id": first, "kind": kind, "content": "Proposed follow-up preparation.",
+                     "evidence_ids": evidence, "dependencies": []},
+                    {"id": second, "kind": "hubspot_note_create", "content": "Record proposed follow-up.",
+                     "evidence_ids": evidence, "dependencies": [first]}]})
+        return {"intent": "risk", "action_kind": "hubspot_task_create", "strategy": "follow_up",
+                "alternatives": alternatives, "selected_alternative_id": alternatives[0]["id"], "caveats": []}
+
+    def planning_transport(self, output, status=200):
+        def respond(request):
+            if request.url.path.endswith("/models"):
+                return httpx.Response(200, json={"data": [{"id": MODEL}]})
+            self.assertIn("planning", json.loads(request.content)["messages"][0]["content"].lower())
+            return httpx.Response(status, json={"id": "fixture-planning", "model": MODEL,
+                "usage": {"prompt_tokens": 100, "completion_tokens": 200},
+                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(output)}}]})
+        return httpx.MockTransport(respond)
+
+    def test_structured_planning_preserves_provenance_and_deterministic_inputs(self):
+        output = self.planning()
+        before = self.view.model_dump_json()
+        run = Nebius(self.settings, self.planning_transport(output)).plan(
+            self.view, "risk", "hubspot_task_create", "follow_up")
+        self.assertEqual((run.status, run.task, run.request_id), ("succeeded", "planning", "fixture-planning"))
+        self.assertEqual((run.input_tokens, run.output_tokens), (100, 200))
+        self.assertEqual(len(run.planning.alternatives), 2)
+        self.assertIsNone(run.analysis)
+        self.assertIsNone(run.drafts)
+        self.assertEqual(self.view.model_dump_json(), before)
+
+    def test_planning_rejects_authority_unknown_evidence_dependencies_and_wrong_request(self):
+        for change in ("authority", "evidence", "dependency", "strategy", "kind", "intent"):
+            with self.subTest(change=change):
+                output = self.planning()
+                if change == "authority":
+                    output["approved"] = True
+                elif change == "evidence":
+                    output["alternatives"][0]["evidence_ids"] = [str(uuid4())]
+                elif change == "dependency":
+                    output["alternatives"][0]["steps"][0]["dependencies"] = [output["alternatives"][0]["steps"][1]["id"]]
+                elif change == "strategy":
+                    output["strategy"] = "single_action"
+                elif change == "kind":
+                    output["alternatives"][0]["steps"][0]["kind"] = "email_send"
+                else:
+                    output["intent"] = "growth"
+                run = Nebius(self.settings, self.planning_transport(output)).plan(
+                    self.view, "risk", "hubspot_task_create", "follow_up")
+                self.assertEqual(run.status, "invalid_output")
+                self.assertIsNone(run.planning)
+                self.assertEqual(run.request_id, "fixture-planning")
+
+    def test_planning_unconfigured_and_failure_are_explicit(self):
+        unconfigured = Nebius(Settings(_env_file=None)).plan(self.view, "risk", "hubspot_task_create", "follow_up")
+        self.assertEqual(unconfigured.status, "unconfigured")
+        failed = Nebius(self.settings, self.planning_transport({}, 401)).plan(
+            self.view, "risk", "hubspot_task_create", "follow_up")
+        self.assertEqual((failed.status, failed.error_code), ("failed", "provider_http_401"))
+        self.assertNotIn("test-only-secret", failed.model_dump_json())
 
     def test_unknown_evidence_action_mismatch_and_authority_are_rejected(self):
         for change in ("evidence", "action", "authority", "missing_outreach"):

@@ -203,6 +203,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plans/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate Plan */
+        post: operations["generate_plan_api_plans_generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Planning Run */
+        get: operations["get_planning_run_api_plans_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plans/{plan_id}": {
         parameters: {
             query?: never;
@@ -1214,7 +1248,7 @@ export interface components {
              * @default analysis
              * @enum {string}
              */
-            task: "analysis" | "drafts";
+            task: "analysis" | "drafts" | "planning";
             /** Model */
             model: string | null;
             /**
@@ -1244,6 +1278,7 @@ export interface components {
             error_code?: string | null;
             analysis?: components["schemas"]["Analysis"] | null;
             drafts?: components["schemas"]["CommunicationDrafts"] | null;
+            planning?: components["schemas"]["PlanningOutput"] | null;
         };
         /** NotePayload */
         NotePayload: {
@@ -1584,6 +1619,39 @@ export interface components {
              * @default []
              */
             dependencies: string[];
+        };
+        /** PlanningOutput */
+        PlanningOutput: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "attention" | "risk" | "growth" | "renewal" | "manual_review" | "monitor";
+            /**
+             * Action Kind
+             * @enum {string}
+             */
+            action_kind: "hubspot_task_create" | "hubspot_note_create" | "outlook_draft_create";
+            /**
+             * Strategy
+             * @enum {string}
+             */
+            strategy: "single_action" | "follow_up";
+            /** Alternatives */
+            alternatives: components["schemas"]["Alternative"][];
+            /**
+             * Selected Alternative Id
+             * Format: uuid
+             */
+            selected_alternative_id: string;
+            /** Caveats */
+            caveats: string[];
         };
         /** Portfolio */
         Portfolio: {
@@ -2256,6 +2324,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Plan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_plan_api_plans_generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_planning_run_api_plans_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRun"];
                 };
             };
             /** @description Validation Error */

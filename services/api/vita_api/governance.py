@@ -58,8 +58,20 @@ def check_plan(plan: Plan, view: AccountView, model_run: ModelRun | None = None)
                 or model_run.validation != "schema_and_references_valid"
                 or model_run.organization_id != plan.organization_id or model_run.account_id != str(plan.account_id)
                 or model_run.account_revision != plan.evidence.account_revision
+                or model_run.task != "planning" or model_run.planning is None
+                or model_run.analysis is not None or model_run.drafts is not None
+                or model_run.planning.alternatives != plan.alternatives
+                or model_run.planning.selected_alternative_id != plan.selected_alternative_id
+                or tuple(dict.fromkeys([*view.assessment.caveats, *model_run.planning.caveats])) != plan.caveats
             or model_run.snapshot_hash != plan.evidence.snapshot_hash):
         raise PolicyDenied("model_run_not_valid")
+    if plan.source == "model":
+        output = model_run.planning
+        try:
+            output.check_request([factor.evidence_id for factor in view.assessment.factors if factor.evidence_id],
+                                 output.intent, output.action_kind, output.strategy)
+        except ValueError:
+            raise PolicyDenied("model_run_not_valid") from None
 
 
 def binding_hash(action: ActionPreview) -> str:

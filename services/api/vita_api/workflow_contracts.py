@@ -126,6 +126,44 @@ class Alternative(WorkflowContract):
         return self
 
 
+class PlanningOutput(WorkflowContract):
+    intent: Literal["attention", "risk", "growth", "renewal", "manual_review", "monitor"]
+    action_kind: Kind
+    strategy: Literal["single_action", "follow_up"]
+    alternatives: tuple[Alternative, ...] = Field(min_length=1, max_length=4)
+    selected_alternative_id: UUID
+    caveats: tuple[Text, ...] = Field(max_length=8)
+
+    @model_validator(mode="after")
+    def selection(self) -> Self:
+        ids = unique(tuple(item.id for item in self.alternatives))
+        if self.selected_alternative_id not in ids:
+            raise ValueError("Unknown planning alternative")
+        return self
+
+    def check_request(self, evidence_ids, intent, action_kind, strategy):
+        if (self.intent, self.action_kind, self.strategy) != (intent, action_kind, strategy):
+            raise ValueError("Planning request mismatch")
+        allowed = {UUID(str(item)) for item in evidence_ids}
+        shapes = set()
+        for alternative in self.alternatives:
+            if not set(alternative.evidence_ids) <= allowed:
+                raise ValueError("Unknown planning evidence")
+            shape = tuple(step.kind for step in alternative.steps)
+            shapes.add(shape)
+            if strategy == "single_action":
+                if shape != (action_kind,) or alternative.steps[0].dependencies:
+                    raise ValueError("Unsupported single-action plan")
+            elif (shape not in {("hubspot_task_create", "hubspot_note_create"),
+                                ("outlook_draft_create", "hubspot_note_create")}
+                  or alternative.steps[0].dependencies
+                  or alternative.steps[1].dependencies != (alternative.steps[0].id,)):
+                raise ValueError("Unsupported follow-up plan")
+        if strategy == "follow_up" and (action_kind != "hubspot_task_create" or shapes != {
+                ("hubspot_task_create", "hubspot_note_create"), ("outlook_draft_create", "hubspot_note_create")}):
+            raise ValueError("Follow-up requires task and unsent-draft alternatives")
+
+
 class Plan(Record):
     account_id: UUID
     pipeline_run_id: UUID | None = None

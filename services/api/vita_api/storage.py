@@ -11,6 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    func,
     select,
 )
 from sqlalchemy.engine import make_url
@@ -138,5 +139,6 @@ class Store:
             row = connection.execute(select(runs.c.payload).where(
                 runs.c.organization_id == organization_id,
                 runs.c.account_id == account_id,
+                func.coalesce(runs.c.payload["task"].as_string(), "analysis") == "analysis",
             ).order_by(runs.c.started_at.desc(), runs.c.id.desc()).limit(1)).scalar()
         return ModelRun.model_validate(row) if row else None

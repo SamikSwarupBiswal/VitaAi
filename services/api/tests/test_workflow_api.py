@@ -1,14 +1,19 @@
 """Authenticated HTTP simulation journey; no paid provider or external adapter."""
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from vita_api.app import create_app
 from vita_api.config import Settings
+from vita_api.contracts import ModelRun
 from vita_api.identity import Identity
 from vita_api.sample import SAMPLE_ORG
+from vita_api.workflow_contracts import Alternative, PlanningOutput, PlanStep
 
 HEADERS = {"X-VitaAi-Request": "1", "Origin": "http://127.0.0.1:3000"}
 
@@ -18,7 +23,8 @@ class WorkflowApiTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.settings = Settings(_env_file=None, auth_mode="session",
                                  database_url=f"sqlite:///{Path(self.temp.name) / 'http.sqlite'}")
-        self.app = create_app(self.settings)
+        self.provider = Mock()
+        self.app = create_app(self.settings, provider=self.provider)
         self.client = TestClient(self.app).__enter__()
         identity = Identity(self.app.state.store.engine)
         identity.create_user("seller", "test-password-long", SAMPLE_ORG, "seller")
@@ -49,6 +55,40 @@ class WorkflowApiTests(unittest.TestCase):
         action = self.post(f'/api/missions/{mission["id"]}/prepare', {"expected_revision": mission["revision"],
             "alternative_id": plan["selected_alternative_id"], "connector_id": connector, "payload": payload})
         return plan, mission, action
+
+    def test_planning_http_persistence_scope_safe_failure_and_unapproved_plan(self):
+        def generate(view, intent, kind, strategy):
+            ids = (view.evidence[0].id,)
+            step = PlanStep(id=uuid4(), kind=kind, content="Fixture-only proposal", evidence_ids=ids)
+            choice = Alternative(id=uuid4(), rationale="Fixture evidence", evidence_ids=ids, steps=(step,), risks=())
+            output = PlanningOutput(intent=intent, action_kind=kind, strategy=strategy, alternatives=(choice,),
+                                    selected_alternative_id=choice.id, caveats=())
+            return ModelRun(id=str(uuid4()), account_id=view.account.id, organization_id=view.account.organization_id,
+                account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash, task="planning",
+                model="fixture-only", status="succeeded", validation="schema_and_references_valid", planning=output,
+                started_at=datetime.now(UTC), latency_ms=1, request_id="fixture-planning")
+
+        self.provider.plan.side_effect = generate
+        self.login("seller")
+        account = self.client.get("/api/portfolio").json()["accounts"][0]
+        body = {"account_id": account["account"]["id"], "expected_revision": 1,
+                "expected_snapshot_hash": account["assessment"]["snapshot_hash"], "intent": "risk"}
+        run = self.post("/api/plans/generate", body)
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual(self.client.get(f'/api/plans/runs/{run["id"]}').json(), run)
+        plan = self.post("/api/plans", {**body, "model_run_id": run["id"]})
+        self.assertEqual((plan["source"], plan["alternatives"]), ("model", run["planning"]["alternatives"]))
+        mission = self.post("/api/missions", {"plan_id": plan["id"], "expected_revision": 1, "template": "account-action-1"})
+        self.assertEqual(mission["status"], "draft")
+        self.provider.plan.side_effect = RuntimeError("sentinel-never-return")
+        failed = self.post("/api/plans/generate", body)
+        self.assertEqual(failed["status"], "failed")
+        self.assertNotIn("sentinel-never-return", str(failed))
+        denied = self.client.post("/api/plans", headers=HEADERS, json={**body, "model_run_id": failed["id"]})
+        self.assertEqual(denied.status_code, 422)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get(f'/api/plans/runs/{run["id"]}').status_code, 401)
+        self.assertEqual(self.client.post("/api/plans/generate", headers=HEADERS, json=body).status_code, 401)
 
     def test_note_and_outlook_http_review_execution_and_replay(self):
         for index, (payload, template, connector) in enumerate([

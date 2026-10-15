@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from .contracts import ModelRun
 from .governance import PolicyDenied
 from .identity import Actor
 from .workflow import Workflow
@@ -36,7 +37,7 @@ def safe_error(code: str, status_code: int):
                         status_code=status_code)
 
 
-def install_workflow_routes(app, store, identity, settings):
+def install_workflow_routes(app, store, identity, settings, provider=None):
     router = APIRouter()
 
     @app.exception_handler(PolicyDenied)
@@ -52,7 +53,7 @@ def install_workflow_routes(app, store, identity, settings):
         return actor
 
     def service(request: Request) -> Workflow:
-        return Workflow(store, session_token=request.cookies.get("vitaai_session"), session_required=True)
+        return Workflow(store, session_token=request.cookies.get("vitaai_session"), session_required=True, provider=provider)
 
     Current = Annotated[Actor, Depends(current)]
     Service = Annotated[Workflow, Depends(service)]
@@ -60,6 +61,14 @@ def install_workflow_routes(app, store, identity, settings):
     @router.post("/api/plans", response_model=Plan)
     def create_plan(body: PlanRequest, actor: Current, workflow: Service):
         return workflow.create_plan(actor.id, body)
+
+    @router.post("/api/plans/generate", response_model=ModelRun)
+    def generate_plan(body: PlanRequest, actor: Current, workflow: Service):
+        return workflow.generate_plan(actor.id, body)
+
+    @router.get("/api/plans/runs/{run_id}", response_model=ModelRun)
+    def get_planning_run(run_id: UUID, actor: Current, workflow: Service):
+        return workflow.get_planning_run(actor.id, run_id)
 
     @router.get("/api/plans/{plan_id}", response_model=Plan)
     def get_plan(plan_id: UUID, actor: Current, workflow: Service):
