@@ -169,6 +169,61 @@ class Stage1Tests(unittest.TestCase):
             self.login(restarted, "foreign", "another-test-password")
             self.assertEqual(restarted.get(f"/api/pipeline/{run['id']}").status_code, 404)
 
+    def test_monitor_intent_never_prepares_outreach_or_calls_provider(self):
+        class NoModel:
+            def analyze(self, *_):
+                raise AssertionError("Monitor intent cannot invoke model analysis")
+
+            def draft(self, *_):
+                raise AssertionError("Monitor intent cannot invoke model drafting")
+
+        records = sample_records(NOW)
+        baseline = {account.id: assess(account, facts, NOW.date()) for account, facts in records}
+        original = [(account.model_dump(), [fact.model_dump() for fact in facts]) for account, facts in records]
+        cedar = next(item for item in records if item[0].name == "Cedar Financial")
+        for mode in ("internal_note", "drafts"):
+            for communicate in (False, True):
+                for inputs in (records, [cedar]):
+                    with self.subTest(mode=mode, communicate=communicate, accounts=len(inputs)):
+                        limit = 1 if communicate else 2
+                        run = Pipeline(NoModel()).run(
+                            SAMPLE_ORG, self.user.id, inputs, NOW.date(),
+                            PipelineRequest(intent="monitor", limit=limit, communicate=communicate,
+                                            communication_mode=mode),
+                        )
+                        names = {account.id: account.name for account, _ in inputs}
+                        expected = ["Meridian Retail"] if communicate else ["Meridian Retail", "Cedar Financial"]
+                        self.assertEqual([names[item.account_id] for item in run.recommendations],
+                                         expected if inputs is records else ["Cedar Financial"])
+                        self.assertEqual(run.organization_id, SAMPLE_ORG)
+                        self.assertEqual(run.actor_id, self.user.id)
+                        self.assertEqual(run.status, "deterministic")
+                        self.assertEqual([step.role for step in run.steps], [
+                            "ingestion", "health", "opportunity", "governance", "action", "communication",
+                        ])
+                        self.assertEqual([step.processed for step in run.steps],
+                                         [len(inputs)] * 4 + [len(run.recommendations)] * 2)
+                        self.assertTrue(all(step.status == "completed" for step in run.steps))
+                        for rank, result in enumerate(run.recommendations, start=1):
+                            self.assertEqual(result.rank, rank)
+                            self.assertEqual(result.assessment, baseline[result.account_id])
+                            self.assertEqual(result.action.kind, "monitor")
+                            self.assertFalse(result.action.external_execution)
+                            self.assertEqual(result.action.approval_status, "unapproved")
+                            self.assertEqual(result.communication.status, "deterministic_template")
+                            self.assertIsNone(result.communication.model_run)
+                            self.assertTrue(result.communication.internal_note)
+                            if mode == "drafts":
+                                drafts = result.communication.drafts
+                                self.assertEqual(drafts.action_kind, "monitor")
+                                self.assertIsNone(drafts.email)
+                                self.assertIsNone(drafts.call_script)
+                                self.assertIsNone(drafts.voice_summary)
+                            else:
+                                self.assertIsNone(result.communication.drafts)
+        self.assertEqual([(account.model_dump(), [fact.model_dump() for fact in facts])
+                          for account, facts in records], original)
+
     def test_migrations_are_versioned_and_restart_preserves_data(self):
         self.store.seed(sample_records(NOW))
         before = self.store.list_accounts(SAMPLE_ORG)

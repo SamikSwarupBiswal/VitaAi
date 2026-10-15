@@ -138,10 +138,12 @@ def governance_role(assessment: Assessment) -> GovernanceResult:
                             ])
 
 
-def action_role(view: AccountView, governance: GovernanceResult) -> ActionProposal:
+def action_role(view: AccountView, governance: GovernanceResult, intent: Intent = "attention") -> ActionProposal:
     factors = {f.metric: f for f in view.assessment.factors}
     if governance.status == "review_required":
         kind = "manual_review"
+    elif intent == "monitor":
+        kind = "monitor"
     elif factors["support_cases"].risk_contribution >= 16:
         kind = "support_escalation"
     elif 0 <= view.renewal_days <= 30:
@@ -252,6 +254,7 @@ class Pipeline:
         opportunity = {v.account.id: opportunity_role(v.assessment) for v in views}
         governance = {v.account.id: governance_role(v.assessment) for v in views}
         intent = request.intent
+        use_model = request.communicate and intent != "monitor"
         selected = [v for v in views if (
             intent in {"attention", "risk"}
             or intent == "growth" and v.assessment.growth_signal
@@ -268,17 +271,17 @@ class Pipeline:
         recommendations = []
         for rank, view in enumerate(selected[:request.limit], start=1):
             policy = governance[view.account.id]
-            action = action_role(view, policy)
+            action = action_role(view, policy, intent)
             recommendations.append(Recommendation(
                 account_id=view.account.id, rank=rank, assessment=view.assessment,
                 health=health[view.account.id], opportunity=opportunity[view.account.id], governance=policy,
-                action=action, communication=self.communicate(view, action, policy, request.communicate, request.communication_mode),
+                action=action, communication=self.communicate(view, action, policy, use_model, request.communication_mode),
             ))
-        partial = request.communicate and any(r.communication.status != "model_validated" for r in recommendations)
+        partial = use_model and any(r.communication.status != "model_validated" for r in recommendations)
         return PipelineRun(
             id=str(uuid4()), organization_id=organization_id, actor_id=actor_id, started_at=started_at,
             as_of=as_of, request=request, contexts=contexts, recommendations=recommendations,
-            status="partial" if partial else "model_validated" if request.communicate and recommendations else "deterministic",
+            status="partial" if partial else "model_validated" if use_model and recommendations else "deterministic",
             steps=[PipelineStep(role=role, processed=len(contexts) if index < 4 else len(recommendations),
                                 status="partial" if role == "communication" and partial else "completed")
                    for index, role in enumerate(("ingestion", "health", "opportunity", "governance", "action", "communication"))],

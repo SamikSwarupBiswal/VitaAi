@@ -89,7 +89,8 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       .then(([data, status]) => { if (active) { setPortfolio(data); setProvider(status); } })
       .catch(error => { if (active) setError(error instanceof Error ? error.message : "Unable to load workspace."); })
       .finally(() => { if (active) setLoading(false); });
-    const theme = localStorage.getItem("vitaai-theme") === "dark";
+    let theme = false;
+    try { theme = localStorage.getItem("vitaai-theme") === "dark"; } catch { /* Preference storage is optional. */ }
     document.documentElement.dataset.theme = theme ? "dark" : "light";
     // External theme state is applied after hydration.
     queueMicrotask(() => { if (active) setDark(theme); });
@@ -123,7 +124,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   function toggleTheme() {
     const next = !dark;
     setDark(next);
-    localStorage.setItem("vitaai-theme", next ? "dark" : "light");
+    try { localStorage.setItem("vitaai-theme", next ? "dark" : "light"); } catch { /* Preference storage is optional. */ }
     document.documentElement.dataset.theme = next ? "dark" : "light";
   }
 
