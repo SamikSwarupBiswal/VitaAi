@@ -56,6 +56,53 @@ class WorkflowApiTests(unittest.TestCase):
             "alternative_id": plan["selected_alternative_id"], "connector_id": connector, "payload": payload})
         return plan, mission, action
 
+    def test_fresh_review_recovers_revoked_session_without_reusing_old_authority(self):
+        _, _, action = self.create()
+        action = self.post(f'/api/actions/{action["id"]}/submit', {
+            "expected_revision": action["revision"], "binding_hash": action["binding_hash"]})
+        self.login("reviewer")
+        original = self.post(f'/api/actions/{action["id"]}/review', {
+            "expected_revision": action["revision"], "binding_hash": action["binding_hash"], "decision": "approved"})
+        self.login("seller")  # Rotates and revokes the reviewing session.
+        request = {"expected_revision": action["revision"], "decision_id": original["id"], "idempotency_key": "renew-http"}
+        denied = self.client.post(f'/api/actions/{action["id"]}/execute', headers=HEADERS, json=request)
+        self.assertEqual(denied.json()["detail"]["code"], "reviewer_session_invalidated")
+        path = f'/api/actions/{action["id"]}/renew-review'
+        body = {"expected_revision": action["revision"], "binding_hash": action["binding_hash"]}
+        for extra in ({"payload": action["payload"]}, {"reviewer_id": original["reviewer_id"]}):
+            self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, **extra}).status_code, 422)
+        identity = Identity(self.app.state.store.engine)
+        identity.create_user("viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        identity.create_user("foreign", "test-password-long", "other-org", "seller")
+        self.login("viewer")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 403)
+        self.login("foreign")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 404)
+        self.login("seller")
+        renewed = self.post(path, body)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 409)
+        self.assertEqual(renewed["payload"], action["payload"])
+        self.assertEqual(renewed["destination"], action["destination"])
+        self.assertEqual(self.client.get(f'/api/actions/{action["id"]}/decisions').json(), [original])
+        self.assertEqual(self.client.get(f'/api/actions/{action["id"]}/executions').json(), [])
+        stale = self.client.post(f'/api/actions/{action["id"]}/execute', headers=HEADERS,
+                                json={**request, "expected_revision": renewed["revision"]})
+        self.assertEqual(stale.status_code, 409)
+        seller_session = self.client.cookies.get("vitaai_session")
+        self.client.cookies.clear()
+        self.login("reviewer")
+        decision = self.post(f'/api/actions/{action["id"]}/review', {
+            "expected_revision": renewed["revision"], "binding_hash": renewed["binding_hash"], "decision": "approved"})
+        self.client.cookies.clear()
+        self.client.cookies.set("vitaai_session", seller_session)
+        execution = self.post(f'/api/actions/{action["id"]}/execute', {
+            **request, "expected_revision": renewed["revision"], "decision_id": decision["id"]})
+        self.assertEqual(execution["status"], "succeeded")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={
+            "expected_revision": renewed["revision"], "binding_hash": renewed["binding_hash"]}).status_code, 409)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
+
     def test_action_recovery_reads_include_invalidated_reviews_and_enforce_scope(self):
         plan, mission, action = self.create()
         paths = [f'/api/actions/{action["id"]}/{suffix}' for suffix in ("decisions", "executions")]

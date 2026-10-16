@@ -127,7 +127,7 @@ def check_execution(*, actor: Actor, reviewer: Actor | None, action: ActionPrevi
 TRANSITIONS = {
     "draft": {"prepared", "outcome_recorded"}, "prepared": {"prepared", "awaiting_review", "outcome_recorded"},
     "awaiting_review": {"approved", "rejected", "revision_required", "prepared"},
-    "approved": {"executing", "prepared"}, "rejected": {"prepared"}, "revision_required": {"prepared"},
+    "approved": {"executing", "prepared", "awaiting_review"}, "rejected": {"prepared"}, "revision_required": {"prepared"},
     "executing": {"executed", "execution_failed", "reconciliation_required"},
     "reconciliation_required": {"executed", "execution_failed"},
     "execution_failed": {"prepared", "outcome_recorded", "executing"}, "executed": {"outcome_recorded"},

@@ -18,7 +18,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
   const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes))?)?|actions/${uuid}(?:/(?:history|decisions|executions))?|executions/${uuid}|receipts/${uuid})$`);
-  const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|outcomes))?|actions/${uuid}/(?:submit|review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
+  const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|outcomes))?|actions/${uuid}/(?:submit|review|renew-review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
   const workflowPath = request.method === "GET" ? workflowRead.test(joined) : workflowWrite.test(joined);
   const allowed = request.method === "GET"
     ? workflowPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)

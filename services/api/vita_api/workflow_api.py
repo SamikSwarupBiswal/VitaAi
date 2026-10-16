@@ -110,6 +110,10 @@ def install_workflow_routes(app, store, identity, settings, provider=None):
     def action_history(action_id: UUID, actor: Current, workflow: Service):
         return workflow.action_history(actor.id, action_id)
 
+    @router.post("/api/actions/{action_id}/renew-review", response_model=ActionPreview)
+    def renew_review(action_id: UUID, body: SubmitRequest, actor: Current, workflow: Service):
+        return workflow.renew_review(actor.id, action_id, body)
+
     @router.post("/api/actions/{action_id}/review", response_model=ReviewDecision)
     def review(action_id: UUID, body: ReviewRequest, actor: Current, workflow: Service):
         return workflow.review(actor.id, action_id, body)

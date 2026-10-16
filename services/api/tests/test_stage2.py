@@ -129,6 +129,114 @@ class Stage2Tests(unittest.TestCase):
                 decision_id=decision.id, idempotency_key=str(action.id))))
         return plan, mission, requests
 
+    def test_renew_review_after_partial_success_preserves_claim_and_exact_content(self):
+        plan, mission, requests = self.multi(choice_index=1)
+        first, first_request = requests[0]
+        action, request = requests[1]
+        successful = self.workflow.execute(self.seller.id, first.id, first_request)
+        receipt = self.workflow.get_receipt(self.seller.id, successful.receipt_id)
+        before = self.workflow.get_mission(self.seller.id, mission.id)
+        canonical = self.workflow.canonical_payload(self.seller.id, action.id)
+        original_decisions = self.workflow.list_decisions(self.seller.id, action.id)
+        self.now += timedelta(minutes=31)
+        with self.assertRaisesRegex(PolicyDenied, "approval_expired"):
+            self.workflow.execute(self.seller.id, action.id, request)
+        renewed = self.workflow.renew_review(self.seller.id, action.id, SubmitRequest(
+            expected_revision=action.revision, binding_hash=action.binding_hash))
+        self.assertEqual(renewed.revision, action.revision + 1)
+        self.assertNotEqual(renewed.binding_hash, action.binding_hash)
+        for field in ("payload", "payload_hash", "destination", "evidence", "slot_id", "step_id", "mission_revision"):
+            self.assertEqual(getattr(renewed, field), getattr(action, field), field)
+        self.assertEqual(self.workflow.canonical_payload(self.seller.id, action.id), canonical)
+        self.assertEqual(self.workflow.get_action(self.seller.id, first.id), first)
+        self.assertEqual(self.workflow.get_execution(self.seller.id, successful.id), successful)
+        self.assertEqual(self.workflow.get_receipt(self.seller.id, receipt.id), receipt)
+        current = self.workflow.get_mission(self.seller.id, mission.id)
+        self.assertEqual((current.content_revision, current.status), (before.content_revision, "awaiting_review"))
+        with self.assertRaises(PolicyDenied):
+            self.workflow.execute(self.seller.id, renewed.id, request.model_copy(update={"expected_revision": renewed.revision}))
+        decision = self.workflow.review(self.reviewer.id, renewed.id, ReviewRequest(
+            expected_revision=renewed.revision, binding_hash=renewed.binding_hash, decision="approved"))
+        self.assertEqual(self.workflow.list_decisions(self.seller.id, action.id), [*original_decisions, decision])
+        restarted = Workflow(self.store, clock=lambda: self.now)
+        execution = restarted.execute(self.seller.id, renewed.id, request.model_copy(update={
+            "expected_revision": renewed.revision, "decision_id": decision.id}))
+        self.assertEqual(execution.status, "succeeded")
+        self.assertEqual(restarted.execute(self.seller.id, first.id, first_request), successful)
+        current = restarted.get_mission(self.seller.id, mission.id)
+        restarted.outcome(self.seller.id, mission.id, OutcomeRequest(expected_revision=current.revision,
+            receipt_id=execution.receipt_id, kind="follow_up_required", basis="manual_report",
+            evidence_ids=plan.evidence.evidence_ids, note="Follow up on the simulation."))
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(claims.c.id)).all()), 2)
+            self.assertEqual(len(connection.execute(select(resources.c.id)).all()), 2)
+
+    def test_renew_review_denies_claimed_active_unknown_stale_and_unapproved_actions(self):
+        _, _, requests = self.multi()
+        first, request = requests[0]
+        second = requests[1][0]
+        body = SubmitRequest(expected_revision=second.revision, binding_hash=second.binding_hash)
+        with self.assertRaisesRegex(PolicyDenied, "preview_changed"):
+            self.workflow.renew_review(self.seller.id, second.id, body.model_copy(update={"binding_hash": "0" * 64}))
+        claimed, _ = self.workflow.claim(self.seller.id, first.id, request)
+        for action in (first, second):
+            with self.assertRaisesRegex(PolicyDenied, "review_renewal_not_available"):
+                self.workflow.renew_review(self.seller.id, action.id, SubmitRequest(
+                    expected_revision=action.revision, binding_hash=action.binding_hash))
+        self.workflow.mark_dispatching(self.seller.id, claimed.id)
+        self.workflow.reconcile(self.reviewer.id, claimed.id, claimed.revision + 1)
+        with self.assertRaisesRegex(PolicyDenied, "review_renewal_not_available"):
+            self.workflow.renew_review(self.seller.id, second.id, body)
+        self.now += timedelta(days=1)
+        with self.assertRaisesRegex(PolicyDenied, "plan_evidence_changed"):
+            self.workflow.renew_review(self.seller.id, second.id, body)
+        self.now = NOW
+        self.prepare()
+        with self.assertRaisesRegex(PolicyDenied, "review_renewal_not_available"):
+            self.workflow.renew_review(self.seller.id, self.action.id, SubmitRequest(
+                expected_revision=self.action.revision, binding_hash=self.action.binding_hash))
+        submitted = self.workflow.submit(self.seller.id, self.action.id, SubmitRequest(
+            expected_revision=self.action.revision, binding_hash=self.action.binding_hash))
+        self.workflow.review(self.reviewer.id, submitted.id, ReviewRequest(expected_revision=submitted.revision,
+            binding_hash=submitted.binding_hash, decision="rejected", reason="Needs editing"))
+        with self.assertRaisesRegex(PolicyDenied, "review_renewal_not_available"):
+            self.workflow.renew_review(self.seller.id, submitted.id, SubmitRequest(
+                expected_revision=submitted.revision, binding_hash=submitted.binding_hash))
+        _, _, failed_requests = self.multi()
+        self.workflow.simulation_profile = "reject"
+        failed = self.workflow.execute(self.seller.id, failed_requests[0][0].id, failed_requests[0][1])
+        self.assertEqual(failed.status, "failed")
+        remaining = failed_requests[1][0]
+        with self.assertRaisesRegex(PolicyDenied, "review_renewal_not_available"):
+            self.workflow.renew_review(self.seller.id, remaining.id, SubmitRequest(
+                expected_revision=remaining.revision, binding_hash=remaining.binding_hash))
+
+    def test_concurrent_review_renewal_creates_one_revision_and_no_approval(self):
+        self.approve()
+        body = SubmitRequest(expected_revision=self.action.revision, binding_hash=self.action.binding_hash)
+        barrier = Barrier(2)
+
+        def renew():
+            store = Store(self.store.engine.url.render_as_string(hide_password=False))
+            try:
+                workflow = Workflow(store, clock=lambda: self.now)
+                barrier.wait(timeout=10)
+                try:
+                    return workflow.renew_review(self.seller.id, self.action.id, body)
+                except PolicyDenied as error:
+                    return error.code
+            finally:
+                store.engine.dispose()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: renew(), range(2)))
+        self.assertEqual(sum(isinstance(result, str) and result == "stale_revision" for result in results), 1)
+        current = self.workflow.get_action(self.seller.id, self.action.id)
+        self.assertEqual(current.revision, self.action.revision + 1)
+        self.assertEqual(len(self.workflow.list_decisions(self.seller.id, current.id)), 1)
+        self.assertEqual(self.workflow.list_executions(self.seller.id, current.id), [])
+        self.assertEqual(self.workflow.get_mission(self.seller.id, self.mission.id).status, "awaiting_review")
+
     def planning_run(self, view, intent, action_kind, strategy):
         step, choice = uuid4(), uuid4()
         output = PlanningOutput.model_validate({"intent": intent, "action_kind": action_kind, "strategy": strategy,

@@ -237,12 +237,19 @@ function MissionPanels({ data, refresh }: { data: MissionData; refresh: () => vo
         {actions.length !== choice.steps.length && <p>Prepare every selected action before submitting for review.</p>}
         {actions.map(action => {
           const decision = currentDecision(action, decisions);
+          const reviewBlocked = mission.status === "completed" || executions.some(item => item.action_id === action.id)
+            || executions.some(item => item.status !== "succeeded");
           return <article className="mission-action" key={action.id}><h4>{kindLabel(action.payload.kind)} · {action.status}</h4><ExactPreview action={action} />
             {decision ? <p>Recorded {decision.decision.replaceAll("_", " ")} by {decision.reviewer_id}. Expires {decision.expires_at}. {decision.reason}</p>
-              : action.status === "submitted" ? <ReviewForm disabled={disabled || !reviewer || frozen} submit={(decision, reason) => mutate(`actions/${action.id}/review`, {
+              : action.status === "submitted" ? <ReviewForm disabled={disabled || !reviewer || reviewBlocked} submit={(decision, reason) => mutate(`actions/${action.id}/review`, {
                 expected_revision: action.revision, binding_hash: action.binding_hash, decision, ...(reason ? { reason } : {}) })} />
                 : <button disabled={disabled || frozen || actions.length !== choice.steps.length} onClick={() => void mutate(`actions/${action.id}/submit`, {
                   expected_revision: action.revision, binding_hash: action.binding_hash })}>Submit saved {kindLabel(action.payload.kind)} for review</button>}
+            {decision?.decision === "approved" && !reviewBlocked && <>
+              <p>Fresh review invalidates this approval and requires a new decision on the unchanged saved content. Use it after approval expiry or reviewer sign-out.</p>
+              <button disabled={disabled} onClick={() => void mutate(`actions/${action.id}/renew-review`, {
+                expected_revision: action.revision, binding_hash: action.binding_hash })}>Request fresh review for {kindLabel(action.payload.kind)}</button>
+            </>}
             {!reviewer && <p>Only a current admin or reviewer can decide a submitted revision.</p>}
           </article>;
         })}

@@ -518,6 +518,31 @@ class Workflow:
             self._audit(connection, actor, submitted, "action_submitted", mission_id=mission.id)
             return submitted
 
+    def renew_review(self, actor_id: str, action_id, body: SubmitRequest) -> ActionPreview:
+        with self._transaction(actor_id) as (connection, actor):
+            action = self._get(connection, actor, actions, action_id, ActionPreview)
+            self._version(action, body.expected_revision)
+            mission, _, _ = self._context(connection, actor, action)
+            if action.binding_hash != body.binding_hash:
+                raise PolicyDenied("preview_changed", 409)
+            decision = self._decision_for(connection, actor, action)
+            executions = [self._claim_for(connection, actor, item)
+                          for item in self._actions(connection, actor, mission.id)]
+            if (mission.status in {"completed", "outcome_recorded"} or action.status != "submitted"
+                    or decision is None or decision.decision != "approved"
+                    or self._claim_for(connection, actor, action) is not None
+                    or any(item and item.status != "succeeded" for item in executions)):
+                raise PolicyDenied("review_renewal_not_available", 409)
+            # Renew authority, never content. Claimed siblings retain their exact revisions and receipts.
+            renewed = action.model_copy(update={"revision": action.revision + 1})
+            renewed = renewed.model_copy(update={"binding_hash": binding_hash(renewed)})
+            self._put(connection, actions, renewed)
+            self._audit(connection, actor, action, "approval_invalidated", mission_id=mission.id, after="superseded")
+            self._refresh(connection, actor, mission) if mission.template == "account-follow-up-1" else self._move(
+                connection, actor, mission, "awaiting_review", "Approval")
+            self._audit(connection, actor, renewed, "review_renewal_requested", mission_id=mission.id)
+            return renewed
+
     def review(self, actor_id: str, action_id, body: ReviewRequest) -> ReviewDecision:
         with self._transaction(actor_id, review=True) as (connection, actor):
             action = self._get(connection, actor, actions, action_id, ActionPreview)
