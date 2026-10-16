@@ -1,5 +1,8 @@
 """Real isolated database governance tests; every execution here is explicitly simulated."""
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -818,6 +821,147 @@ class Stage2Tests(unittest.TestCase):
             self.assertEqual(len(connection.execute(select(claims)).all()), 1)
             self.assertEqual(len(connection.execute(select(resources)).all()), 1)
             self.assertEqual(len(connection.execute(select(decisions)).all()), 1)
+
+    def test_concurrent_submission_keeps_one_exact_review_revision(self):
+        action = self.prepare()
+        body = SubmitRequest(expected_revision=action.revision, binding_hash=action.binding_hash)
+        barrier = Barrier(2)
+
+        def submit():
+            store = Store(self.store.engine.url.render_as_string(hide_password=False))
+            try:
+                workflow = Workflow(store, clock=lambda: NOW)
+                barrier.wait(timeout=10)
+                try:
+                    return workflow.submit(self.seller.id, action.id, body)
+                except PolicyDenied as failure:
+                    self.assertEqual((failure.code, failure.status_code), ("stale_revision", 409))
+                    return None
+            finally:
+                store.engine.dispose()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: submit(), range(2)))
+        accepted = [item for item in results if item is not None]
+        self.assertEqual(len(accepted), 1)
+        submitted = self.workflow.get_action(self.seller.id, action.id)
+        self.assertEqual(submitted, accepted[0])
+        self.assertEqual((submitted.revision, submitted.status, submitted.payload),
+                         (action.revision + 1, "submitted", action.payload))
+        self.assertNotEqual(submitted.binding_hash, action.binding_hash)
+        events = self.workflow.audit(self.seller.id, self.mission.id)
+        self.assertEqual(sum(item.event_kind == "action_submitted" for item in events), 1)
+        self.assertEqual(self.workflow.list_decisions(self.seller.id, action.id), [])
+        self.assertEqual(self.workflow.list_executions(self.seller.id, action.id), [])
+        with self.assertRaises(PolicyDenied):
+            self.workflow.review(self.reviewer.id, action.id, ReviewRequest(
+                expected_revision=action.revision, binding_hash=action.binding_hash, decision="approved"))
+        decision = self.workflow.review(self.reviewer.id, action.id, ReviewRequest(
+            expected_revision=submitted.revision, binding_hash=submitted.binding_hash, decision="approved"))
+        self.assertEqual((decision.action_revision, decision.binding_hash),
+                         (submitted.revision, submitted.binding_hash))
+
+    def crash_worker(self, boundary):
+        request = self.approve()
+        database_url = self.store.engine.url.render_as_string(hide_password=False)
+        # Abruptly exit after a real committed transaction, without service/engine cleanup.
+        # Configuration travels over stdin so PostgreSQL credentials never enter argv/output.
+        worker = """
+import json
+import os
+import sys
+from contextlib import contextmanager
+from datetime import datetime
+from vita_api.storage import Store
+from vita_api.workflow import Workflow
+from vita_api.workflow_contracts import ExecuteRequest
+
+config = json.load(sys.stdin)
+store = Store(config["database_url"])
+workflow = Workflow(store, clock=lambda: datetime.fromisoformat(config["now"]))
+original = workflow._transaction
+commits = 0
+
+@contextmanager
+def transaction(*args, **kwargs):
+    global commits
+    with original(*args, **kwargs) as values:
+        yield values
+    commits += 1
+    if commits == config["boundary"]:
+        os._exit(73)
+
+workflow._transaction = transaction
+workflow.execute(config["actor_id"], config["action_id"], ExecuteRequest.model_validate(config["request"]))
+"""
+        result = subprocess.run([sys.executable, "-c", worker], check=False, input=json.dumps({
+            "database_url": database_url, "now": NOW.isoformat(), "boundary": boundary,
+            "actor_id": self.seller.id, "action_id": str(self.action.id),
+            "request": request.model_dump(mode="json"),
+        }), text=True, capture_output=True, timeout=30, cwd=Path(__file__).resolve().parents[1])
+        self.assertEqual(result.returncode, 73, "Worker did not reach the requested crash boundary")
+        self.assertFalse(result.stdout or result.stderr, "Worker unexpectedly emitted output")
+        self.store.engine.dispose()
+        self.store = Store(database_url)
+        self.workflow = Workflow(self.store, clock=lambda: NOW)
+        executions = self.workflow.list_executions(self.seller.id, self.action.id)
+        self.assertEqual(len(executions), 1)
+        execution = executions[0]
+        self.assertEqual((execution.status, execution.attempt, execution.receipt_id),
+                         ("claimed" if boundary == 1 else "dispatching", 1, None))
+        events = self.workflow.audit(self.seller.id, self.mission.id)
+        self.assertEqual(sum(item.event_kind == "execution_claimed" for item in events), 1)
+        self.assertEqual(sum(item.event_kind == "dispatch_started" for item in events), int(boundary > 1))
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(resources)).all()), int(boundary == 3))
+        self.assertEqual(self.workflow.execute(self.seller.id, self.action.id, request), execution)
+        with self.assertRaises(PolicyDenied) as failure:
+            self.workflow.execute(self.seller.id, self.action.id,
+                                  request.model_copy(update={"idempotency_key": "replacement-key"}))
+        self.assertEqual(failure.exception.code, "logical_action_claimed")
+        return request, execution
+
+    def test_process_exit_after_claim_recovers_under_same_key(self):
+        request, execution = self.crash_worker(1)
+        failed = self.workflow.reconcile(self.reviewer.id, execution.id, execution.revision)
+        self.assertEqual(failed.status, "failed")
+        receipt = self.workflow.get_receipt(self.seller.id, failed.receipt_id)
+        self.assertEqual(receipt.error_code, "pre_dispatch_cancelled")
+        retried = self.workflow.retry(self.seller.id, failed.id,
+                                     request.model_copy(update={"expected_revision": failed.revision}))
+        self.assertEqual((retried.id, retried.idempotency_key, retried.attempt, retried.status),
+                         (execution.id, request.idempotency_key, 2, "succeeded"))
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(claims)).all()), 1)
+            self.assertEqual(len(connection.execute(select(resources)).all()), 1)
+
+    def test_process_exit_after_dispatch_keeps_unknown_and_blocks_retry_outcome(self):
+        request, execution = self.crash_worker(2)
+        unknown = self.workflow.reconcile(self.reviewer.id, execution.id, execution.revision)
+        self.assertEqual((unknown.id, unknown.status, unknown.attempt), (execution.id, "result_unknown", 1))
+        with self.assertRaises(PolicyDenied):
+            self.workflow.retry(self.seller.id, unknown.id,
+                                request.model_copy(update={"expected_revision": unknown.revision}))
+        mission = self.workflow.get_mission(self.seller.id, self.mission.id)
+        self.assertEqual(mission.status, "reconciliation_required")
+        with self.assertRaises(PolicyDenied):
+            self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(expected_revision=mission.revision,
+                manual_action_reference="operator-follow-up", kind="follow_up_required", basis="manual_report",
+                evidence_ids=self.plan.evidence.evidence_ids, note="Unknown dispatch cannot be closed"))
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(resources)).all()), 0)
+
+    def test_process_exit_after_resource_commit_reconciles_without_redispatch(self):
+        request, execution = self.crash_worker(3)
+        reconciled = self.workflow.reconcile(self.reviewer.id, execution.id, execution.revision)
+        self.assertEqual((reconciled.id, reconciled.attempt, reconciled.status), (execution.id, 1, "succeeded"))
+        receipt = self.workflow.get_receipt(self.seller.id, reconciled.receipt_id)
+        self.assertEqual((receipt.mode, receipt.verification, receipt.readback_hash),
+                         ("simulation", "verified", self.action.payload_hash))
+        self.assertEqual(self.workflow.execute(self.seller.id, self.action.id, request), reconciled)
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(resources)).all()), 1)
+        self.assertEqual(self.workflow.list_outcomes(self.seller.id, self.mission.id), [])
 
     def test_new_key_cannot_repeat_logical_action_and_old_key_cannot_change_binding(self):
         request = self.approve()
