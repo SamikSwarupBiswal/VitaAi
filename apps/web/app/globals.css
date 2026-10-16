@@ -148,3 +148,38 @@ details dd { overflow-wrap: anywhere; font-size: 12px; }
   .account-table { min-width: 620px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .spinning { animation: none; } }
+.mission-shell { max-width: 1440px; margin: auto; padding: 30px; }
+.mission-heading { display: flex; justify-content: space-between; gap: 24px; align-items: start; flex-wrap: wrap; }
+.mission-heading h1, .mission-heading h2 { margin: 16px 0 10px; }
+.mission-shell button, .mission-shell input, .mission-shell select, .mission-shell textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 9px 12px; }
+.mission-shell textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.mission-shell button:hover:not(:disabled), .mission-shell button[aria-current] { background: var(--selected); border-color: var(--green); }
+.mission-disclosure { border-left: 3px solid var(--green); background: var(--selected); padding: 12px 16px; margin: 24px 0; }
+.mission-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 36px; }
+.mission-directory { border-right: 1px solid var(--border); padding-right: 24px; }
+.mission-directory h2 { font-size: 18px; margin: 28px 0 12px; }
+.mission-directory nav { margin: 12px 0; display: grid; }
+.mission-directory button { text-align: left; }
+.mission-directory small, .mission-choice small { display: block; margin-top: 5px; color: var(--muted); }
+.mission-directory details { margin-top: 24px; }
+.mission-main, .mission-directory { min-width: 0; }
+.mission-main p { margin: 12px 0; }
+.mission-id, .mission-main dd, .mission-main small { overflow-wrap: anywhere; }
+.mission-id { font-size: 12px; color: var(--muted); }
+.mission-steps { display: flex; gap: 8px; flex-wrap: wrap; margin: 28px 0; }
+.mission-steps button { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mission-steps button span { font-weight: bold; }
+.mission-form, .mission-form fieldset { display: grid; gap: 16px; }
+.mission-form fieldset { border: 0; margin: 12px 0; padding: 0; min-width: 0; }
+.mission-form label, .mission-directory > label { display: grid; gap: 6px; }
+.mission-form label:has(input[type=checkbox]) { display: flex; align-items: center; }
+.mission-form input, .mission-form textarea, .mission-form select, .mission-directory select { min-width: 0; width: 100%; }
+.mission-form input[type=checkbox], .mission-choice input { width: auto; }
+.mission-form button { justify-self: start; background: var(--selected); }
+.mission-choice { display: flex; align-items: start; gap: 12px; padding: 16px 0; }
+.mission-action, .mission-audit, .mission-evidence li { border-top: 1px solid var(--border); padding: 20px 0; margin-top: 20px; }
+.mission-main pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; background: var(--surface); padding: 12px; }
+.mission-main li { margin: 12px 0; }
+.mission-main details summary { cursor: pointer; }
+.mission-main fieldset { min-width: 0; }
+@media (max-width: 800px) { .mission-shell { padding: 20px 16px; } .mission-layout { grid-template-columns: 1fr; gap: 24px; } .mission-directory { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 20px; } .mission-directory nav { margin-left: 0; } .mission-steps { margin-left: 0; } }

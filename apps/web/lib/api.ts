@@ -20,7 +20,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     if (path === "auth/login") throw new Error("Sign-in failed. Check credentials or retry later.");
     if (response.status === 403) throw new Error("Your role cannot perform this action.");
     throw new Error(response.status === 409
-      ? "Account snapshot changed. Refresh and try again."
+      ? "Record or approval changed. Refresh current state before trying again."
       : response.status === 503
         ? "API unavailable. Check the local API server."
         : `Request failed (${response.status}). Please retry.`);

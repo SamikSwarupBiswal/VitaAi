@@ -46,7 +46,7 @@ function Entry() {
       {perspectives.map(item => <Link key={item.id} href={`/?persona=${item.id}`}><strong>{item.label}</strong><span>{item.description}</span><span>Open {item.label.toLowerCase()} workspace →</span></Link>)}
     </nav>
     {previous && <Link href={`/?persona=${previous}`}>Resume {previous} workspace</Link>}
-    <p className="caveat">This build uses synthetic account evidence. Analysis and drafts are advisory. Missions, approvals and external actions are still being built.</p>
+    <p className="caveat">This build uses synthetic account evidence. Analysis and drafts are advisory. Governed missions require session identity and use simulation; external actions remain unavailable.</p>
   </main>;
 }
 
@@ -151,6 +151,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       <span className="nav-label">Workspace</span><nav aria-label="Workspace">
         <Link href={`/${selectedQuery}`} className={!accountDirectory ? "active" : ""} aria-current={!accountDirectory ? "page" : undefined}><PieChart size={20} />Portfolio</Link>
         <Link href={`/accounts${selectedQuery}`} className={accountDirectory ? "active" : ""} aria-current={accountDirectory ? "page" : undefined}><Building2 size={20} />Accounts</Link>
+        <Link href={`/missions${selected ? `?account=${encodeURIComponent(selected.account.id)}` : ""}`}>Missions</Link>
       </nav><footer><p><Settings size={18} />Sample workspace</p><p><Code2 size={18} />Local development</p></footer>
     </aside>
     <div className="workspace-body"><header className="topbar"><span>Workspace <span className="slash">/</span> <strong>{title}</strong></span>
