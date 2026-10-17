@@ -89,6 +89,48 @@ test("governed workflow routes preserve method, session, body and safe denial", 
   assert.equal(upstream.mock.callCount(), routes.GET.length + routes.POST.length);
 });
 
+test("HubSpot routes allow only staged reads and explicit account sync", async t => {
+  const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
+  const upstream = t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.match(url, /^http:\/\/127\.0\.0\.1:8000\/api\/integrations\/hubspot/);
+    assert.equal(options.headers.Authorization, undefined);
+    assert.equal(options.headers.Cookie, "vitaai_session=opaque-session");
+    return Response.json({ status: "configured_unverified" });
+  });
+  for (const [method, name, expected] of [
+    ["GET", "integrations/hubspot", 200], ["GET", `integrations/hubspot/runs/${id}`, 200],
+    ["GET", `integrations/hubspot/observations/${id}`, 200],
+    ["POST", `integrations/hubspot/accounts/${id}/sync`, 200],
+    ["GET", `integrations/hubspot/accounts/${id}/sync`, 404],
+    ["POST", "integrations/hubspot", 404], ["POST", `integrations/hubspot/runs/${id}`, 404],
+    ["POST", `integrations/hubspot/accounts/${id}/write`, 404],
+    ["POST", `integrations/hubspot/accounts/${id}/sync/extra`, 404],
+    ["POST", "integrations/hubspot/accounts/not-a-uuid/sync", 404],
+    ["POST", "integrations/hubspot/accounts/../../foreign/sync", 404],
+  ]) {
+    const request = new NextRequest(`http://localhost:3000/api/${name}`, { method, headers: {
+      host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", cookie: "vitaai_session=opaque-session",
+      authorization: "never-forward", "X-VitaAi-Request": "1",
+    }, ...(method === "POST" ? { body: JSON.stringify({ expected_account_revision: 1 }) } : {}) });
+    const response = await route.exports[method](request, { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, expected, `${method} ${name}`);
+  }
+  assert.equal(upstream.mock.callCount(), 4);
+});
+
+test("Next implicit HEAD cannot forward a HubSpot sync", async t => {
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods.js");
+  const methods = autoImplementMethods(route.exports);
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}, { status: 405 }));
+  const name = "integrations/hubspot/accounts/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8/sync";
+  const request = new NextRequest(`http://localhost:3000/api/${name}`, { method: "HEAD", headers: {
+    host: "127.0.0.1:3000", origin: "https://foreign.example",
+  } });
+  const response = await methods.HEAD(request, { params: Promise.resolve({ path: name.split("/") }) });
+  assert.equal(response.status, 404);
+  assert.equal(upstream.mock.callCount(), 0);
+});
+
 test("workflow request size permits valid reviewed bodies but remains bounded", async t => {
   const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
   const upstream = t.mock.method(globalThis, "fetch", async (_url, options) => {

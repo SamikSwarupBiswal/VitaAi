@@ -4,6 +4,7 @@ from threading import Lock
 from time import monotonic
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -11,6 +12,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings
 from .contracts import AccountView, AnalyzeRequest, ModelRun, Portfolio, ProviderStatus
+from .hubspot import PREFIX as HUBSPOT_PREFIX
+from .hubspot_sync import install_hubspot_routes
 from .identity import Actor, Identity, LoginFailure, LoginRequest, SessionView
 from .models import AdvisoryProvider
 from .nebius import Nebius
@@ -21,7 +24,8 @@ from .storage import Store
 from .workflow_api import WORKFLOW_PREFIXES, install_workflow_routes, safe_error
 
 
-def create_app(settings: Settings | None = None, provider: AdvisoryProvider | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, provider: AdvisoryProvider | None = None,
+               *, hubspot_transport: httpx.BaseTransport | None = None) -> FastAPI:
     settings = settings or Settings()
     store = Store(settings.database_url)
     provider = provider or Nebius(settings)
@@ -44,7 +48,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     async def validation_error(request: Request, error: RequestValidationError):
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
-        if request.url.path.startswith(WORKFLOW_PREFIXES):
+        if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX)):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
@@ -182,6 +186,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         return run
 
     install_workflow_routes(app, store, identity, settings, provider)
+    install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     return app
 
 
