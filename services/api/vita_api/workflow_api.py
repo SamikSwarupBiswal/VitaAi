@@ -26,6 +26,7 @@ from .workflow_contracts import (
     ReviewRequest,
     RevisionRequest,
     SubmitRequest,
+    SupersedeRequest,
 )
 
 WORKFLOW_PREFIXES = ("/api/plans", "/api/missions", "/api/actions", "/api/executions", "/api/receipts")
@@ -97,6 +98,10 @@ def install_workflow_routes(app, store, identity, settings, provider=None):
     @router.post("/api/missions/{mission_id}/prepare", response_model=ActionPreview)
     def prepare(mission_id: UUID, body: PrepareRequest, actor: Current, workflow: Service):
         return workflow.prepare(actor.id, mission_id, body)
+
+    @router.post("/api/missions/{mission_id}/supersede", response_model=Mission)
+    def supersede_mission(mission_id: UUID, body: SupersedeRequest, actor: Current, workflow: Service):
+        return workflow.supersede_mission(actor.id, mission_id, body)
 
     @router.get("/api/actions/{action_id}", response_model=ActionPreview)
     def get_action(action_id: UUID, actor: Current, workflow: Service):

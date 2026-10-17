@@ -38,6 +38,7 @@ from vita_api.workflow_contracts import (
     PrepareRequest,
     ReviewRequest,
     SubmitRequest,
+    SupersedeRequest,
     TaskPayload,
 )
 from vita_api.workflow_storage import actions, audits, claims, decisions, resources
@@ -236,6 +237,129 @@ class Stage2Tests(unittest.TestCase):
         self.assertEqual(len(self.workflow.list_decisions(self.seller.id, current.id)), 1)
         self.assertEqual(self.workflow.list_executions(self.seller.id, current.id), [])
         self.assertEqual(self.workflow.get_mission(self.seller.id, self.mission.id).status, "awaiting_review")
+
+    def fresh_plan(self, *, kind="hubspot_task_create", strategy=None, account=None):
+        account = account or self.account
+        snapshot = assess(account, self.store.account_evidence(SAMPLE_ORG, account.id), self.now.date()).snapshot_hash
+        return self.workflow.create_plan(self.seller.id, PlanRequest(account_id=account.id,
+            expected_revision=account.revision, expected_snapshot_hash=snapshot, intent="risk",
+            action_kind=kind, strategy=strategy))
+
+    def test_stale_mission_supersession_preserves_history_and_requires_new_review(self):
+        cases = [(TaskPayload(title="Task", body="Exact\n "), "account-action-1", "simulation-hubspot"),
+                 (NotePayload(body="Exact note\n "), "account-note-1", "simulation-hubspot"),
+                 (OutlookPayload(to=("buyer@example.com",), subject="Exact", body_text="Draft\n "),
+                  "account-outlook-draft-1", "simulation-microsoft")]
+        for payload, template, connector in cases:
+            with self.subTest(kind=payload.kind):
+                self.now = NOW
+                request = self.approve(payload=payload, template=template, connector=connector)
+                original = self.workflow.get_mission(self.seller.id, self.mission.id)
+                history = self.workflow.action_history(self.seller.id, self.action.id)
+                decisions_before = self.workflow.list_decisions(self.seller.id, self.action.id)
+                facts_before = self.store.account_evidence(SAMPLE_ORG, self.account.id)
+                self.now += timedelta(days=1)
+                with self.assertRaisesRegex(PolicyDenied, "plan_evidence_changed"):
+                    self.workflow.execute(self.seller.id, self.action.id, request)
+                plan = self.fresh_plan(kind=payload.kind)
+                body = SupersedeRequest(expected_revision=original.revision, plan_id=plan.id,
+                    expected_plan_revision=plan.revision, alternative_id=plan.selected_alternative_id)
+                replacement = self.workflow.supersede_mission(self.seller.id, original.id, body)
+                old = self.workflow.get_mission(self.seller.id, original.id)
+                self.assertEqual((old.status, old.superseded_by_id), ("superseded", replacement.id))
+                self.assertEqual((replacement.status, replacement.supersedes_id), ("draft", old.id))
+                self.assertEqual((replacement.plan_id, replacement.evidence), (plan.id, plan.evidence))
+                self.assertEqual(self.workflow.get_plan(self.seller.id, self.plan.id), self.plan)
+                self.assertEqual(self.workflow.get_action(self.seller.id, self.action.id), self.action)
+                self.assertEqual(self.workflow.action_history(self.seller.id, self.action.id), history)
+                self.assertEqual(self.workflow.list_decisions(self.seller.id, self.action.id), decisions_before)
+                self.assertEqual(self.store.account_evidence(SAMPLE_ORG, self.account.id), facts_before)
+                self.assertEqual(self.workflow.list_actions(self.seller.id, replacement.id), [])
+                with self.assertRaisesRegex(PolicyDenied, "stale_revision"):
+                    self.workflow.supersede_mission(self.seller.id, old.id, body)
+                # Even if an old snapshot becomes current again, supersession is terminal.
+                self.now = NOW
+                with self.assertRaisesRegex(PolicyDenied, "mission_superseded"):
+                    self.workflow.execute(self.seller.id, self.action.id, request)
+                with self.assertRaisesRegex(PolicyDenied, "mission_superseded"):
+                    self.workflow.prepare(self.seller.id, old.id, PrepareRequest(expected_revision=old.revision,
+                        alternative_id=self.plan.selected_alternative_id, connector_id=connector, payload=payload))
+                self.now += timedelta(days=1)
+                action = self.workflow.prepare(self.seller.id, replacement.id, PrepareRequest(
+                    expected_revision=replacement.revision, alternative_id=plan.selected_alternative_id,
+                    connector_id=connector, payload=payload))
+                with self.assertRaises(PolicyDenied):
+                    self.workflow.execute(self.seller.id, action.id, request.model_copy(update={
+                        "expected_revision": action.revision, "idempotency_key": str(action.id)}))
+                action = self.workflow.submit(self.seller.id, action.id, SubmitRequest(
+                    expected_revision=action.revision, binding_hash=action.binding_hash))
+                decision = self.workflow.review(self.reviewer.id, action.id, ReviewRequest(
+                    expected_revision=action.revision, binding_hash=action.binding_hash, decision="approved"))
+                execution = self.workflow.execute(self.seller.id, action.id, ExecuteRequest(
+                    expected_revision=action.revision, decision_id=decision.id, idempotency_key=str(action.id)))
+                self.assertEqual(execution.status, "succeeded")
+                self.assertEqual(self.workflow.list_executions(self.seller.id, self.action.id), [])
+
+    def test_supersession_denies_every_existing_claim_and_preserves_partial_work(self):
+        for profile in ("claimed", "dispatching", "success", "reject", "timeout_before", "timeout_after"):
+            with self.subTest(profile=profile):
+                self.now = NOW
+                _, mission, requests = self.multi(choice_index=1)
+                first, request = requests[0]
+                self.workflow.simulation_profile = profile if profile not in {"claimed", "dispatching"} else "success"
+                if profile in {"claimed", "dispatching"}:
+                    execution, _ = self.workflow.claim(self.seller.id, first.id, request)
+                    if profile == "dispatching":
+                        execution = self.workflow.mark_dispatching(self.seller.id, execution.id)
+                else:
+                    execution = self.workflow.execute(self.seller.id, first.id, request)
+                before = self.workflow.get_mission(self.seller.id, mission.id)
+                audit = self.workflow.audit(self.seller.id, mission.id)
+                self.now += timedelta(days=1)
+                fresh = self.fresh_plan(strategy="follow_up")
+                with self.assertRaisesRegex(PolicyDenied, "mission_has_execution_claims"):
+                    self.workflow.supersede_mission(self.seller.id, mission.id, SupersedeRequest(
+                        expected_revision=before.revision, plan_id=fresh.id, expected_plan_revision=fresh.revision))
+                self.assertEqual(self.workflow.get_mission(self.seller.id, mission.id), before)
+                self.assertEqual(self.workflow.get_execution(self.seller.id, execution.id), execution)
+                self.assertEqual(self.workflow.audit(self.seller.id, mission.id), audit)
+
+    def test_supersession_rechecks_current_plan_and_creates_one_replacement_concurrently(self):
+        self.prepare()
+        mission = self.workflow.get_mission(self.seller.id, self.mission.id)
+        current = self.fresh_plan()
+        body = SupersedeRequest(expected_revision=mission.revision, plan_id=current.id, expected_plan_revision=1)
+        with self.assertRaisesRegex(PolicyDenied, "mission_evidence_current"):
+            self.workflow.supersede_mission(self.seller.id, mission.id, body)
+        self.now += timedelta(days=1)
+        with self.assertRaisesRegex(PolicyDenied, "plan_evidence_changed"):
+            self.workflow.supersede_mission(self.seller.id, mission.id, body)
+        wrong = self.fresh_plan(kind="hubspot_note_create")
+        with self.assertRaisesRegex(PolicyDenied, "template_plan_mismatch"):
+            self.workflow.supersede_mission(self.seller.id, mission.id, body.model_copy(update={"plan_id": wrong.id}))
+        fresh = self.fresh_plan()
+        body = body.model_copy(update={"plan_id": fresh.id})
+        barrier = Barrier(2)
+
+        def replace():
+            store = Store(self.store.engine.url.render_as_string(hide_password=False))
+            try:
+                workflow = Workflow(store, clock=lambda: self.now)
+                barrier.wait(timeout=10)
+                try:
+                    return workflow.supersede_mission(self.seller.id, mission.id, body)
+                except PolicyDenied as error:
+                    return error.code
+            finally:
+                store.engine.dispose()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: replace(), range(2)))
+        self.assertEqual(sum(isinstance(item, str) and item == "stale_revision" for item in results), 1)
+        restarted = Workflow(self.store, clock=lambda: self.now)
+        replacements = [item for item in restarted.list_missions(self.seller.id) if item.supersedes_id == mission.id]
+        self.assertEqual(len(replacements), 1)
+        self.assertEqual(restarted.get_mission(self.seller.id, mission.id).superseded_by_id, replacements[0].id)
 
     def planning_run(self, view, intent, action_kind, strategy):
         step, choice = uuid4(), uuid4()

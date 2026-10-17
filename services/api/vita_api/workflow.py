@@ -43,6 +43,7 @@ from .workflow_contracts import (
     ReviewDecision,
     ReviewRequest,
     SubmitRequest,
+    SupersedeRequest,
 )
 from .workflow_storage import (
     actions,
@@ -387,28 +388,58 @@ class Workflow:
 
     def create_mission(self, actor_id: str, body: MissionRequest) -> Mission:
         with self._transaction(actor_id) as (connection, actor):
+            return self._create_mission(connection, actor, body)
+
+    def _create_mission(self, connection, actor, body, *, supersedes_id=None):
+        plan = self._get(connection, actor, plans, body.plan_id, Plan)
+        self._version(plan, body.expected_revision)
+        self._plan_check(connection, actor, plan)
+        selected = body.alternative_id or plan.selected_alternative_id
+        alternative = next((item for item in plan.alternatives if item.id == selected), None)
+        if alternative is None:
+            raise PolicyDenied("alternative_not_in_plan")
+        kinds = tuple(step.kind for step in alternative.steps)
+        multi = body.template == "account-follow-up-1"
+        matches = (kinds in (("hubspot_task_create", "hubspot_note_create"),
+                             ("outlook_draft_create", "hubspot_note_create")) and
+                   alternative.steps[1].dependencies == (alternative.steps[0].id,) and
+                   not alternative.steps[0].dependencies) if multi else kinds == (SIMULATION_TEMPLATES[body.template],)
+        if not matches:
+            raise PolicyDenied("template_plan_mismatch")
+        mission = Mission(**self._base(actor), account_id=plan.account_id, owner_id=actor.id,
+                          template=body.template, plan_id=plan.id, plan_revision=plan.revision,
+                          evidence=plan.evidence, status="draft", current_step="Review", supersedes_id=supersedes_id,
+                          alternative_id=selected, allowed_kinds=tuple(dict.fromkeys(kinds)))
+        self._put(connection, missions, mission, new=True, plan_id=str(plan.id))
+        self._audit(connection, actor, mission, "mission_created", mission_id=mission.id)
+        return mission
+
+    def supersede_mission(self, actor_id: str, mission_id, body: SupersedeRequest) -> Mission:
+        with self._transaction(actor_id) as (connection, actor):
+            mission = self._get(connection, actor, missions, mission_id, Mission)
+            self._version(mission, body.expected_revision)
+            if mission.status not in {"draft", "prepared", "awaiting_review", "approved", "rejected", "revision_required"}:
+                # Check claims first below for a specific, durable recovery boundary.
+                available = False
+            else:
+                available = True
+            if any(self._claim_for(connection, actor, item) for item in self._actions(connection, actor, mission.id)):
+                raise PolicyDenied("mission_has_execution_claims", 409)
+            if not available:
+                raise PolicyDenied("mission_supersession_not_available", 409)
+            view = self._view(connection, actor, mission.account_id)
+            if mission.evidence == evidence_binding(view):
+                raise PolicyDenied("mission_evidence_current", 409)
             plan = self._get(connection, actor, plans, body.plan_id, Plan)
-            self._version(plan, body.expected_revision)
-            self._plan_check(connection, actor, plan)
-            selected = body.alternative_id or plan.selected_alternative_id
-            alternative = next((item for item in plan.alternatives if item.id == selected), None)
-            if alternative is None:
-                raise PolicyDenied("alternative_not_in_plan")
-            kinds = tuple(step.kind for step in alternative.steps)
-            multi = body.template == "account-follow-up-1"
-            matches = (kinds in (("hubspot_task_create", "hubspot_note_create"),
-                                 ("outlook_draft_create", "hubspot_note_create")) and
-                       alternative.steps[1].dependencies == (alternative.steps[0].id,) and
-                       not alternative.steps[0].dependencies) if multi else kinds == (SIMULATION_TEMPLATES[body.template],)
-            if not matches:
-                raise PolicyDenied("template_plan_mismatch")
-            mission = Mission(**self._base(actor), account_id=plan.account_id, owner_id=actor.id,
-                              template=body.template, plan_id=plan.id, plan_revision=plan.revision,
-                              evidence=plan.evidence, status="draft", current_step="Review",
-                              alternative_id=selected, allowed_kinds=tuple(dict.fromkeys(kinds)))
-            self._put(connection, missions, mission, new=True, plan_id=str(plan.id))
-            self._audit(connection, actor, mission, "mission_created", mission_id=mission.id)
-            return mission
+            if plan.account_id != mission.account_id:
+                raise PolicyDenied("mission_account_changed", 409)
+            replacement = self._create_mission(connection, actor, MissionRequest(plan_id=plan.id,
+                expected_revision=body.expected_plan_revision, template=mission.template,
+                alternative_id=body.alternative_id), supersedes_id=mission.id)
+            self._move(connection, actor, mission, "superseded", "Review", event="mission_superseded",
+                       superseded_by_id=replacement.id)
+            self._audit(connection, actor, replacement, "mission_replacement_created", mission_id=replacement.id)
+            return replacement
 
     def _destination(self, actor, account_id, connector_id, kind):
         expected = "simulation-microsoft" if kind == "outlook_draft_create" else "simulation-hubspot"
@@ -426,6 +457,8 @@ class Workflow:
         with self._transaction(actor_id) as (connection, actor):
             mission = self._get(connection, actor, missions, mission_id, Mission)
             self._version(mission, body.expected_revision)
+            if mission.status == "superseded":
+                raise PolicyDenied("mission_superseded", 409)
             plan = self._get(connection, actor, plans, mission.plan_id, Plan)
             self._plan_check(connection, actor, plan)
             if mission.plan_revision != plan.revision or mission.evidence != plan.evidence:
@@ -478,6 +511,8 @@ class Workflow:
 
     def _context(self, connection, actor, action):
         mission = self._get(connection, actor, missions, action.mission_id, Mission)
+        if mission.status == "superseded":
+            raise PolicyDenied("mission_superseded", 409)
         plan = self._get(connection, actor, plans, action.plan_id, Plan)
         view = self._plan_check(connection, actor, plan)
         if (action.mission_revision != mission.content_revision or action.plan_revision != plan.revision

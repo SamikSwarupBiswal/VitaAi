@@ -48,7 +48,7 @@ Mode = Literal["simulation", "live"]
 Decision = Literal["approved", "rejected", "revision_required"]
 MissionStatus = Literal["draft", "prepared", "awaiting_review", "approved", "rejected", "revision_required",
                         "executing", "executed", "execution_failed", "reconciliation_required",
-                        "outcome_recorded", "completed"]
+                        "outcome_recorded", "completed", "superseded"]
 
 
 def unique(values):
@@ -205,6 +205,8 @@ class Mission(Record):
     current_step: Literal["Review", "Evidence", "Outreach", "CRM Note", "Approval", "Execution", "Outcome"]
     allowed_kinds: Annotated[tuple[Kind, ...], Field(min_length=1, max_length=3), AfterValidator(unique)]
     transition_ids: tuple[UUID, ...] = ()
+    supersedes_id: UUID | None = None
+    superseded_by_id: UUID | None = None
 
     @model_validator(mode="after")
     def account_binding(self) -> Self:
@@ -367,6 +369,12 @@ class PlanRequest(RevisionRequest):
 class MissionRequest(RevisionRequest):
     plan_id: UUID
     template: Template = "account-action-1"
+    alternative_id: UUID | None = None
+
+
+class SupersedeRequest(RevisionRequest):
+    plan_id: UUID
+    expected_plan_revision: Revision
     alternative_id: UUID | None = None
 
 

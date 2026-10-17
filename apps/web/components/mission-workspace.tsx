@@ -83,19 +83,19 @@ function MissionDirectory() {
         {loaded.portfolio.accounts.map(item => <option key={item.account.id} value={item.account.id}>{item.account.name}</option>)}</select></label>
         {!account && <p role="alert">Account unavailable in this workspace.</p>}
         <h2>Resume work</h2><nav aria-label="Saved missions">
-          {loaded.missions.filter(item => item.account_id === accountId && item.status !== "completed").map(item => <button key={item.id}
+          {loaded.missions.filter(item => item.account_id === accountId && !["completed", "superseded"].includes(item.status)).map(item => <button key={item.id}
             aria-current={item.id === selectedId ? "page" : undefined} onClick={() => select(item.account_id, item.id)}>
             {item.template.replaceAll("account-", "")}<small>{item.status.replaceAll("_", " ")} · {item.id.slice(0, 8)}</small></button>)}
         </nav>
         {account && <button onClick={() => select(account.account.id)}>Plan a new mission</button>}
-        <details><summary>Completed missions</summary><nav aria-label="Completed missions">
-          {loaded.missions.filter(item => item.account_id === accountId && item.status === "completed").map(item => <button key={item.id}
-            onClick={() => select(item.account_id, item.id)}>{item.template} · {item.id.slice(0, 8)}</button>)}
+        <details><summary>Completed and replaced missions</summary><nav aria-label="Mission history">
+          {loaded.missions.filter(item => item.account_id === accountId && ["completed", "superseded"].includes(item.status)).map(item => <button key={item.id}
+            onClick={() => select(item.account_id, item.id)}>{item.template} · {item.status} · {item.id.slice(0, 8)}</button>)}
         </nav></details>
       </aside>
       <section className="mission-main" aria-label="Mission workspace">
         {selectedId ? (!selected || selected.account_id !== accountId ? <p role="alert">Mission unavailable for this account. Select a saved mission.</p>
-          : <MissionLoader key={`${selected.id}:${generation}`} id={selected.id} refresh={refresh} />)
+          : <MissionLoader key={`${selected.id}:${generation}`} id={selected.id} configured={loaded.provider.configured} refresh={refresh} />)
           : account && <NewMission key={`${accountId}:${generation}`} account={account} configured={loaded.provider.configured}
             onCreated={mission => { select(mission.account_id, mission.id); refresh(); }} />}
       </section>
@@ -103,12 +103,14 @@ function MissionDirectory() {
   </main>;
 }
 
-function NewMission({ account, configured, onCreated }: { account: AccountView; configured: boolean; onCreated: (mission: Mission) => void }) {
+function NewMission({ account, configured, onCreated, replaces }: {
+  account: AccountView; configured: boolean; onCreated: (mission: Mission) => void; replaces?: Mission;
+}) {
   const actor = useSession()?.actor;
   const op = useOperation();
   const [intent, setIntent] = useState<PlanRequest["intent"]>("attention");
-  const [kind, setKind] = useState<Payload["kind"]>("hubspot_task_create");
-  const [followUp, setFollowUp] = useState(true);
+  const [kind, setKind] = useState<Payload["kind"]>(replaces?.allowed_kinds[0] || "hubspot_task_create");
+  const [followUp, setFollowUp] = useState(replaces ? replaces.template === "account-follow-up-1" : true);
   const [model, setModel] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [run, setRun] = useState<ModelRun | null>(null);
@@ -136,8 +138,8 @@ function NewMission({ account, configured, onCreated }: { account: AccountView; 
     <form onSubmit={createPlan} className="mission-form"><fieldset disabled={op.blocked || !!plan || !writer}>
       <label>Focus<select aria-label="Focus" value={intent} onChange={event => setIntent(event.target.value as PlanRequest["intent"])}>
         {["attention", "risk", "growth", "renewal", "manual_review", "monitor"].map(item => <option key={item}>{item}</option>)}</select></label>
-      <label><input type="checkbox" checked={followUp} onChange={event => setFollowUp(event.target.checked)} /> Two-step follow-up alternatives</label>
-      {!followUp && <label>Action<select aria-label="Action" value={kind} onChange={event => setKind(event.target.value as Payload["kind"])}>
+      <label><input type="checkbox" checked={followUp} disabled={!!replaces} onChange={event => setFollowUp(event.target.checked)} /> Two-step follow-up alternatives</label>
+      {!followUp && <label>Action<select aria-label="Action" value={kind} disabled={!!replaces} onChange={event => setKind(event.target.value as Payload["kind"])}>
         {(["hubspot_task_create", "hubspot_note_create", "outlook_draft_create"] as const).map(item => <option key={item} value={item}>{kindLabel(item)}</option>)}</select></label>}
       <label><input type="checkbox" checked={model} disabled={!configured} onChange={event => setModel(event.target.checked)} /> Use Nebius (one paid planning call)</label>
       <button type="submit">{op.busy ? "Planning..." : "Create plan"}</button>
@@ -152,14 +154,17 @@ function NewMission({ account, configured, onCreated }: { account: AccountView; 
       <button disabled={op.blocked} onClick={() => void op.run(async signal => {
         const template = followUp ? "account-follow-up-1" : kind === "hubspot_note_create" ? "account-note-1"
           : kind === "outlook_draft_create" ? "account-outlook-draft-1" : "account-action-1";
-        const mission = await postWorkflow<Mission>("missions", { plan_id: plan.id, expected_revision: plan.revision,
-          template, alternative_id: alternative }, signal);
+        const mission = replaces
+          ? await postWorkflow<Mission>(`missions/${replaces.id}/supersede`, { expected_revision: replaces.revision,
+            plan_id: plan.id, expected_plan_revision: plan.revision, alternative_id: alternative }, signal)
+          : await postWorkflow<Mission>("missions", { plan_id: plan.id, expected_revision: plan.revision,
+            template, alternative_id: alternative }, signal);
         if (!signal.aborted) onCreated(mission);
-      })}>Start selected mission</button></>}
+      })}>{replaces ? "Replace stale mission with selected plan" : "Start selected mission"}</button></>}
   </>;
 }
 
-function MissionLoader({ id, refresh }: { id: string; refresh: () => void }) {
+function MissionLoader({ id, configured, refresh }: { id: string; configured: boolean; refresh: () => void }) {
   const [data, setData] = useState<MissionData | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -170,7 +175,7 @@ function MissionLoader({ id, refresh }: { id: string; refresh: () => void }) {
   }, [id]);
   if (error) return <p role="alert" className="error-banner">{error}</p>;
   if (!data) return <p role="status">Loading mission records...</p>;
-  return <MissionPanels data={data} refresh={refresh} />;
+  return <MissionPanels data={data} configured={configured} refresh={refresh} />;
 }
 
 function ExactPreview({ action }: { action: Action }) {
@@ -186,7 +191,7 @@ function ExactPreview({ action }: { action: Action }) {
   </div>;
 }
 
-function MissionPanels({ data, refresh }: { data: MissionData; refresh: () => void }) {
+function MissionPanels({ data, configured, refresh }: { data: MissionData; configured: boolean; refresh: () => void }) {
   const { mission, plan, account, actions, decisions, executions, receipts, audit } = data;
   const params = useSearchParams();
   const router = useRouter();
@@ -198,8 +203,9 @@ function MissionPanels({ data, refresh }: { data: MissionData; refresh: () => vo
   const stale = account.account.revision !== mission.evidence.account_revision || account.assessment.snapshot_hash !== mission.evidence.snapshot_hash;
   const writer = !!actor && actor.role !== "viewer";
   const reviewer = actor?.role === "admin" || actor?.role === "reviewer";
-  const frozen = executions.length > 0 || mission.status === "completed";
-  const disabled = op.blocked || !writer || stale;
+  const superseded = mission.status === "superseded";
+  const frozen = executions.length > 0 || mission.status === "completed" || superseded;
+  const disabled = op.blocked || !writer || stale || superseded;
   async function mutate(path: string, body: object) {
     await op.run(async signal => { await postWorkflow(path, body, signal); if (!signal.aborted) refresh(); });
   }
@@ -207,7 +213,17 @@ function MissionPanels({ data, refresh }: { data: MissionData; refresh: () => vo
   return <><div className="mission-heading"><div><h2>{account.account.name}</h2><p>{mission.status.replaceAll("_", " ")} · revision {mission.revision}</p></div>
     <span className="mission-id">{mission.id}</span></div>
     <p className="muted">Server step: {mission.current_step}. Viewing a step does not advance this mission.</p>
+    {mission.supersedes_id && <p>Replaces <Link href={`/missions?account=${mission.account_id}&mission=${mission.supersedes_id}`}>the previous mission</Link>. Prepare and review new actions before execution.</p>}
+    {mission.superseded_by_id && <p>This mission is preserved as history. <Link href={`/missions?account=${mission.account_id}&mission=${mission.superseded_by_id}`}>Open its replacement</Link>.</p>}
     {stale && <p role="alert" className="error-banner">The account snapshot changed. This mission cannot use the old evidence for new actions.</p>}
+    {stale && !superseded && mission.status !== "completed" && <details><summary>Recover stale mission</summary>
+      {executions.length ? <p>Replacement is blocked because this mission has execution claims. Preserve its receipts and reconcile uncertain work; do not recreate executed steps.</p>
+        : <><p>Choose a current plan to replace this mission. Old plans, drafts and decisions remain in history. New actions need preparation and fresh review; source dates are preserved.</p>
+          <NewMission account={account} configured={configured} replaces={mission} onCreated={replacement => {
+            router.replace(`/missions?${new URLSearchParams({ account: replacement.account_id, mission: replacement.id })}`, { scroll: false });
+            refresh();
+          }} /></>}
+    </details>}
     <nav className="mission-steps" aria-label="Mission steps">{steps.map((item, index) => <button key={item} aria-current={step === item ? "step" : undefined}
       disabled={op.busy} onClick={() => { const next = new URLSearchParams(params); next.set("step", item); router.replace(`/missions?${next}`, { scroll: false }); }}>
       <span>{index + 1}</span>{item}</button>)}</nav>

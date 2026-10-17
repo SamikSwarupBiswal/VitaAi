@@ -1,7 +1,7 @@
 """Authenticated HTTP simulation journey; no paid provider or external adapter."""
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
@@ -13,7 +13,15 @@ from vita_api.config import Settings
 from vita_api.contracts import ModelRun
 from vita_api.identity import Identity
 from vita_api.sample import SAMPLE_ORG
-from vita_api.workflow_contracts import Alternative, PlanningOutput, PlanStep
+from vita_api.scoring import assess
+from vita_api.workflow import Workflow
+from vita_api.workflow_contracts import (
+    Alternative,
+    MissionRequest,
+    PlanningOutput,
+    PlanRequest,
+    PlanStep,
+)
 
 HEADERS = {"X-VitaAi-Request": "1", "Origin": "http://127.0.0.1:3000"}
 
@@ -100,6 +108,45 @@ class WorkflowApiTests(unittest.TestCase):
         self.assertEqual(execution["status"], "succeeded")
         self.assertEqual(self.client.post(path, headers=HEADERS, json={
             "expected_revision": renewed["revision"], "binding_hash": renewed["binding_hash"]}).status_code, 409)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
+
+    def test_stale_mission_replacement_enforces_session_scope_and_fresh_plan(self):
+        store = self.app.state.store
+        identity = Identity(store.engine)
+        actor = identity.create_user("old-preparer", "test-password-long", SAMPLE_ORG, "seller")
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        workflow = Workflow(store, clock=lambda: yesterday)
+        account = store.list_accounts(SAMPLE_ORG)[0]
+        snapshot = assess(account, store.account_evidence(SAMPLE_ORG, account.id), yesterday.date()).snapshot_hash
+        old_plan = workflow.create_plan(actor.id, PlanRequest(account_id=account.id, expected_revision=1,
+            expected_snapshot_hash=snapshot, intent="risk"))
+        old = workflow.create_mission(actor.id, MissionRequest(plan_id=old_plan.id, expected_revision=1))
+        self.login("seller")
+        view = self.client.get(f"/api/accounts/{account.id}").json()
+        fresh = self.post("/api/plans", {"account_id": account.id, "expected_revision": 1,
+            "expected_snapshot_hash": view["assessment"]["snapshot_hash"], "intent": "risk"})
+        path = f"/api/missions/{old.id}/supersede"
+        body = {"expected_revision": old.revision, "plan_id": fresh["id"], "expected_plan_revision": fresh["revision"]}
+        for extra in ({"actor_id": actor.id}, {"status": "approved"}, {"payload": {}}, {"template": "account-note-1"}):
+            self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, **extra}).status_code, 422)
+        identity.create_user("viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        identity.create_user("foreign", "test-password-long", "other-org", "seller")
+        self.login("viewer")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 403)
+        self.login("foreign")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 404)
+        self.login("seller")
+        self.assertEqual(self.client.get(path).status_code, 405)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, "expected_plan_revision": 99}).status_code, 409)
+        self.assertEqual(self.client.get(f"/api/missions/{old.id}").json()["status"], "draft")
+        replacement = self.post(path, body)
+        self.assertEqual((replacement["status"], replacement["supersedes_id"]), ("draft", str(old.id)))
+        source = self.client.get(f"/api/missions/{old.id}").json()
+        self.assertEqual((source["status"], source["superseded_by_id"]), ("superseded", replacement["id"]))
+        self.assertEqual(self.client.get(f'/api/missions/{replacement["id"]}/actions').json(), [])
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 409)
+        self.assertEqual(self.client.get(f"/api/plans/{old_plan.id}").json(), old_plan.model_dump(mode="json"))
         self.client.cookies.clear()
         self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
 

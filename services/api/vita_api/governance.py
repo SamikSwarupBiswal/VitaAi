@@ -125,13 +125,15 @@ def check_execution(*, actor: Actor, reviewer: Actor | None, action: ActionPrevi
 
 
 TRANSITIONS = {
-    "draft": {"prepared", "outcome_recorded"}, "prepared": {"prepared", "awaiting_review", "outcome_recorded"},
-    "awaiting_review": {"approved", "rejected", "revision_required", "prepared"},
-    "approved": {"executing", "prepared", "awaiting_review"}, "rejected": {"prepared"}, "revision_required": {"prepared"},
+    "draft": {"prepared", "outcome_recorded", "superseded"},
+    "prepared": {"prepared", "awaiting_review", "outcome_recorded", "superseded"},
+    "awaiting_review": {"approved", "rejected", "revision_required", "prepared", "superseded"},
+    "approved": {"executing", "prepared", "awaiting_review", "superseded"},
+    "rejected": {"prepared", "superseded"}, "revision_required": {"prepared", "superseded"},
     "executing": {"executed", "execution_failed", "reconciliation_required"},
     "reconciliation_required": {"executed", "execution_failed"},
     "execution_failed": {"prepared", "outcome_recorded", "executing"}, "executed": {"outcome_recorded"},
-    "outcome_recorded": {"completed"}, "completed": set(),
+    "outcome_recorded": {"completed"}, "completed": set(), "superseded": set(),
 }
 
 

@@ -340,6 +340,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/missions/{mission_id}/supersede": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Supersede Mission */
+        post: operations["supersede_mission_api_missions__mission_id__supersede_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/actions/{action_id}": {
         parameters: {
             query?: never;
@@ -1233,7 +1250,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "draft" | "prepared" | "awaiting_review" | "approved" | "rejected" | "revision_required" | "executing" | "executed" | "execution_failed" | "reconciliation_required" | "outcome_recorded" | "completed";
+            status: "draft" | "prepared" | "awaiting_review" | "approved" | "rejected" | "revision_required" | "executing" | "executed" | "execution_failed" | "reconciliation_required" | "outcome_recorded" | "completed" | "superseded";
             /**
              * Current Step
              * @enum {string}
@@ -1246,6 +1263,10 @@ export interface components {
              * @default []
              */
             transition_ids: string[];
+            /** Supersedes Id */
+            supersedes_id?: string | null;
+            /** Superseded By Id */
+            superseded_by_id?: string | null;
         };
         /** MissionRequest */
         MissionRequest: {
@@ -2030,6 +2051,26 @@ export interface components {
             /** Binding Hash */
             binding_hash: string;
         };
+        /** SupersedeRequest */
+        SupersedeRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Plan Id
+             * Format: uuid
+             */
+            plan_id: string;
+            /** Expected Plan Revision */
+            expected_plan_revision: number;
+            /** Alternative Id */
+            alternative_id?: string | null;
+        };
         /** TaskPayload */
         TaskPayload: {
             /**
@@ -2651,6 +2692,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActionPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    supersede_mission_api_missions__mission_id__supersede_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupersedeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Mission"];
                 };
             };
             /** @description Validation Error */

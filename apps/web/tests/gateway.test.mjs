@@ -66,7 +66,7 @@ test("governed workflow routes preserve method, session, body and safe denial", 
     GET: [`plans/${id}`, `plans/runs/${id}`, "missions", `missions/${id}`, `missions/${id}/audit`,
       `missions/${id}/actions`, `missions/${id}/outcomes`, `actions/${id}`, `actions/${id}/history`,
       `actions/${id}/decisions`, `actions/${id}/executions`, `executions/${id}`, `receipts/${id}`],
-    POST: ["plans", "plans/generate", "missions", `missions/${id}/prepare`, `missions/${id}/outcomes`,
+    POST: ["plans", "plans/generate", "missions", `missions/${id}/prepare`, `missions/${id}/supersede`, `missions/${id}/outcomes`,
       `actions/${id}/submit`, `actions/${id}/review`, `actions/${id}/renew-review`, `actions/${id}/execute`, `executions/${id}/reconcile`,
       `executions/${id}/retry`],
   };
@@ -113,6 +113,7 @@ test("workflow allowlist rejects wrong verbs, invalid IDs and extra paths before
   const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
   const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("Must not dispatch"); });
   for (const [method, name] of [["GET", "plans/generate"], ["GET", `actions/${id}/execute`], ["GET", `actions/${id}/renew-review`],
+    ["GET", `missions/${id}/supersede`], ["POST", `missions/${id}/supersede/extra`],
     ["POST", `receipts/${id}`], ["POST", `missions/${id}/delete`], ["GET", "missions/not-a-uuid"],
     ["GET", `missions/${id}/audit/extra`], ["POST", "plans/arbitrary"], ["GET", `plans/runs/${"-".repeat(36)}`]]) {
     const request = new NextRequest(`http://localhost:3000/api/${name}`, { method, headers: {
