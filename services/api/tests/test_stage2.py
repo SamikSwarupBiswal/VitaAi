@@ -23,9 +23,10 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from vita_api.contracts import ModelRun
 from vita_api.governance import PolicyDenied, check_plan
 from vita_api.identity import Identity, users
+from vita_api.pipeline import Pipeline, PipelineRequest
 from vita_api.sample import SAMPLE_ORG, sample_records
 from vita_api.scoring import assess
-from vita_api.storage import Store, accounts
+from vita_api.storage import Store, accounts, runs
 from vita_api.workflow import Workflow
 from vita_api.workflow_contracts import (
     ExecuteRequest,
@@ -41,7 +42,17 @@ from vita_api.workflow_contracts import (
     SupersedeRequest,
     TaskPayload,
 )
-from vita_api.workflow_storage import actions, audits, claims, decisions, resources
+from vita_api.workflow_storage import (
+    actions,
+    audits,
+    claims,
+    decisions,
+    missions,
+    outcomes,
+    plans,
+    receipts,
+    resources,
+)
 
 NOW = datetime(2026, 10, 15, 10, tzinfo=UTC)
 
@@ -129,6 +140,170 @@ class Stage2Tests(unittest.TestCase):
             requests.append((action, ExecuteRequest(expected_revision=action.revision,
                 decision_id=decision.id, idempotency_key=str(action.id))))
         return plan, mission, requests
+
+    def purpose_record(self, days, usage, cases, expansion):
+        account, facts = sample_records(self.now)[0]
+        account = account.model_copy(update={"id": str(uuid4()), "external_id": uuid4().hex,
+            "name": "Synthetic acceptance account", "renewal_date": (self.now + timedelta(days=days)).date()})
+        values = {"usage_change": usage, "support_cases": cases, "expansion": expansion, "renewal": days}
+        facts = [fact.model_copy(update={"id": str(uuid4()), "account_id": account.id,
+            "source_record": f"acceptance:{account.external_id}:{fact.metric}", "value": values[fact.metric],
+            "fact": f"Synthetic {fact.metric}: {values[fact.metric]}",
+            "polarity": "negative" if values[fact.metric] < 0 or fact.metric == "support_cases" and cases else "neutral"})
+            for fact in facts if values[fact.metric] is not None]
+        self.store.seed([(account, facts)])
+        return account, facts
+
+    def test_purpose_drafts_complete_every_registered_simulation_shape(self):
+        cases = [
+            ("support_escalation", "risk", (90, -10, 3, 10), "support-led"),
+            ("renewal_prep", "renewal", (24, 4, 0, 10), "upcoming renewal"),
+            ("optimization_review", "attention", (90, -25, 0, 85), "adoption improvements"),
+            ("reactivation", "risk", (90, -25, 0, 10), "re-engage"),
+            ("follow_up", "growth", (90, 20, 0, 80), "expansion conversation"),
+        ]
+        shapes = [("hubspot_task_create", None, "account-action-1", 0),
+                  ("hubspot_note_create", None, "account-note-1", 0),
+                  ("outlook_draft_create", None, "account-outlook-draft-1", 0),
+                  ("hubspot_task_create", "follow_up", "account-follow-up-1", 0),
+                  ("hubspot_task_create", "follow_up", "account-follow-up-1", 1)]
+        provider = Mock()
+        for purpose, intent, values, phrase in cases:
+            account, facts = self.purpose_record(*values)
+            pipeline = Pipeline(provider).run(SAMPLE_ORG, self.seller.id, [(account, facts)], self.now.date(),
+                PipelineRequest(intent=intent, communication_mode="drafts"))
+            recommendation, = pipeline.recommendations
+            self.assertEqual(recommendation.action.kind, purpose)
+            self.assertEqual(recommendation.action.approval_status, "unapproved")
+            drafts = recommendation.communication.drafts
+            self.assertEqual(drafts.action_kind, purpose)
+            for draft in (drafts.email, drafts.call_script, drafts.voice_summary):
+                self.assertIn(phrase, draft.text)
+                self.assertEqual(draft.evidence_ids, recommendation.action.evidence_ids)
+            before = self.store.account_evidence(SAMPLE_ORG, account.id)
+            for kind, strategy, template, choice_index in shapes:
+                with self.subTest(purpose=purpose, template=template, alternative=choice_index):
+                    plan = self.workflow.create_plan(self.seller.id, PlanRequest(
+                        account_id=account.id, expected_revision=account.revision,
+                        expected_snapshot_hash=recommendation.assessment.snapshot_hash, intent=intent,
+                        action_kind=kind, strategy=strategy))
+                    choice = plan.alternatives[choice_index]
+                    self.assertEqual(choice.steps[0].content, recommendation.action.rationale)
+                    self.assertEqual({str(item) for item in plan.evidence.evidence_ids},
+                                     set(recommendation.action.evidence_ids))
+                    mission = self.workflow.create_mission(self.seller.id, MissionRequest(
+                        plan_id=plan.id, expected_revision=plan.revision, template=template, alternative_id=choice.id))
+                    payloads = {}
+                    for step in choice.steps:
+                        payload = (TaskPayload(title="Review sourced evidence", body=drafts.call_script.text + "\n ")
+                            if step.kind == "hubspot_task_create" else NotePayload(body=drafts.internal_note.text + "\n ")
+                            if step.kind == "hubspot_note_create" else OutlookPayload(to=("buyer@example.com",),
+                                subject=" Review sourced evidence ", body_text=drafts.email.text + "\n "))
+                        payloads[step.id] = payload
+                        self.workflow.prepare(self.seller.id, mission.id, PrepareRequest(
+                            expected_revision=mission.revision, alternative_id=choice.id, step_id=step.id,
+                            connector_id="simulation-microsoft" if step.kind == "outlook_draft_create" else "simulation-hubspot",
+                            payload=payload))
+                        mission = self.workflow.get_mission(self.seller.id, mission.id)
+                    previews = {action.step_id or choice.steps[0].id: action
+                                for action in self.workflow.list_actions(self.seller.id, mission.id)}
+                    requests = []
+                    for step in choice.steps:
+                        action = previews[step.id]
+                        self.assertEqual(self.workflow.list_executions(self.seller.id, action.id), [])
+                        with self.assertRaises(PolicyDenied):
+                            self.workflow.execute(self.seller.id, action.id, ExecuteRequest(
+                                expected_revision=action.revision, decision_id=uuid4(), idempotency_key=str(action.id)))
+                        action = self.workflow.submit(self.seller.id, action.id, SubmitRequest(
+                            expected_revision=action.revision, binding_hash=action.binding_hash))
+                        decision = self.workflow.review(self.reviewer.id, action.id, ReviewRequest(
+                            expected_revision=action.revision, binding_hash=action.binding_hash, decision="approved"))
+                        requests.append((action, ExecuteRequest(expected_revision=action.revision,
+                            decision_id=decision.id, idempotency_key=str(action.id)), decision))
+                    if len(requests) == 2:
+                        dependent, request, _ = requests[1]
+                        with self.assertRaisesRegex(PolicyDenied, "dependency_not_satisfied"):
+                            self.workflow.execute(self.seller.id, dependent.id, request)
+                        self.assertEqual(self.workflow.list_executions(self.seller.id, dependent.id), [])
+                    restarted = Workflow(self.store, clock=lambda: self.now)
+                    for action, request, decision in requests:
+                        canonical = restarted.canonical_payload(self.seller.id, action.id)
+                        result = restarted.execute(self.reviewer.id, action.id, request)
+                        receipt = restarted.get_receipt(self.seller.id, result.receipt_id)
+                        self.assertEqual((result.status, receipt.mode, receipt.verification),
+                                         ("succeeded", "simulation", "verified"))
+                        self.assertEqual(receipt.destination, action.destination)
+                        if action.payload.kind == "outlook_draft_create":
+                            self.assertEqual(receipt.destination.mailbox_id, "simulation-mailbox:" + self.seller.id)
+                        self.assertEqual(restarted.get_action(self.seller.id, action.id).payload,
+                                         payloads[action.step_id or choice.steps[0].id])
+                        self.assertEqual(restarted.list_decisions(self.seller.id, action.id), [decision])
+                        self.assertEqual(restarted.execute(self.seller.id, action.id, request), result)
+                        with self.assertRaises(PolicyDenied):
+                            restarted.execute(self.seller.id, action.id,
+                                request.model_copy(update={"idempotency_key": str(uuid4())}))
+                        with self.store.engine.connect() as connection:
+                            saved = connection.execute(select(resources.c.canonical_payload).where(
+                                resources.c.execution_id == str(result.id))).scalar_one()
+                        self.assertEqual(saved, canonical)
+                    mission = restarted.get_mission(self.seller.id, mission.id)
+                    self.assertEqual(mission.status, "executed")
+                    self.assertEqual(restarted.list_outcomes(self.seller.id, mission.id), [])
+                    report = OutcomeRequest(expected_revision=mission.revision, receipt_id=receipt.id,
+                        kind="follow_up_required", basis="manual_report", evidence_ids=plan.evidence.evidence_ids,
+                        note="Human reports further review is needed; simulation did not contact a customer.")
+                    for changes, code in [({"basis": "provider_observation"}, "provider_business_observation_pending"),
+                                          ({"kind": "customer_contacted"}, "simulation_has_no_business_outcome")]:
+                        with self.assertRaisesRegex(PolicyDenied, code):
+                            restarted.outcome(self.seller.id, mission.id, report.model_copy(update=changes))
+                    outcome = restarted.outcome(self.seller.id, mission.id, report)
+                    self.assertEqual(outcome.report.basis, "manual_report")
+                    self.assertEqual(restarted.get_mission(self.seller.id, mission.id).status, "completed")
+                    self.assertEqual(restarted.list_outcomes(self.seller.id, mission.id), [outcome])
+                    for action, _, _ in requests:
+                        self.assertEqual(len(restarted.list_executions(self.seller.id, action.id)), 1)
+                    self.assertEqual(self.store.account_evidence(SAMPLE_ORG, account.id), before)
+                    self.assertEqual(next(item for item in self.store.list_accounts(SAMPLE_ORG) if item.id == account.id),
+                                     account)
+        provider.assert_not_called()
+        self.assertEqual(provider.method_calls, [])
+
+    def test_monitor_and_manual_review_never_plan_dispatch_or_call_provider(self):
+        provider = Mock()
+        workflow = Workflow(self.store, clock=lambda: self.now, provider=provider)
+        for intent, values, purpose in [
+            ("attention", (90, 4, 0, 10), "monitor"),
+            ("attention", (90, None, 0, 10), "manual_review"),
+            ("monitor", (90, -10, 3, 10), "monitor"),
+            ("manual_review", (90, -10, 3, 10), None),
+        ]:
+            account, facts = self.purpose_record(*values)
+            snapshot = assess(account, facts, self.now.date()).snapshot_hash
+            if purpose:
+                pipeline = Pipeline(provider).run(SAMPLE_ORG, self.seller.id, [(account, facts)], self.now.date(),
+                    PipelineRequest(intent=intent, communicate=True, limit=1, communication_mode="drafts"))
+                # Explicit monitor routing can select no account with support needs.
+                for recommendation in pipeline.recommendations:
+                    self.assertEqual(recommendation.action.kind, purpose)
+                    self.assertIsNone(recommendation.communication.model_run)
+                    if recommendation.communication.drafts:
+                        self.assertIsNone(recommendation.communication.drafts.email)
+                        self.assertIsNone(recommendation.communication.drafts.call_script)
+                        self.assertIsNone(recommendation.communication.drafts.voice_summary)
+            tables = (plans, missions, actions, decisions, claims, resources, receipts, outcomes, audits, runs)
+            with self.store.engine.connect() as connection:
+                before = [connection.execute(select(table)).all() for table in tables]
+            for kind, strategy in [("hubspot_task_create", None), ("hubspot_note_create", None),
+                                   ("outlook_draft_create", None), ("hubspot_task_create", "follow_up")]:
+                with self.subTest(intent=intent, purpose=purpose, kind=kind, strategy=strategy):
+                    request = PlanRequest(account_id=account.id, expected_revision=account.revision,
+                        expected_snapshot_hash=snapshot, intent=intent, action_kind=kind, strategy=strategy)
+                    for operation in (workflow.create_plan, workflow.generate_plan):
+                        with self.assertRaisesRegex(PolicyDenied, "no_executable_action"):
+                            operation(self.seller.id, request)
+            with self.store.engine.connect() as connection:
+                self.assertEqual([connection.execute(select(table)).all() for table in tables], before)
+        self.assertEqual(provider.method_calls, [])
 
     def test_renew_review_after_partial_success_preserves_claim_and_exact_content(self):
         plan, mission, requests = self.multi(choice_index=1)
