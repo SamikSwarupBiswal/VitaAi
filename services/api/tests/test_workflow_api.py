@@ -17,10 +17,16 @@ from vita_api.scoring import assess
 from vita_api.workflow import Workflow
 from vita_api.workflow_contracts import (
     Alternative,
+    ExecuteRequest,
     MissionRequest,
+    NotePayload,
     PlanningOutput,
     PlanRequest,
     PlanStep,
+    PrepareRequest,
+    ReviewRequest,
+    SubmitRequest,
+    TaskPayload,
 )
 
 HEADERS = {"X-VitaAi-Request": "1", "Origin": "http://127.0.0.1:3000"}
@@ -149,6 +155,60 @@ class WorkflowApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/plans/{old_plan.id}").json(), old_plan.model_dump(mode="json"))
         self.client.cookies.clear()
         self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
+
+    def test_partial_success_disposition_http_scope_history_and_replay(self):
+        store = self.app.state.store
+        identity = Identity(store.engine)
+        preparer = identity.create_user("old-preparer", "test-password-long", SAMPLE_ORG, "seller")
+        reviewer = identity.create_user("old-reviewer", "test-password-long", SAMPLE_ORG, "reviewer")
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        workflow = Workflow(store, clock=lambda: yesterday)
+        account = store.list_accounts(SAMPLE_ORG)[0]
+        snapshot = assess(account, store.account_evidence(SAMPLE_ORG, account.id), yesterday.date()).snapshot_hash
+        plan = workflow.create_plan(preparer.id, PlanRequest(account_id=account.id, expected_revision=1,
+            expected_snapshot_hash=snapshot, intent="risk", strategy="follow_up"))
+        choice = plan.alternatives[0]
+        mission = workflow.create_mission(preparer.id, MissionRequest(plan_id=plan.id, expected_revision=1,
+            template="account-follow-up-1", alternative_id=choice.id))
+        for step in choice.steps:
+            workflow.prepare(preparer.id, mission.id, PrepareRequest(expected_revision=mission.revision,
+                alternative_id=choice.id, step_id=step.id, connector_id="simulation-hubspot",
+                payload=TaskPayload(title="Review evidence", body="Exact task\n ") if step.kind == "hubspot_task_create"
+                        else NotePayload(body="Exact note\n ")))
+            mission = workflow.get_mission(preparer.id, mission.id)
+        previews = {action.step_id: action for action in workflow.list_actions(preparer.id, mission.id)}
+        for step in choice.steps:
+            action = workflow.submit(preparer.id, previews[step.id].id, SubmitRequest(
+                expected_revision=previews[step.id].revision, binding_hash=previews[step.id].binding_hash))
+            decision = workflow.review(reviewer.id, action.id, ReviewRequest(expected_revision=action.revision,
+                binding_hash=action.binding_hash, decision="approved"))
+            if step == choice.steps[0]:
+                first, request = action, ExecuteRequest(expected_revision=action.revision, decision_id=decision.id,
+                                                       idempotency_key=str(action.id))
+        successful = workflow.execute(preparer.id, first.id, request)
+        mission = workflow.get_mission(preparer.id, mission.id)
+        path = f"/api/missions/{mission.id}/outcomes"
+        body = {"expected_revision": mission.revision, "manual_action_reference": "manual:operator-follow-up",
+            "kind": "follow_up_required", "basis": "manual_report",
+            "evidence_ids": plan.model_dump(mode="json")["evidence"]["evidence_ids"], "note": "Remaining work needs review."}
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
+        for name, organization, role, status in [("viewer", SAMPLE_ORG, "viewer", 403),
+                                                ("foreign", "other-org", "seller", 404)]:
+            identity.create_user(name, "test-password-long", organization, role)
+            self.login(name)
+            self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, status)
+        self.login("seller")
+        before = self.client.get(f"/api/missions/{mission.id}/actions").json()
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, "actor_id": preparer.id}).status_code, 422)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, "kind": "customer_contacted"}).status_code, 422)
+        report = self.post(path, body)
+        self.assertIsNone(report["report"]["receipt_id"])
+        self.assertEqual(self.client.get(f"/api/missions/{mission.id}").json()["status"], "completed")
+        self.assertEqual(self.client.get(f"/api/missions/{mission.id}/actions").json(), before)
+        self.assertEqual(self.client.get(f"/api/executions/{successful.id}").json(), successful.model_dump(mode="json"))
+        second = previews[choice.steps[1].id]
+        self.assertEqual(self.client.get(f"/api/actions/{second.id}/executions").json(), [])
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 409)
 
     def test_action_recovery_reads_include_invalidated_reviews_and_enforce_scope(self):
         plan, mission, action = self.create()

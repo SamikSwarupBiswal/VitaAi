@@ -784,15 +784,22 @@ class Workflow:
                     or (not correction and body.supersedes_id is not None)):
                 raise PolicyDenied("outcome_correction_changed", 409)
             manual = body.manual_action_reference is not None
+            current = self._actions(connection, actor, mission.id)
+            executions = [self._claim_for(connection, actor, item) for item in current]
+            partial = (mission.template == "account-follow-up-1"
+                       and any(item and item.status == "succeeded" for item in executions)
+                       and any(item is None for item in executions))
             allowed = {"executed", "execution_failed", "completed"} if correction else {"executed", "execution_failed"}
             if manual and not correction:
                 allowed |= {"draft", "prepared"}
+                if partial:
+                    allowed.add("approved")
             if mission.status not in allowed:
                 raise PolicyDenied("outcome_not_available", 409)
-            current = self._actions(connection, actor, mission.id)
-            executions = [self._claim_for(connection, actor, item) for item in current]
             if any(item and item.status not in {"succeeded", "failed"} for item in executions):
                 raise PolicyDenied("outcome_not_available", 409)
+            if partial and body.kind != "follow_up_required":
+                raise PolicyDenied("partial_execution_requires_follow_up")
             if (mission.template == "account-follow-up-1" and not manual
                     and (len(current) != len(self._alternative(connection, actor, mission).steps)
                          or any(item is None for item in executions))):

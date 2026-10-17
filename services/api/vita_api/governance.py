@@ -128,7 +128,7 @@ TRANSITIONS = {
     "draft": {"prepared", "outcome_recorded", "superseded"},
     "prepared": {"prepared", "awaiting_review", "outcome_recorded", "superseded"},
     "awaiting_review": {"approved", "rejected", "revision_required", "prepared", "superseded"},
-    "approved": {"executing", "prepared", "awaiting_review", "superseded"},
+    "approved": {"executing", "prepared", "awaiting_review", "outcome_recorded", "superseded"},
     "rejected": {"prepared", "superseded"}, "revision_required": {"prepared", "superseded"},
     "executing": {"executed", "execution_failed", "reconciliation_required"},
     "reconciliation_required": {"executed", "execution_failed"},

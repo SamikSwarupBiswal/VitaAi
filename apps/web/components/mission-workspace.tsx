@@ -306,7 +306,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
                 <dt>Receipt ID</dt><dd>{record.id}</dd></dl></details>)}
           </article>;
         })}</>}
-      {step === "Outcome" && <OutcomeForm data={data} disabled={disabled} save={body => mutate(`missions/${mission.id}/outcomes`, body)} />}
+      {step === "Outcome" && <OutcomeForm data={data} disabled={op.blocked || !writer || superseded} save={body => mutate(`missions/${mission.id}/outcomes`, body)} />}
     </section>
     <details className="mission-audit"><summary>Audit trail · {audit.length} events</summary><ol>{audit.map(event => <li key={event.id}>
       {event.sequence}. {event.event_kind} · {event.previous_state || "Created"} → {event.new_state}<br /><small>{event.created_at} / actor {event.actor_id} / entity {event.entity_id}</small>
@@ -350,7 +350,7 @@ function ReviewForm({ disabled, submit }: { disabled: boolean; submit: (decision
 }
 
 function OutcomeForm({ data, disabled, save }: { data: MissionData; disabled: boolean; save: (body: OutcomeRequest) => Promise<void> }) {
-  const { mission, executions, receipts, outcomes } = data;
+  const { mission, actions, executions, receipts, outcomes } = data;
   const latest = outcomes.at(-1);
   const [manual, setManual] = useState(!receipts.length);
   const [reference, setReference] = useState("");
@@ -358,9 +358,13 @@ function OutcomeForm({ data, disabled, save }: { data: MissionData; disabled: bo
   const [kind, setKind] = useState<OutcomeRequest["kind"]>("follow_up_required");
   const [note, setNote] = useState("");
   const active = executions.some(item => !["succeeded", "failed"].includes(item.status));
-  const allowed = !active && (manual ? ["draft", "prepared", "executed", "execution_failed", "completed"] : ["executed", "execution_failed", "completed"]).includes(mission.status);
-  const onlyFollowUp = !manual || executions.some(item => item.status === "failed");
+  const partial = mission.template === "account-follow-up-1" && executions.some(item => item.status === "succeeded")
+    && actions.some(action => !executions.some(item => item.action_id === action.id));
+  const allowed = !active && ((manual && partial && mission.status === "approved")
+    || (manual ? ["draft", "prepared", "executed", "execution_failed", "completed"] : ["executed", "execution_failed", "completed"]).includes(mission.status));
+  const onlyFollowUp = !manual || partial || executions.some(item => item.status === "failed");
   return <><p>Adapter receipts do not establish a business result. Record an identified human report; corrections append to history.</p>
+    {partial && !active && <p>To close remaining preparation, identify a manual action and record follow-up. Existing execution stays in history; remaining steps stay unexecuted.</p>}
     {!allowed && <p role="status">Outcome capture is unavailable until the current review/execution blockers are resolved.</p>}
     <form className="mission-form" onSubmit={event => { event.preventDefault(); void save({ schema_version: "1", expected_revision: mission.revision,
       supersedes_id: latest?.id || null, receipt_id: manual ? null : receiptId, manual_action_reference: manual ? reference : null,

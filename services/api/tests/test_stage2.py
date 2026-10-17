@@ -305,6 +305,66 @@ class Stage2Tests(unittest.TestCase):
                 self.assertEqual([connection.execute(select(table)).all() for table in tables], before)
         self.assertEqual(provider.method_calls, [])
 
+    def test_partial_success_manual_disposition_preserves_executed_and_skipped_work(self):
+        for choice_index, overnight in ((0, False), (1, True)):
+            self.now = NOW
+            plan, mission, ((first, request), (second, dependent)) = self.multi(choice_index)
+            success = self.workflow.execute(self.seller.id, first.id, request)
+            receipt = self.workflow.get_receipt(self.seller.id, success.receipt_id)
+            previews = self.workflow.list_actions(self.seller.id, mission.id)
+            decisions_before = [self.workflow.list_decisions(self.seller.id, action.id) for action in previews]
+            canonical = [self.workflow.canonical_payload(self.seller.id, action.id) for action in previews]
+            if overnight:
+                self.now += timedelta(days=1)
+                with self.assertRaisesRegex(PolicyDenied, "plan_evidence_changed"):
+                    self.workflow.execute(self.seller.id, second.id, dependent)
+            current = self.workflow.get_mission(self.seller.id, mission.id)
+            body = OutcomeRequest(expected_revision=current.revision, manual_action_reference="manual:remaining-review",
+                kind="follow_up_required", basis="manual_report", evidence_ids=plan.evidence.evidence_ids,
+                note="Operator closes remaining preparation for separate review; prior execution is retained.")
+            for changes in ({"kind": "customer_contacted"}, {"basis": "provider_observation"},
+                            {"manual_action_reference": None, "receipt_id": receipt.id}):
+                with self.assertRaises(PolicyDenied):
+                    self.workflow.outcome(self.seller.id, mission.id, body.model_copy(update=changes))
+            report = self.workflow.outcome(self.seller.id, mission.id, body)
+            restarted = Workflow(self.store, clock=lambda: self.now)
+            self.assertEqual(restarted.get_mission(self.seller.id, mission.id).status, "completed")
+            self.assertEqual(restarted.list_outcomes(self.seller.id, mission.id), [report])
+            self.assertIsNone(report.report.receipt_id)
+            self.assertEqual(restarted.get_plan(self.seller.id, plan.id), plan)
+            self.assertEqual(restarted.list_actions(self.seller.id, mission.id), previews)
+            self.assertEqual([restarted.list_decisions(self.seller.id, action.id) for action in previews], decisions_before)
+            self.assertEqual([restarted.canonical_payload(self.seller.id, action.id) for action in previews], canonical)
+            self.assertEqual(restarted.get_execution(self.seller.id, success.id), success)
+            self.assertEqual(restarted.get_receipt(self.seller.id, receipt.id), receipt)
+            self.assertEqual(restarted.list_executions(self.seller.id, second.id), [])
+            with self.assertRaisesRegex(PolicyDenied, "plan_evidence_changed" if overnight else "mission_completed"):
+                restarted.execute(self.seller.id, second.id, dependent)
+            self.assertEqual(restarted.list_executions(self.seller.id, second.id), [])
+            with self.assertRaises(PolicyDenied):
+                restarted.outcome(self.seller.id, mission.id, body)
+            current = restarted.get_mission(self.seller.id, mission.id)
+            corrected = restarted.outcome(self.seller.id, mission.id, body.model_copy(update={
+                "expected_revision": current.revision, "supersedes_id": report.id, "note": "Corrected follow-up reference."}))
+            self.assertEqual(restarted.list_outcomes(self.seller.id, mission.id), [report, corrected])
+
+    def test_partial_disposition_denies_unstarted_active_and_unknown_work(self):
+        for profile in ("unstarted", "claimed", "timeout_before"):
+            plan, mission, ((first, request), _) = self.multi()
+            if profile == "claimed":
+                self.workflow.claim(self.seller.id, first.id, request)
+            elif profile == "timeout_before":
+                self.workflow.simulation_profile = profile
+                self.workflow.execute(self.seller.id, first.id, request)
+            current = self.workflow.get_mission(self.seller.id, mission.id)
+            with self.subTest(profile=profile), self.assertRaises(PolicyDenied):
+                self.workflow.outcome(self.seller.id, mission.id, OutcomeRequest(
+                    expected_revision=current.revision, manual_action_reference="manual:cannot-hide-pending-work",
+                    kind="follow_up_required", basis="manual_report", evidence_ids=plan.evidence.evidence_ids,
+                    note="Unstarted, active and unknown missions cannot use partial-success disposition."))
+            self.assertEqual(self.workflow.get_mission(self.seller.id, mission.id), current)
+            self.assertEqual(self.workflow.list_outcomes(self.seller.id, mission.id), [])
+
     def test_renew_review_after_partial_success_preserves_claim_and_exact_content(self):
         plan, mission, requests = self.multi(choice_index=1)
         first, first_request = requests[0]
