@@ -90,11 +90,13 @@ test("workspace discloses incomplete totals and sorts unknowns last in both dire
     let cursor = 0;
     const state = [portfolio, null, false, null, "", "all", sort, descending];
     const workspace = load("../components/workspace.tsx", {
-      react: { useEffect() {}, useMemo: fn => fn(), useState: initial => [state[cursor++] ?? initial, () => {}] },
+      react: { useEffect() {}, useCallback: fn => fn, useRef: initial => ({ current: initial }),
+        useMemo: fn => fn(), useState: initial => [state[cursor++] ?? initial, () => {}] },
       "next/navigation": { useRouter: () => ({}), useSearchParams: () => new URLSearchParams() },
       "next/link": { __esModule: true, default: ({ children }) => children }, "@/lib/api": api,
       "./account-table": table, "./account-detail": detail,
       "./pipeline-panel": { PipelinePanel: () => null }, "./session-gate": {},
+      "./hubspot-panel": { HubSpotPanel: () => null },
     }, "\nexports.contentForAcceptance = WorkspaceContent;");
     const tree = workspace.contentForAcceptance({ accountDirectory: true, persona: "executive" });
     const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"

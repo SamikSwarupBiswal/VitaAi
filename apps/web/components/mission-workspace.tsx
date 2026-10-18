@@ -51,6 +51,12 @@ function MissionDirectory() {
   const [loaded, setLoaded] = useState<Directory | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    const refresh = () => setGeneration(value => value + 1);
+    window.addEventListener("vitaai-source-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => { window.removeEventListener("vitaai-source-changed", refresh); window.removeEventListener("focus", refresh); };
+  }, []);
+  useEffect(() => {
     const controller = new AbortController();
     Promise.all([api<Portfolio>("portfolio", { signal: controller.signal }),
       api<Mission[]>("missions", { signal: controller.signal }),

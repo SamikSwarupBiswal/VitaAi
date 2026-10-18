@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Building2, Code2, Moon, PieChart, RefreshCw, Search, Settings, Sun } from "lucide-react";
 import { api, currency, type AnalyzeRequest, type ModelRun, type Portfolio, type ProviderStatus } from "@/lib/api";
 import { AccountDetail } from "./account-detail";
 import { AccountTable, type SortKey } from "./account-table";
 import { PipelinePanel } from "./pipeline-panel";
 import { SessionGate } from "./session-gate";
+import { HubSpotPanel } from "./hubspot-panel";
 
 export function Workspace({ accountDirectory = false }: { accountDirectory?: boolean }) {
   const params = useSearchParams();
@@ -65,37 +66,70 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   const [busyAccount, setBusyAccount] = useState<string | null>(null);
   const [runs, setRuns] = useState<Record<string, ModelRun>>({});
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [authorityBlocked, setAuthorityBlocked] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState<string | null>(null);
+  const [sourceGeneration, setSourceGeneration] = useState(0);
+  const [sourcePending, setSourcePending] = useState(false);
+  const readController = useRef<AbortController | null>(null);
+  const analysisController = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
   const selectedId = params.get("account");
 
   useEffect(() => {
     try { localStorage.setItem("vitaai-persona", persona); } catch { /* Preference storage is optional. */ }
   }, [persona]);
 
-  async function refresh() {
-    setLoading(true);
-    setError(null);
+  const refresh = useCallback(async () => {
+    if (!mounted.current) return;
+    readController.current?.abort();
+    const controller = new AbortController();
+    readController.current = controller;
     try {
-      const [data, status] = await Promise.all([api<Portfolio>("portfolio"), api<ProviderStatus>("providers/nebius")]);
+      const [data, status] = await Promise.all([api<Portfolio>("portfolio", { signal: controller.signal }),
+        api<ProviderStatus>("providers/nebius", { signal: controller.signal })]);
+      if (controller.signal.aborted) return;
       setPortfolio(data);
       setProvider(status);
+      setAuthorityBlocked(false);
+      setSourceGeneration(value => value + 1);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Unable to load workspace.");
-    } finally { setLoading(false); }
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Unable to load workspace.");
+    } finally { if (!controller.signal.aborted) setLoading(false); }
+  }, []);
+
+  const invalidateAuthority = useCallback(() => {
+    readController.current?.abort();
+    analysisController.current?.abort();
+    setBusyAccount(null); setRuns({}); setAnalysisError(null); setAuthorityBlocked(true);
+  }, []);
+
+  async function refreshSource(message: string) {
+    if (!mounted.current) return;
+    setSourcePending(false); setLoading(true); setError(null);
+    setSourceNotice(message);
+    await refresh();
   }
 
   useEffect(() => {
     let active = true;
-    Promise.all([api<Portfolio>("portfolio"), api<ProviderStatus>("providers/nebius")])
-      .then(([data, status]) => { if (active) { setPortfolio(data); setProvider(status); } })
-      .catch(error => { if (active) setError(error instanceof Error ? error.message : "Unable to load workspace."); })
-      .finally(() => { if (active) setLoading(false); });
+    mounted.current = true;
+    const controller = new AbortController();
+    readController.current = controller;
+    Promise.all([api<Portfolio>("portfolio", { signal: controller.signal }),
+      api<ProviderStatus>("providers/nebius", { signal: controller.signal })])
+      .then(([data, status]) => { if (!controller.signal.aborted) { setPortfolio(data); setProvider(status); } })
+      .catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Unable to load workspace."); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    const sourceChanged = () => { invalidateAuthority(); setLoading(true); setError(null); void refresh(); };
+    window.addEventListener("vitaai-source-changed", sourceChanged);
     let theme = false;
     try { theme = localStorage.getItem("vitaai-theme") === "dark"; } catch { /* Preference storage is optional. */ }
     document.documentElement.dataset.theme = theme ? "dark" : "light";
     // External theme state is applied after hydration.
     queueMicrotask(() => { if (active) setDark(theme); });
-    return () => { active = false; };
-  }, []);
+    return () => { active = false; mounted.current = false; readController.current?.abort(); analysisController.current?.abort();
+      window.removeEventListener("vitaai-source-changed", sourceChanged); };
+  }, [refresh, invalidateAuthority]);
 
   const rows = useMemo(() => {
     const items = (portfolio?.accounts || []).filter(view =>
@@ -131,8 +165,10 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   }
 
   async function analyze() {
-    if (!selected || busyAccount) return;
+    if (!selected || busyAccount || authorityBlocked) return;
     const view = selected;
+    const controller = new AbortController();
+    analysisController.current = controller;
     setBusyAccount(view.account.id);
     setAnalysisError(null);
     const body: AnalyzeRequest = {
@@ -140,11 +176,11 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
     };
     try {
       const run = await api<ModelRun>(`accounts/${view.account.id}/analyze`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal,
       });
-      setRuns(previous => ({ ...previous, [view.account.id]: run }));
-    } catch (error) { setAnalysisError(error instanceof Error ? error.message : "Analysis failed."); }
-    finally { setBusyAccount(null); }
+      if (!controller.signal.aborted) setRuns(previous => ({ ...previous, [view.account.id]: run }));
+    } catch (error) { if (!controller.signal.aborted) setAnalysisError(error instanceof Error ? error.message : "Analysis failed."); }
+    finally { if (!controller.signal.aborted) setBusyAccount(null); }
   }
 
   return <div className="workspace">
@@ -163,7 +199,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       <button className="icon-button" aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} title={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme}>{dark ? <Moon size={22} /> : <Sun size={22} />}</button></header>
       <main id="main" className="main-grid"><div className="portfolio-main">
         <div className="page-heading"><div><h1>{title}</h1><p>{accountDirectory ? "Customer accounts and source evidence." : "Customer signals, ranked by attention."}</p></div>
-          <button className="icon-button refresh" disabled={loading} aria-label="Refresh portfolio" title="Refresh portfolio" onClick={refresh}><RefreshCw size={20} className={loading ? "spinning" : ""} /></button></div>
+          <button className="icon-button refresh" disabled={loading || sourcePending} aria-label="Refresh portfolio" title="Refresh portfolio" onClick={() => { setLoading(true); setError(null); void refresh(); }}><RefreshCw size={20} className={loading ? "spinning" : ""} /></button></div>
         {portfolio && <dl className="kpi-band"><div><dt>{portfolio.annual_value_missing_count ? "Known portfolio value" : "Portfolio value"}</dt><dd>{currency(portfolio.annual_value, true)}</dd></div>
           <div><dt>Accounts</dt><dd>{portfolio.accounts.length}</dd></div>
           <div><dt>Need attention</dt><dd className="risk-text">{portfolio.attention_count}</dd></div>
@@ -174,15 +210,19 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
             onClick={() => { setFilter(key); setAnalysisError(null); }}>{label}</button>)}</div>
           <label className="search"><Search size={17} /><input aria-label="Search accounts" placeholder="Search accounts" value={query} onChange={event => { setQuery(event.target.value); setAnalysisError(null); }} /></label></div>
         {error && <p role="alert" className="error-banner">{error}</p>}
+        {sourceNotice && <p role="status" className="caveat">{sourceNotice}</p>}
+        {authorityBlocked && <p role="status">Source state is changing or needs refresh. Current account analysis and preparation are paused. Refresh portfolio if loading fails.</p>}
         {loading && !portfolio ? <p role="status" className="loading">Loading accounts...</p>
           : <AccountTable rows={rows} selectedId={selected?.account.id} onSelect={selectAccount} sort={sort} descending={descending} onSort={key => { setDescending(sort === key ? !descending : key !== "name"); setSort(key); }} />}
         {portfolio && <p className="data-stamp">{portfolio.mode === "mixed" ? "Mixed HubSpot and synthetic sources" : portfolio.mode === "hubspot" ? "HubSpot source" : "Sample CRM"} / assessment {portfolio.as_of}</p>}
         {portfolio && persona === "operations" && <p className="data-stamp">Model: {provider?.configured ? "Configured; inspect individual runs for validation." : "Unconfigured."} Evidence assessment: {portfolio.as_of}. External execution unavailable.</p>}
-        {portfolio && <PipelinePanel onSelect={selectAccount} organizationId={portfolio.organization_id}
+        {selected && <HubSpotPanel view={selected} key={`${selected.account.id}:${selected.account.revision}:${sourceGeneration}`}
+          blocked={authorityBlocked} onInvalidate={() => { setSourcePending(true); invalidateAuthority(); }} onRefresh={refreshSource} />}
+        {portfolio && !authorityBlocked && <PipelinePanel onSelect={selectAccount} organizationId={portfolio.organization_id}
           snapshots={Object.fromEntries(portfolio.accounts.map(view => [view.account.id, view.assessment.snapshot_hash]))}
           configured={provider?.configured || false} key={persona} expanded={persona === "seller"} />}
       </div>
-      {selected && <AccountDetail view={selected} provider={provider} busy={busyAccount !== null} onAnalyze={analyze}
+      {selected && !authorityBlocked && <AccountDetail view={selected} provider={provider} busy={busyAccount !== null} onAnalyze={analyze}
         run={runs[selected.account.id] || null} error={analysisError} />}
       </main>
     </div>
