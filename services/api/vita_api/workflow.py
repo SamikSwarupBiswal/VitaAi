@@ -23,6 +23,7 @@ from .governance import (
 from .hubspot import HubSpotFailure
 from .hubspot_execution import HubSpotExecutionReadiness, provider_request
 from .identity import Actor, sessions, token_digest, users
+from .microsoft import draft_request
 from .pipeline import action_role, governance_role
 from .scoring import assess
 from .storage import accounts, runs, selected_evidence
@@ -71,7 +72,7 @@ class Workflow:
     policy_version = "governance-1"
 
     def __init__(self, store, *, clock=None, simulation_profile="success", separation_of_duties=False,
-                 session_token=None, session_required=False, provider=None, hubspot=None):
+                 session_token=None, session_required=False, provider=None, hubspot=None, microsoft=None):
         self.engine = store.engine
         self.clock = clock or (lambda: datetime.now(UTC))
         if simulation_profile not in {"success", "reject", "timeout_after", "timeout_before", "mismatch"}:
@@ -82,6 +83,7 @@ class Workflow:
         self.session_required = session_required
         self.provider = provider
         self.hubspot = hubspot
+        self.microsoft = microsoft
 
     def _actor(self, connection, actor_id):
         row = connection.execute(select(users).where(users.c.id == actor_id, users.c.enabled.is_(True))
@@ -461,8 +463,10 @@ class Workflow:
             self._audit(connection, actor, replacement, "mission_replacement_created", mission_id=replacement.id)
             return replacement
 
-    def _destination(self, actor, account_id, connector_id, kind, mode="simulation"):
+    def _destination(self, actor, account_id, connector_id, kind, mode="simulation", connection=None):
         if mode == "live":
+            if connector_id == "microsoft-live" and kind == "outlook_draft_create" and self.microsoft is not None:
+                return self.microsoft.destination(connection, actor, account_id)
             if connector_id != "hubspot-live" or kind == "outlook_draft_create" or self.hubspot is None:
                 raise PolicyDenied("connector_unavailable", 503)
             return self.hubspot.destination(actor.organization_id, account_id)
@@ -504,7 +508,7 @@ class Workflow:
                 raise PolicyDenied("action_already_claimed", 409)
             content_revision = mission.content_revision + 1
             # State-only transitions do not change the approved mission content revision.
-            destination = self._destination(actor, mission.account_id, body.connector_id, body.payload.kind, body.mode)
+            destination = self._destination(actor, mission.account_id, body.connector_id, body.payload.kind, body.mode, connection)
             action = ActionPreview(**self._base(actor, id=previous.id if previous else uuid4(),
                 created_at=previous.created_at if previous else self.clock(),
                 revision=previous.revision + 1 if previous else 1), mission_id=mission.id,
@@ -514,7 +518,7 @@ class Workflow:
                 payload_hash=payload_hash(body.payload), binding_hash="0" * 64, policy_version=self.policy_version,
                 mode=body.mode, preparer_id=actor.id, status="draft")
             if action.mode == "live":
-                action = action.model_copy(update={"provider_request": provider_request(action.payload, destination, action.created_at)})
+                action = action.model_copy(update={"provider_request": self._provider_request(action, destination)})
             action = action.model_copy(update={"binding_hash": binding_hash(action)})
             if previous:
                 self._audit(connection, actor, previous, "approval_invalidated", mission_id=mission.id, after="superseded")
@@ -553,8 +557,8 @@ class Workflow:
         preparer = self._actor(connection, action.preparer_id) if action.payload.kind == "outlook_draft_create" else actor
         if preparer.organization_id != actor.organization_id:
             raise PolicyDenied("mailbox_membership_changed", 409)
-        destination = self._destination(preparer, mission.account_id, action.destination.connector_id, action.payload.kind, action.mode)
-        expected_request = provider_request(action.payload, destination, action.created_at) if action.mode == "live" else None
+        destination = self._destination(preparer, mission.account_id, action.destination.connector_id, action.payload.kind, action.mode, connection)
+        expected_request = self._provider_request(action, destination) if action.mode == "live" else None
         if (action.provider_request != expected_request or action.policy_version != self.policy_version
                 or action.destination != destination or action.evidence != evidence_binding(view)
                 or action.payload_hash != payload_hash(action.payload) or action.binding_hash != binding_hash(action)):
@@ -564,6 +568,14 @@ class Workflow:
         if persisted.encode("utf-8") != canonical_json(action.payload):
             raise PolicyDenied("canonical_payload_changed", 409)
         return mission, view, destination
+
+    @staticmethod
+    def _provider_request(action, destination):
+        return (draft_request(action.payload) if destination.provider == "microsoft" else
+                provider_request(action.payload, destination, action.created_at))
+
+    def _adapter(self, action):
+        return self.microsoft if action.destination.provider == "microsoft" else self.hubspot
 
     def submit(self, actor_id: str, action_id, body: SubmitRequest) -> ActionPreview:
         with self._transaction(actor_id) as (connection, actor):
@@ -818,24 +830,26 @@ class Workflow:
         # Preflight GETs hold no database transaction. Recheck current authority after them.
         with self._transaction(actor_id) as (connection, actor):
             current = self._get(connection, actor, claims, execution.id, Execution)
-            if current.status != "dispatching":
+            if current.status != "dispatching" or current.attempt != execution.attempt:
                 return current
+        adapter = self._adapter(action)
         try:
-            self.hubspot.preflight(action)
+            adapter.preflight(action)
         except (HubSpotFailure, PolicyDenied):
-            return self._record_live(actor, execution, action, "failed", None, "not_run", None, "hubspot_preflight_failed")
+            return self._record_live(actor, execution, action, "failed", None, "not_run", None,
+                                     action.destination.provider + "_preflight_failed")
         with self._transaction(actor_id) as (connection, actor):
             current = self._get(connection, actor, claims, execution.id, Execution)
-            if current.status != "dispatching":
+            if current.status != "dispatching" or current.attempt != execution.attempt:
                 return current
             decision = self._get(connection, actor, decisions, current.decision_id, ReviewDecision)
             self._dispatch_check(connection, actor, action, decision)
-        result, resource_id, error = self.hubspot.create(action)
+        result, resource_id, error = adapter.create(action)
         # Persist a returned ID before a separate GET; failure here leaves dispatching, never retryable.
         current = self._record_live(actor, execution, action, result, resource_id, "unavailable", None, error)
         if resource_id is None or current.status != "result_unknown":
             return current
-        verification, readback_hash, error = self.hubspot.readback(action, resource_id)
+        verification, readback_hash, error = adapter.readback(action, resource_id)
         return self._record_live(actor, execution, action, "succeeded" if verification == "verified" else "result_unknown",
                                  resource_id, verification, readback_hash, error)
 
@@ -850,8 +864,9 @@ class Workflow:
                 return self._finish(connection, actor, execution, action, "failed", error="pre_dispatch_cancelled")
             prior = self._get(connection, actor, receipts, execution.receipt_id, Receipt) if execution.receipt_id else None
             resource_id = prior.provider_resource_id if prior else None
-        verification, readback_hash, error = (self.hubspot.readback(action, resource_id)
-            if self.hubspot is not None and resource_id else ("unavailable", None, "reconciliation_unavailable"))
+        adapter = self._adapter(action)
+        verification, readback_hash, error = (adapter.readback(action, resource_id)
+            if adapter is not None and resource_id else ("unavailable", None, "reconciliation_unavailable"))
         with self._transaction(actor_id, review=True) as (connection, actor):
             current = self._get(connection, actor, claims, execution.id, Execution)
             self._version(current, expected_revision)

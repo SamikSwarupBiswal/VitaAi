@@ -15,6 +15,8 @@ from .contracts import AccountView, AnalyzeRequest, ModelRun, Portfolio, Provide
 from .hubspot import PREFIX as HUBSPOT_PREFIX
 from .hubspot_sync import install_hubspot_routes
 from .identity import Actor, Identity, LoginFailure, LoginRequest, SessionView
+from .microsoft import PREFIX as MICROSOFT_PREFIX
+from .microsoft import Microsoft
 from .models import AdvisoryProvider
 from .nebius import Nebius
 from .pipeline import Pipeline, PipelineRequest, PipelineRun
@@ -25,11 +27,13 @@ from .workflow_api import WORKFLOW_PREFIXES, install_workflow_routes, safe_error
 
 
 def create_app(settings: Settings | None = None, provider: AdvisoryProvider | None = None,
-               *, hubspot_transport: httpx.BaseTransport | None = None) -> FastAPI:
+               *, hubspot_transport: httpx.BaseTransport | None = None,
+               microsoft_transport: httpx.BaseTransport | None = None, microsoft_client_factory=None) -> FastAPI:
     settings = settings or Settings()
     store = Store(settings.database_url)
     provider = provider or Nebius(settings)
     identity = Identity(store.engine)
+    microsoft = Microsoft(store, settings, microsoft_transport, client_factory=microsoft_client_factory)
     login_lock = Lock()
     login_attempts: list[float] = []
 
@@ -48,13 +52,18 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     async def validation_error(request: Request, error: RequestValidationError):
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
-        if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX)):
+        if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX)):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
 
     @app.middleware("http")
     async def local_origin(request: Request, call_next):
+        if request.url.path == MICROSOFT_PREFIX + "/callback":
+            # Remove OAuth codes/state from the ASGI scope before access logging and errors.
+            query = request.scope.get("query_string", b"")
+            request.state.microsoft_response = dict(request.query_params) if len(query) <= 16384 else {}
+            request.scope["query_string"] = b""
         origin = request.headers.get("origin")
         if request.method == "POST" and origin and origin not in {
             "http://127.0.0.1:3000", "http://localhost:3000",
@@ -65,6 +74,8 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             return JSONResponse({"detail": "Expected same-origin application request"}, status_code=403)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
+        if request.url.path == MICROSOFT_PREFIX + "/callback":
+            response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
     def actor(request: Request) -> Actor:
@@ -188,7 +199,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             raise HTTPException(404, "Pipeline run not found")
         return run
 
-    install_workflow_routes(app, store, identity, settings, provider, hubspot_transport)
+    install_workflow_routes(app, store, identity, settings, provider, hubspot_transport, microsoft)
     install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     return app
 

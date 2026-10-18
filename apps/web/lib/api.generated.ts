@@ -186,6 +186,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/microsoft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Microsoft Status */
+        get: operations["microsoft_status_api_integrations_microsoft_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/microsoft/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Microsoft Connect */
+        post: operations["microsoft_connect_api_integrations_microsoft_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/microsoft/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Microsoft Callback */
+        get: operations["microsoft_callback_api_integrations_microsoft_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/microsoft/signout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Microsoft Signout */
+        post: operations["microsoft_signout_api_integrations_microsoft_signout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/accounts/{account_id}/execution-readiness": {
         parameters: {
             query?: never;
@@ -1636,6 +1704,38 @@ export interface components {
              */
             password: string;
         };
+        /** MicrosoftStart */
+        MicrosoftStart: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Authorization Url */
+            authorization_url: string;
+        };
+        /** MicrosoftStatus */
+        MicrosoftStatus: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Write Configured */
+            write_configured: boolean;
+            /** Binding Id */
+            binding_id?: string | null;
+            /** Mailbox Id */
+            mailbox_id?: string | null;
+            /** Expires At */
+            expires_at?: number | null;
+        };
         /** Mission */
         Mission: {
             /**
@@ -2847,6 +2947,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    microsoft_status_api_integrations_microsoft_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MicrosoftStatus"];
+                };
+            };
+        };
+    };
+    microsoft_connect_api_integrations_microsoft_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MicrosoftStart"];
+                };
+            };
+        };
+    };
+    microsoft_callback_api_integrations_microsoft_callback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    microsoft_signout_api_integrations_microsoft_signout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MicrosoftStatus"];
                 };
             };
         };

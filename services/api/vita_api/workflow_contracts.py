@@ -337,7 +337,8 @@ class Receipt(Record):
     result: Literal["succeeded", "failed", "result_unknown"]
     mode: Mode
     provider_request_id: Reference | None = None
-    provider_resource_id: Reference | None = None
+    provider_resource_id: Annotated[str, Field(strict=True, min_length=1, max_length=2048),
+                                    AfterValidator(nonblank), AfterValidator(single_line)] | None = None
     recorded_at: UTCTime
     verification: Literal["not_run", "verified", "mismatch", "unavailable"]
     readback_hash: Hash | None = None

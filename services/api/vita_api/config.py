@@ -52,6 +52,23 @@ class Settings(BaseSettings):
     hubspot_portal_id: str = Field(default="", pattern=r"^(?:[1-9][0-9]{0,19})?$")
     hubspot_company_map: dict[str, str] = Field(default_factory=dict, max_length=50)
     hubspot_property_map: dict[str, HubSpotProperty] = Field(default_factory=dict, max_length=5)
+    microsoft_enabled: bool = False
+    microsoft_write_enabled: bool = False
+    microsoft_configuration_revision: int = Field(default=1, ge=1)
+    microsoft_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
+    microsoft_tenant_id: UUID | None = None
+    microsoft_client_id: UUID | None = None
+    microsoft_client_secret: SecretStr = SecretStr("")
+    microsoft_token_key: SecretStr = SecretStr("")
+    microsoft_redirect_uri: Literal[
+        "http://127.0.0.1:8000/api/integrations/microsoft/callback",
+        "http://localhost:8000/api/integrations/microsoft/callback",
+    ] = "http://127.0.0.1:8000/api/integrations/microsoft/callback"
+
+    @field_validator("microsoft_tenant_id", "microsoft_client_id", mode="before")
+    @classmethod
+    def empty_microsoft_id(cls, value):
+        return None if value == "" else value
 
     @model_validator(mode="after")
     def property_mapping(self):
