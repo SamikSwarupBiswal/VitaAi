@@ -25,7 +25,7 @@ export function AccountTable({ rows, selectedId, onSelect, sort, descending, onS
       <td>{view.assessment.health}</td>
       <td className={view.assessment.risk >= 45 ? "risk-text" : ""}>{view.assessment.risk}</td>
       <td className="growth-text">{view.assessment.opportunity}</td>
-      <td className={view.renewal_days <= 30 ? "risk-text" : ""}>{view.renewal_days} days</td>
+      <td className={view.renewal_days !== null && view.renewal_days <= 30 ? "risk-text" : ""}>{view.renewal_days === null ? "Unknown" : `${view.renewal_days} days`}</td>
       <td>{currency(view.account.annual_value)}</td>
     </tr>)}</tbody>
   </table>{rows.length === 0 && <p className="empty">No accounts match these filters.</p>}</div>;

@@ -118,7 +118,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             facts = store.account_evidence(organization_id, account.id)
             result.append(AccountView(
                 account=account, evidence=facts, assessment=assess(account, facts, as_of),
-                renewal_days=(account.renewal_date - as_of).days,
+                renewal_days=(account.renewal_date - as_of).days if account.renewal_date is not None else None,
                 latest_run=store.latest_run(organization_id, account.id),
             ))
         return sorted(result, key=lambda item: (-item.assessment.risk, item.account.id))
@@ -137,9 +137,11 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     @app.get("/api/portfolio", response_model=Portfolio)
     def portfolio(current: Annotated[Actor, Depends(actor)]):
         items = views(current.organization_id)
+        values = [item.account.annual_value for item in items if item.account.annual_value is not None]
         return Portfolio(
             organization_id=current.organization_id, as_of=datetime.now(UTC).date(), accounts=items,
-            annual_value=sum(item.account.annual_value for item in items),
+            annual_value=sum(values) if values or not items else None,
+            annual_value_missing_count=len(items) - len(values),
             attention_count=sum(item.assessment.needs_attention for item in items),
             growth_count=sum(item.assessment.growth_signal for item in items),
         )

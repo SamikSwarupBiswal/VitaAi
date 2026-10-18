@@ -107,6 +107,8 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         : sort === "value" ? view.account.annual_value
           : sort === "renewal" ? view.renewal_days : view.assessment[sort];
       const left = value(a), right = value(b);
+      if (left === null) return right === null ? a.account.id.localeCompare(b.account.id) : 1;
+      if (right === null) return -1;
       const comparison = typeof left === "string" && typeof right === "string"
         ? left.localeCompare(right) : Number(left) - Number(right);
       return (descending ? -comparison : comparison) || a.account.id.localeCompare(b.account.id);
@@ -162,10 +164,11 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       <main id="main" className="main-grid"><div className="portfolio-main">
         <div className="page-heading"><div><h1>{title}</h1><p>{accountDirectory ? "Customer accounts and source evidence." : "Customer signals, ranked by attention."}</p></div>
           <button className="icon-button refresh" disabled={loading} aria-label="Refresh portfolio" title="Refresh portfolio" onClick={refresh}><RefreshCw size={20} className={loading ? "spinning" : ""} /></button></div>
-        {portfolio && <dl className="kpi-band"><div><dt>Portfolio value</dt><dd>{currency(portfolio.annual_value, true)}</dd></div>
+        {portfolio && <dl className="kpi-band"><div><dt>{portfolio.annual_value_missing_count ? "Known portfolio value" : "Portfolio value"}</dt><dd>{currency(portfolio.annual_value, true)}</dd></div>
           <div><dt>Accounts</dt><dd>{portfolio.accounts.length}</dd></div>
           <div><dt>Need attention</dt><dd className="risk-text">{portfolio.attention_count}</dd></div>
           <div><dt>Growth signals</dt><dd className="growth-text">{portfolio.growth_count}</dd></div></dl>}
+        {!!portfolio?.annual_value_missing_count && <p className="caveat">{portfolio.annual_value_missing_count} account{portfolio.annual_value_missing_count === 1 ? " is" : "s are"} missing annual value. The total includes known values only.</p>}
         <div className="table-toolbar"><div className="filters" role="group" aria-label="Account filters">
           {[["all", "All accounts"], ["attention", "Needs attention"], ["growth", "Growth"]].map(([key, label]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""}
             onClick={() => { setFilter(key); setAnalysisError(null); }}>{label}</button>)}</div>

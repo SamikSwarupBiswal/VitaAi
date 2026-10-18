@@ -132,7 +132,8 @@ def opportunity_role(assessment: Assessment) -> OpportunityResult:
 
 
 def governance_role(assessment: Assessment) -> GovernanceResult:
-    return GovernanceResult(status="ready_for_preparation" if assessment.confidence == 100 else "review_required",
+    return GovernanceResult(status="ready_for_preparation" if assessment.confidence == 100
+                            and not assessment.requires_review else "review_required",
                             confidence=assessment.confidence, caveats=assessment.caveats + [
                                 "Human approval is required for every external action.",
                             ])
@@ -146,7 +147,7 @@ def action_role(view: AccountView, governance: GovernanceResult, intent: Intent 
         kind = "monitor"
     elif factors["support_cases"].risk_contribution >= 16:
         kind = "support_escalation"
-    elif 0 <= view.renewal_days <= 30:
+    elif view.renewal_days is not None and 0 <= view.renewal_days <= 30:
         kind = "renewal_prep"
     elif (factors["usage_change"].value or 0) <= -15:
         kind = "optimization_review" if view.assessment.opportunity >= 50 else "reactivation"
@@ -249,7 +250,8 @@ class Pipeline:
             raise ValueError("Duplicate account identities")
         views = [AccountView(account=c.account, evidence=c.evidence,
                              assessment=assess(c.account, c.evidence, as_of),
-                             renewal_days=(c.account.renewal_date - as_of).days) for c in contexts]
+                             renewal_days=(c.account.renewal_date - as_of).days
+                             if c.account.renewal_date is not None else None) for c in contexts]
         health = {v.account.id: health_role(v.assessment) for v in views}
         opportunity = {v.account.id: opportunity_role(v.assessment) for v in views}
         governance = {v.account.id: governance_role(v.assessment) for v in views}
@@ -258,8 +260,8 @@ class Pipeline:
         selected = [v for v in views if (
             intent in {"attention", "risk"}
             or intent == "growth" and v.assessment.growth_signal
-            or intent == "renewal" and 0 <= v.renewal_days <= 45
-            or intent == "manual_review" and v.assessment.confidence < 100
+            or intent == "renewal" and v.renewal_days is not None and 0 <= v.renewal_days <= 45
+            or intent == "manual_review" and governance[v.account.id].status == "review_required"
             or intent == "monitor" and not v.assessment.needs_attention and not v.assessment.growth_signal
         )]
         selected.sort(key=lambda v: (

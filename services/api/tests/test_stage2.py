@@ -141,6 +141,39 @@ class Stage2Tests(unittest.TestCase):
                 decision_id=decision.id, idempotency_key=str(action.id))))
         return plan, mission, requests
 
+    def test_missing_account_values_deny_new_plans_and_preserve_old_approval_history(self):
+        request = self.approve()
+        before = self.workflow.get_action(self.seller.id, self.action.id)
+        original = self.account.model_dump(mode="json")
+        provider = Mock()
+        workflow = Workflow(self.store, clock=lambda: self.now, provider=provider)
+        for fields in ({"annual_value": None}, {"renewal_date": None},
+                       {"annual_value": None, "renewal_date": None}):
+            with self.subTest(fields=fields):
+                payload = {**original, **fields, "revision": 2}
+                with self.store.engine.begin() as connection:
+                    connection.execute(accounts.update().where(accounts.c.id == self.account.id).values(
+                        revision=2, payload=payload))
+                changed = next(a for a in self.store.list_accounts(SAMPLE_ORG) if a.id == self.account.id)
+                facts = self.store.account_evidence(SAMPLE_ORG, self.account.id)
+                body = PlanRequest(account_id=self.account.id, expected_revision=2,
+                    expected_snapshot_hash=assess(changed, facts, NOW.date()).snapshot_hash, intent="risk")
+                with self.assertRaises(PolicyDenied) as denied:
+                    workflow.create_plan(self.seller.id, body)
+                self.assertEqual(denied.exception.code, "no_executable_action")
+                with self.assertRaises(PolicyDenied) as denied:
+                    workflow.generate_plan(self.seller.id, body)
+                self.assertEqual(denied.exception.code, "no_executable_action")
+                with self.assertRaises(PolicyDenied) as denied:
+                    workflow.execute(self.seller.id, self.action.id, request)
+                self.assertEqual(denied.exception.code, "plan_evidence_changed")
+                self.assertEqual(workflow.get_action(self.seller.id, self.action.id), before)
+        provider.plan.assert_not_called()
+        with self.store.engine.connect() as connection:
+            self.assertEqual(len(connection.execute(select(plans)).all()), 1)
+            self.assertEqual(connection.execute(select(claims)).all(), [])
+            self.assertEqual(connection.execute(select(runs)).all(), [])
+
     def purpose_record(self, days, usage, cases, expansion):
         account, facts = sample_records(self.now)[0]
         account = account.model_copy(update={"id": str(uuid4()), "external_id": uuid4().hex,

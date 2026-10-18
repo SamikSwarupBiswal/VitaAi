@@ -20,6 +20,12 @@ def assess(account: Account, evidence: list[Evidence], as_of: date) -> Assessmen
             caveats.append(f"Conflicting {item.metric} observations; manual review required.")
         current[item.metric] = item
 
+    if account.annual_value is None:
+        caveats.append("Missing annual value; manual review required.")
+    if account.renewal_date is None:
+        caveats.append("Missing renewal date; manual review required.")
+        current.pop("renewal", None)
+
     factors = []
     risk = opportunity = 0.0
     for metric in ("usage_change", "support_cases", "expansion", "renewal"):
@@ -51,7 +57,7 @@ def assess(account: Account, evidence: list[Evidence], as_of: date) -> Assessmen
     conflict = any("Conflicting" in caveat for caveat in caveats)
     if conflict:
         confidence = min(confidence, 50)
-    needs_review = confidence < 100
+    needs_review = confidence < 100 or account.annual_value is None or account.renewal_date is None
     if needs_review:
         recommendation = "Review missing or conflicting evidence before planning outreach."
     elif risk_score >= 45:
@@ -70,7 +76,7 @@ def assess(account: Account, evidence: list[Evidence], as_of: date) -> Assessmen
     return Assessment(
         snapshot_hash=snapshot_hash, as_of=as_of, health=100 - risk_score,
         risk=risk_score, opportunity=opportunity_score, confidence=confidence,
-        needs_attention=risk_score >= 45 or needs_review,
+        requires_review=needs_review, needs_attention=risk_score >= 45 or needs_review,
         growth_signal=opportunity_score >= 65 and not needs_review,
         recommendation=recommendation, factors=factors, caveats=list(dict.fromkeys(caveats)),
     )

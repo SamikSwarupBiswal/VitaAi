@@ -49,7 +49,7 @@ def check_plan(plan: Plan, view: AccountView, model_run: ModelRun | None = None)
     if (plan.organization_id != view.account.organization_id or plan.evidence != evidence_binding(view)
             or plan.account_id != UUID(view.account.id)):
         raise PolicyDenied("plan_evidence_changed", 409)
-    if view.assessment.confidence < 100:
+    if view.assessment.confidence < 100 or view.assessment.requires_review:
         raise PolicyDenied("evidence_requires_review")
     if plan.status != "valid" or plan.validation != "valid":
         raise PolicyDenied("plan_not_valid")

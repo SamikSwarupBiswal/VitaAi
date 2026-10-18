@@ -670,12 +670,9 @@ export interface components {
             /** Industry */
             industry: string;
             /** Annual Value */
-            annual_value: number;
-            /**
-             * Renewal Date
-             * Format: date
-             */
-            renewal_date: string;
+            annual_value: number | null;
+            /** Renewal Date */
+            renewal_date: string | null;
             /** Revision */
             revision: number;
             /**
@@ -699,7 +696,7 @@ export interface components {
             /** Evidence */
             evidence: components["schemas"]["Evidence"][];
             /** Renewal Days */
-            renewal_days: number;
+            renewal_days: number | null;
             latest_run?: components["schemas"]["ModelRun"] | null;
         };
         /** ActionPreview */
@@ -902,6 +899,11 @@ export interface components {
             opportunity: number;
             /** Confidence */
             confidence: number;
+            /**
+             * Requires Review
+             * @default false
+             */
+            requires_review: boolean;
             /** Needs Attention */
             needs_attention: boolean;
             /** Growth Signal */
@@ -1948,7 +1950,12 @@ export interface components {
              */
             as_of: string;
             /** Annual Value */
-            annual_value: number;
+            annual_value: number | null;
+            /**
+             * Annual Value Missing Count
+             * @default 0
+             */
+            annual_value_missing_count: number;
             /** Attention Count */
             attention_count: number;
             /** Growth Count */

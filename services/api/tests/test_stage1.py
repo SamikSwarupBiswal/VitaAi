@@ -55,6 +55,47 @@ class Stage1Tests(unittest.TestCase):
         return client.post("/api/auth/login", headers=HEADERS,
                            json={"username": username, "password": password})
 
+    def test_missing_account_values_survive_api_restart_and_route_to_review(self):
+        with TestClient(create_app(self.settings)) as client:
+            self.login(client)
+            before = client.get("/api/portfolio").json()
+            target = before["accounts"][0]["account"]
+            with self.store.engine.begin() as connection:
+                connection.execute(accounts.update().where(accounts.c.id == target["id"]).values(
+                    revision=2, payload={**target, "annual_value": None, "renewal_date": None, "revision": 2}))
+            response = client.get("/api/portfolio")
+            self.assertEqual(response.status_code, 200)
+            partial = response.json()
+            self.assertEqual(partial["annual_value"], before["annual_value"] - target["annual_value"])
+            self.assertEqual(partial["annual_value_missing_count"], 1)
+            view = client.get(f'/api/accounts/{target["id"]}').json()
+            self.assertIsNone(view["account"]["annual_value"])
+            self.assertIsNone(view["account"]["renewal_date"])
+            self.assertIsNone(view["renewal_days"])
+            self.assertTrue(view["assessment"]["requires_review"])
+            for intent in ("attention", "risk", "growth", "renewal", "manual_review", "monitor"):
+                run = client.post("/api/pipeline", headers=HEADERS, json={
+                    "intent": intent, "limit": 6, "communication_mode": "drafts"})
+                self.assertEqual(run.status_code, 200)
+                matches = [r for r in run.json()["recommendations"] if r["account_id"] == target["id"]]
+                if intent in {"growth", "renewal", "monitor"}:
+                    self.assertEqual(matches, [])
+                else:
+                    self.assertEqual(len(matches), 1)
+                    self.assertEqual(matches[0]["action"]["kind"], "manual_review")
+                    self.assertEqual(matches[0]["communication"]["status"], "blocked")
+            for account in self.store.list_accounts(SAMPLE_ORG):
+                with self.store.engine.begin() as connection:
+                    connection.execute(accounts.update().where(accounts.c.id == account.id).values(
+                        payload={**account.model_dump(mode="json"), "annual_value": None}))
+            unknown = client.get("/api/portfolio").json()
+            self.assertIsNone(unknown["annual_value"])
+            self.assertEqual(unknown["annual_value_missing_count"], len(before["accounts"]))
+        with TestClient(create_app(self.settings)) as restarted:
+            self.login(restarted)
+            self.assertIsNone(restarted.get("/api/portfolio").json()["annual_value"])
+            self.assertIsNone(restarted.get(f'/api/accounts/{target["id"]}').json()["renewal_days"])
+
     def test_identity_cookie_restart_logout_and_no_secret_storage(self):
         with TestClient(create_app(self.settings)) as client:
             self.assertEqual(client.get("/api/portfolio").status_code, 401)

@@ -16,7 +16,7 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
           aria-label={`${account.name} health`} /></div>
       <dl className="signal-stats"><div><dt>Risk</dt><dd className="risk-text">{assessment.risk}</dd></div>
         <div><dt>Opportunity</dt><dd className="growth-text">{assessment.opportunity}</dd></div>
-        <div><dt>Renewal</dt><dd>{view.renewal_days} days</dd></div></dl>
+        <div><dt>Renewal</dt><dd>{view.renewal_days === null ? "Unknown" : `${view.renewal_days} days`}</dd></div></dl>
     </section>
     <section><h3>Evidence</h3><div className="evidence-list">
       {view.evidence.map(item => <details key={item.id} id={`evidence-${item.id}`}>

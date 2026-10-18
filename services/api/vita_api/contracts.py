@@ -33,8 +33,8 @@ class Account(Contract):
     external_id: str
     name: str
     industry: str
-    annual_value: int = Field(ge=0)
-    renewal_date: date
+    annual_value: int | None = Field(ge=0)
+    renewal_date: date | None
     revision: int = Field(ge=1)
     created_at: datetime
     synthetic: bool
@@ -56,6 +56,7 @@ class Assessment(Contract):
     risk: int = Field(ge=0, le=100)
     opportunity: int = Field(ge=0, le=100)
     confidence: int = Field(ge=0, le=100)
+    requires_review: bool = False
     needs_attention: bool
     growth_signal: bool
     recommendation: str
@@ -127,7 +128,7 @@ class AccountView(Contract):
     account: Account
     assessment: Assessment
     evidence: list[Evidence]
-    renewal_days: int
+    renewal_days: int | None
     latest_run: ModelRun | None = None
 
 
@@ -135,7 +136,8 @@ class Portfolio(Contract):
     organization_id: str
     mode: Literal["local_sample"] = "local_sample"
     as_of: date
-    annual_value: int
+    annual_value: int | None
+    annual_value_missing_count: int = Field(default=0, ge=0)
     attention_count: int
     growth_count: int
     accounts: list[AccountView]

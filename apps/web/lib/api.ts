@@ -28,7 +28,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function currency(value: number, compact = false): string {
+export function currency(value: number | null, compact = false): string {
+  if (value === null) return "Unknown";
   return new Intl.NumberFormat("en-US", {
     style: "currency", currency: "USD", maximumFractionDigits: compact ? 2 : 0,
     notation: compact ? "compact" : "standard",

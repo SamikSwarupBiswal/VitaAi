@@ -257,7 +257,8 @@ class Workflow:
             evidence.c.organization_id == actor.organization_id, evidence.c.account_id == str(account_id))
             .with_for_update()).scalars()]
         return AccountView(account=account, evidence=facts, assessment=assess(account, facts, self.clock().date()),
-                           renewal_days=(account.renewal_date - self.clock().date()).days)
+                           renewal_days=(account.renewal_date - self.clock().date()).days
+                           if account.renewal_date is not None else None)
 
     def _plan_check(self, connection, actor, plan):
         run = None
@@ -277,7 +278,7 @@ class Workflow:
         proposal = action_role(view, governance_role(view.assessment), body.intent)
         if proposal.kind in {"monitor", "manual_review"} or body.intent in {"manual_review", "monitor"}:
             raise PolicyDenied("no_executable_action")
-        if view.assessment.confidence < 100:
+        if view.assessment.confidence < 100 or view.assessment.requires_review:
             raise PolicyDenied("evidence_requires_review")
         if body.strategy == "follow_up" and body.action_kind != "hubspot_task_create":
             raise PolicyDenied("strategy_kind_mismatch")

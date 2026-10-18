@@ -10,7 +10,7 @@ from pydantic import SecretStr, ValidationError
 
 from vita_api.app import create_app
 from vita_api.config import Settings
-from vita_api.contracts import AccountView
+from vita_api.contracts import Account, AccountView
 from vita_api.nebius import Nebius
 from vita_api.sample import SAMPLE_ORG, sample_records
 from vita_api.scoring import assess
@@ -51,6 +51,37 @@ class ScoringTests(unittest.TestCase):
         result = assess(self.account, self.evidence + [conflict], NOW.date())
         self.assertLessEqual(result.confidence, 50)
         self.assertTrue(result.needs_attention)
+
+    def test_missing_account_values_remain_explicit_and_require_review(self):
+        original = assess(self.account, self.evidence, NOW.date())
+        for fields in ({"annual_value": None}, {"renewal_date": None},
+                       {"annual_value": None, "renewal_date": None}):
+            with self.subTest(fields=fields):
+                account = Account.model_validate({**self.account.model_dump(), **fields})
+                result = assess(account, self.evidence, NOW.date())
+                self.assertTrue(result.requires_review)
+                self.assertTrue(result.needs_attention)
+                self.assertFalse(result.growth_signal)
+                self.assertIn("Review", result.recommendation)
+                self.assertNotEqual(result.snapshot_hash, original.snapshot_hash)
+                if "renewal_date" in fields:
+                    factor = next(f for f in result.factors if f.metric == "renewal")
+                    self.assertIsNone(factor.value)
+                    self.assertIsNone(factor.evidence_id)
+                    self.assertEqual(factor.risk_contribution, 0)
+                    self.assertEqual(result.confidence, 75)
+                else:
+                    self.assertEqual(result.confidence, 100)
+                    self.assertEqual(result.risk, original.risk)
+                for field in fields:
+                    self.assertIsNone(account.model_dump(mode="json")[field])
+        zero = Account.model_validate({**self.account.model_dump(), "annual_value": 0})
+        self.assertFalse(assess(zero, self.evidence, NOW.date()).requires_review)
+        for field in ("annual_value", "renewal_date"):
+            body = self.account.model_dump()
+            del body[field]
+            with self.assertRaises(ValidationError):
+                Account.model_validate(body)
 
 
 class PersistenceApiTests(unittest.TestCase):
