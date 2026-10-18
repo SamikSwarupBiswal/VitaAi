@@ -78,4 +78,13 @@ test("stale partial success permits identified follow-up and retains role/uncert
     const form=walk(tree,node=>node.type===target.exports.outcomeForAcceptance)[0];
     assert.equal(form.props.disabled,expected);
   }
+
+  for (const actorRole of ['seller', 'reviewer', 'admin', 'viewer']) {
+    role=actorRole; slots=[];cursor=0;
+    const tree=target.exports.panelsForAcceptance({data:{...parentData,
+      actions:[{id:'live-action',mode:'live',provider_request:'{"properties":{"hs_task_body":"Exact"}}'}]},configured:false,refresh(){}});
+    assert.equal(walk(tree,node=>node.props?.['aria-label']==='Live mission read-only').length,1);
+    assert.equal(walk(tree,node=>['button','form',target.exports.outcomeForAcceptance].includes(node.type)).length,0);
+    assert.equal(walk(tree,node=>typeof node.type==='function').length,1); // ExactPreview only; no editor/review/outcome.
+  }
 });

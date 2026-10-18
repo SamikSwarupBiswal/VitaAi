@@ -1534,8 +1534,8 @@ workflow.execute(config["actor_id"], config["action_id"], ExecuteRequest.model_v
         request = self.approve()
         original = self.workflow.mark_dispatching
 
-        def reconcile_after_dispatch_mark(actor_id, execution_id):
-            dispatched = original(actor_id, execution_id)
+        def reconcile_after_dispatch_mark(actor_id, execution_id, expected_attempt=None):
+            dispatched = original(actor_id, execution_id, expected_attempt)
             self.workflow.reconcile(self.reviewer.id, execution_id, dispatched.revision)
             return dispatched
 

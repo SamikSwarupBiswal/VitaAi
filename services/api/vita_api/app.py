@@ -188,7 +188,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             raise HTTPException(404, "Pipeline run not found")
         return run
 
-    install_workflow_routes(app, store, identity, settings, provider)
+    install_workflow_routes(app, store, identity, settings, provider, hubspot_transport)
     install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     return app
 

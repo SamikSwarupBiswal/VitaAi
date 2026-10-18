@@ -1,4 +1,4 @@
-"""Durable governed simulation and advisory planning. No external action dispatch exists here."""
+"""Durable governed simulation, bounded HubSpot execution and advisory planning."""
 import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -20,6 +20,8 @@ from .governance import (
     payload_hash,
     transition,
 )
+from .hubspot import HubSpotFailure
+from .hubspot_execution import provider_request
 from .identity import Actor, sessions, token_digest, users
 from .pipeline import action_role, governance_role
 from .scoring import assess
@@ -69,7 +71,7 @@ class Workflow:
     policy_version = "governance-1"
 
     def __init__(self, store, *, clock=None, simulation_profile="success", separation_of_duties=False,
-                 session_token=None, session_required=False, provider=None):
+                 session_token=None, session_required=False, provider=None, hubspot=None):
         self.engine = store.engine
         self.clock = clock or (lambda: datetime.now(UTC))
         if simulation_profile not in {"success", "reject", "timeout_after", "timeout_before", "mismatch"}:
@@ -79,6 +81,7 @@ class Workflow:
         self.session_token = session_token
         self.session_required = session_required
         self.provider = provider
+        self.hubspot = hubspot
 
     def _actor(self, connection, actor_id):
         row = connection.execute(select(users).where(users.c.id == actor_id, users.c.enabled.is_(True))
@@ -198,6 +201,8 @@ class Workflow:
 
     def _all_approved(self, connection, actor, mission):
         current = self._actions(connection, actor, mission.id)
+        if len({item.mode for item in current}) > 1:
+            raise PolicyDenied("mission_execution_mode_mismatch", 409)
         expected = {step.id for step in self._alternative(connection, actor, mission).steps}
         if {action.step_id for action in current} != expected:
             raise PolicyDenied("mission_not_approved", 409)
@@ -219,7 +224,7 @@ class Workflow:
             if execution is None or execution.status != "succeeded" or execution.receipt_id is None:
                 raise PolicyDenied("dependency_not_satisfied", 409)
             receipt = self._get(connection, actor, receipts, execution.receipt_id, Receipt)
-            if (receipt.verification != "verified" or receipt.result != "succeeded"
+            if (receipt.mode != action.mode or receipt.verification != "verified" or receipt.result != "succeeded"
                     or receipt.binding_hash != prerequisite.binding_hash or receipt.execution_id != execution.id):
                 raise PolicyDenied("dependency_not_satisfied", 409)
 
@@ -440,7 +445,11 @@ class Workflow:
             self._audit(connection, actor, replacement, "mission_replacement_created", mission_id=replacement.id)
             return replacement
 
-    def _destination(self, actor, account_id, connector_id, kind):
+    def _destination(self, actor, account_id, connector_id, kind, mode="simulation"):
+        if mode == "live":
+            if connector_id != "hubspot-live" or kind == "outlook_draft_create" or self.hubspot is None:
+                raise PolicyDenied("connector_unavailable", 503)
+            return self.hubspot.destination(actor.organization_id, account_id)
         expected = "simulation-microsoft" if kind == "outlook_draft_create" else "simulation-hubspot"
         if connector_id != expected:
             raise PolicyDenied("connector_unavailable", 503)
@@ -479,7 +488,7 @@ class Workflow:
                 raise PolicyDenied("action_already_claimed", 409)
             content_revision = mission.content_revision + 1
             # State-only transitions do not change the approved mission content revision.
-            destination = self._destination(actor, mission.account_id, body.connector_id, body.payload.kind)
+            destination = self._destination(actor, mission.account_id, body.connector_id, body.payload.kind, body.mode)
             action = ActionPreview(**self._base(actor, id=previous.id if previous else uuid4(),
                 created_at=previous.created_at if previous else self.clock(),
                 revision=previous.revision + 1 if previous else 1), mission_id=mission.id,
@@ -487,7 +496,9 @@ class Workflow:
                 slot_id=previous.slot_id if previous else uuid5(mission.id, str(step.id)),
                 step_id=step.id if multi else None, destination=destination, payload=body.payload,
                 payload_hash=payload_hash(body.payload), binding_hash="0" * 64, policy_version=self.policy_version,
-                mode="simulation", preparer_id=actor.id, status="draft")
+                mode=body.mode, preparer_id=actor.id, status="draft")
+            if action.mode == "live":
+                action = action.model_copy(update={"provider_request": provider_request(action.payload, destination, action.created_at)})
             action = action.model_copy(update={"binding_hash": binding_hash(action)})
             if previous:
                 self._audit(connection, actor, previous, "approval_invalidated", mission_id=mission.id, after="superseded")
@@ -526,8 +537,9 @@ class Workflow:
         preparer = self._actor(connection, action.preparer_id) if action.payload.kind == "outlook_draft_create" else actor
         if preparer.organization_id != actor.organization_id:
             raise PolicyDenied("mailbox_membership_changed", 409)
-        destination = self._destination(preparer, mission.account_id, action.destination.connector_id, action.payload.kind)
-        if (action.mode != "simulation" or action.policy_version != self.policy_version
+        destination = self._destination(preparer, mission.account_id, action.destination.connector_id, action.payload.kind, action.mode)
+        expected_request = provider_request(action.payload, destination, action.created_at) if action.mode == "live" else None
+        if (action.provider_request != expected_request or action.policy_version != self.policy_version
                 or action.destination != destination or action.evidence != evidence_binding(view)
                 or action.payload_hash != payload_hash(action.payload) or action.binding_hash != binding_hash(action)):
             raise PolicyDenied("action_binding_changed", 409)
@@ -651,9 +663,11 @@ class Workflow:
             self._audit(connection, actor, execution, "execution_claimed", mission_id=mission.id)
             return execution, True
 
-    def mark_dispatching(self, actor_id, execution_id):
+    def mark_dispatching(self, actor_id, execution_id, expected_attempt=None):
         with self._transaction(actor_id) as (connection, actor):
             execution = self._get(connection, actor, claims, execution_id, Execution)
+            if expected_attempt is not None and execution.attempt != expected_attempt:
+                raise PolicyDenied("dispatch_attempt_changed", 409)
             if execution.status != "claimed":
                 raise PolicyDenied("dispatch_already_started", 409)
             action = self._get(connection, actor, actions, execution.action_id, ActionPreview)
@@ -665,18 +679,19 @@ class Workflow:
             self._audit(connection, actor, execution, "dispatch_started", mission_id=action.mission_id)
             return execution
 
-    def _finish(self, connection, actor, execution, action, result, *, resource=None, error=None):
+    def _finish(self, connection, actor, execution, action, result, *, resource=None, error=None, live=None):
         mission = self._get(connection, actor, missions, action.mission_id, Mission)
         canonical = canonical_json(action.payload).decode("utf-8")
         matches = resource is not None and resource["canonical_payload"] == canonical
         receipt = Receipt(**self._base(actor), execution_id=execution.id, action_id=action.id,
                           decision_id=execution.decision_id, binding_hash=action.binding_hash,
-                          destination=action.destination, result=result, mode="simulation",
-                          provider_resource_id=resource["id"] if resource else None, recorded_at=self.clock(),
-                          verification="verified" if result == "succeeded" and matches else
+                          destination=action.destination, result=result, mode=action.mode,
+                          provider_resource_id=live["resource_id"] if live else resource["id"] if resource else None,
+                          recorded_at=self.clock(),
+                          verification=live["verification"] if live else "verified" if result == "succeeded" and matches else
                           "mismatch" if resource else "unavailable" if result == "result_unknown" else "not_run",
-                          readback_hash=hashlib.sha256(resource["canonical_payload"].encode("utf-8")).hexdigest()
-                          if resource else None, readback_at=self.clock() if resource else None, error_code=error)
+                          readback_hash=live["hash"] if live else hashlib.sha256(resource["canonical_payload"].encode("utf-8")).hexdigest()
+                          if resource else None, readback_at=self.clock() if resource or (live and live["hash"]) else None, error_code=error)
         self._put(connection, receipts, receipt, new=True, execution_id=str(execution.id),
                   action_id=str(action.id), decision_id=str(execution.decision_id))
         updated = execution.model_copy(update={"revision": execution.revision + 1, "status": result,
@@ -724,7 +739,7 @@ class Workflow:
         return self._run_claimed(actor_id, action.id, execution)
 
     def _run_claimed(self, actor_id, action_id, execution):
-        self.mark_dispatching(actor_id, execution.id)
+        execution = self.mark_dispatching(actor_id, execution.id, execution.attempt)
         # Simulate provider creation separately from the receipt transaction, preserving the same
         # crash window as a real remote write. Only the winner of the durable claim reaches this path.
         with self._transaction(actor_id) as (connection, actor):
@@ -734,11 +749,13 @@ class Workflow:
             action = self._get(connection, actor, actions, action_id, ActionPreview)
             decision = self._get(connection, actor, decisions, execution.decision_id, ReviewDecision)
             self._dispatch_check(connection, actor, action, decision)
-            if self.simulation_profile not in {"reject", "timeout_before"}:
+            if action.mode == "simulation" and self.simulation_profile not in {"reject", "timeout_before"}:
                 resource_id = "simulation:" + str(uuid4())
                 canonical = canonical_json(action.payload).decode("utf-8")
                 connection.execute(resources.insert().values(id=resource_id, organization_id=actor.organization_id,
                     execution_id=str(execution.id), canonical_payload=canonical if self.simulation_profile != "mismatch" else "{}"))
+        if action.mode == "live":
+            return self._run_live(actor_id, action, execution)
         with self._transaction(actor_id) as (connection, actor):
             execution = self._get(connection, actor, claims, execution.id, Execution)
             if execution.status != "dispatching":
@@ -755,7 +772,82 @@ class Workflow:
                                     error="readback_mismatch")
             return self._finish(connection, actor, execution, action, "succeeded", resource=resource)
 
+    @contextmanager
+    def _result_transaction(self, actor):
+        # An already authorized dispatch must durably record its result after session revocation
+        # or user disablement. This private worker path cannot prepare, claim or dispatch work.
+        with self.engine.connect() as connection:
+            try:
+                if self.engine.dialect.name == "sqlite":
+                    connection.exec_driver_sql("BEGIN IMMEDIATE")
+                else:
+                    connection.begin()
+                    key = int.from_bytes(hashlib.sha256(actor.organization_id.encode()).digest()[:8], "big", signed=True)
+                    connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+                yield connection
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def _record_live(self, actor, execution, action, result, resource_id, verification, readback_hash, error):
+        with self._result_transaction(actor) as connection:
+            current = self._get(connection, actor, claims, execution.id, Execution)
+            if current.attempt != execution.attempt or current.status not in {"dispatching", "result_unknown"}:
+                return current
+            return self._finish(connection, actor, current, action, result, error=error,
+                live={"resource_id": resource_id, "verification": verification, "hash": readback_hash})
+
+    def _run_live(self, actor_id, action, execution):
+        # Preflight GETs hold no database transaction. Recheck current authority after them.
+        with self._transaction(actor_id) as (connection, actor):
+            current = self._get(connection, actor, claims, execution.id, Execution)
+            if current.status != "dispatching":
+                return current
+        try:
+            self.hubspot.preflight(action)
+        except (HubSpotFailure, PolicyDenied):
+            return self._record_live(actor, execution, action, "failed", None, "not_run", None, "hubspot_preflight_failed")
+        with self._transaction(actor_id) as (connection, actor):
+            current = self._get(connection, actor, claims, execution.id, Execution)
+            if current.status != "dispatching":
+                return current
+            decision = self._get(connection, actor, decisions, current.decision_id, ReviewDecision)
+            self._dispatch_check(connection, actor, action, decision)
+        result, resource_id, error = self.hubspot.create(action)
+        # Persist a returned ID before a separate GET; failure here leaves dispatching, never retryable.
+        current = self._record_live(actor, execution, action, result, resource_id, "unavailable", None, error)
+        if resource_id is None or current.status != "result_unknown":
+            return current
+        verification, readback_hash, error = self.hubspot.readback(action, resource_id)
+        return self._record_live(actor, execution, action, "succeeded" if verification == "verified" else "result_unknown",
+                                 resource_id, verification, readback_hash, error)
+
+    def _reconcile_live(self, actor_id, execution_id, expected_revision):
+        with self._transaction(actor_id, review=True) as (connection, actor):
+            execution = self._get(connection, actor, claims, execution_id, Execution)
+            self._version(execution, expected_revision)
+            if execution.status not in {"claimed", "dispatching", "result_unknown"}:
+                raise PolicyDenied("reconciliation_not_required", 409)
+            action = self._get(connection, actor, actions, execution.action_id, ActionPreview)
+            if execution.status == "claimed":
+                return self._finish(connection, actor, execution, action, "failed", error="pre_dispatch_cancelled")
+            prior = self._get(connection, actor, receipts, execution.receipt_id, Receipt) if execution.receipt_id else None
+            resource_id = prior.provider_resource_id if prior else None
+        verification, readback_hash, error = (self.hubspot.readback(action, resource_id)
+            if self.hubspot is not None and resource_id else ("unavailable", None, "reconciliation_unavailable"))
+        with self._transaction(actor_id, review=True) as (connection, actor):
+            current = self._get(connection, actor, claims, execution.id, Execution)
+            self._version(current, expected_revision)
+            return self._finish(connection, actor, current, action,
+                "succeeded" if verification == "verified" else "result_unknown", error=error,
+                live={"resource_id": resource_id, "verification": verification, "hash": readback_hash})
+
     def reconcile(self, actor_id, execution_id, expected_revision) -> Execution:
+        execution = self.get_execution(actor_id, execution_id)
+        action = self.get_action(actor_id, execution.action_id)
+        if action.mode == "live":
+            return self._reconcile_live(actor_id, execution_id, expected_revision)
         with self._transaction(actor_id, review=True) as (connection, actor):
             execution = self._get(connection, actor, claims, execution_id, Execution)
             self._version(execution, expected_revision)

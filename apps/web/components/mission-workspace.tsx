@@ -82,7 +82,7 @@ function MissionDirectory() {
     <header className="mission-heading"><div><Link href={`/?persona=seller${account ? `&account=${account.account.id}` : ""}`}>← Portfolio</Link>
       <h1>Governed missions</h1><p className="muted">Evidence → reviewed action → recorded follow-up</p></div>
       <button onClick={refresh}>Refresh current state</button></header>
-    <p className="mission-disclosure">Simulation only. CRM records and unsent drafts stay inside VitaAi; no customer is contacted.</p>
+    <p className="mission-disclosure">This workspace prepares and executes simulations. Live API missions are read-only here.</p>
     {error && <p role="alert" className="error-banner">{error}</p>}
     {!current ? <p role="status">Loading current missions...</p> : <div className="mission-layout">
       <aside className="mission-directory"><label>Account<select aria-label="Account" value={accountId || ""} onChange={event => select(event.target.value)}>
@@ -190,6 +190,7 @@ function ExactPreview({ action }: { action: Action }) {
     {payload.kind === "hubspot_task_create" && <><pre>{payload.title}</pre><p>Due: {payload.due_at || "Not set"}</p><pre>{payload.body}</pre></>}
     {payload.kind === "hubspot_note_create" && <pre>{payload.body}</pre>}
     {payload.kind === "outlook_draft_create" && <><p>To: {payload.to.join(", ")}</p><pre>{payload.subject}</pre><pre>{payload.body_text}</pre></>}
+    {action.provider_request && <details><summary>Exact provider request · {action.mode}</summary><pre>{action.provider_request}</pre></details>}
     <details><summary>Exact binding and destination</summary><dl><dt>Binding hash</dt><dd>{action.binding_hash}</dd>
       <dt>Payload hash</dt><dd>{action.payload_hash}</dd><dt>Mode / policy</dt><dd>{action.mode} / {action.policy_version}</dd>
       <dt>Destination</dt><dd><pre>{JSON.stringify(action.destination, null, 2)}</pre></dd>
@@ -212,6 +213,15 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
   const superseded = mission.status === "superseded";
   const frozen = executions.length > 0 || mission.status === "completed" || superseded;
   const disabled = op.blocked || !writer || stale || superseded;
+  if (actions.some(action => action.mode === "live")) return <section aria-label="Live mission read-only">
+    <h2>{account.account.name} · live API mission</h2>
+    <p>This mission contains live provider actions. It is read-only in this simulation workspace. Live preparation, exact review, execution and reconciliation require the authenticated API.</p>
+    <h3>Saved actions</h3>
+    {actions.map(action => <ExactPreview key={action.id} action={action} />)}
+    <details><summary>Recorded decisions, execution and history</summary>
+      <pre>{JSON.stringify({ mission, decisions, executions, receipts, outcomes: data.outcomes, audit }, null, 2)}</pre>
+    </details>
+  </section>;
   async function mutate(path: string, body: object) {
     await op.run(async signal => { await postWorkflow(path, body, signal); if (!signal.aborted) refresh(); });
   }

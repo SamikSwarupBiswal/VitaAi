@@ -281,6 +281,7 @@ class ActionPreview(Record):
     policy_version: Reference
     mode: Mode
     preparer_id: Reference
+    provider_request: Annotated[str, Field(strict=True, min_length=1, max_length=262144)] | None = None
     status: Literal["draft", "submitted", "superseded"]
 
     @model_validator(mode="after")
@@ -379,6 +380,7 @@ class SupersedeRequest(RevisionRequest):
 
 
 class PrepareRequest(RevisionRequest):
+    mode: Mode = "simulation"
     alternative_id: UUID
     step_id: UUID | None = None
     connector_id: Reference

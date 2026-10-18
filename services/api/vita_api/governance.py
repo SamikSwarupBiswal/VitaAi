@@ -86,6 +86,8 @@ def binding_hash(action: ActionPreview) -> str:
     # Preserve hashes issued before step bindings existed.
     if action.step_id is not None:
         binding["step_id"] = str(action.step_id)
+    if action.provider_request is not None:
+        binding["provider_request"] = action.provider_request
     return digest(binding)
 
 

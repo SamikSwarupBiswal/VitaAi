@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from .contracts import ModelRun
 from .governance import PolicyDenied
+from .hubspot_execution import HubSpotWrites
 from .identity import Actor
 from .workflow import Workflow
 from .workflow_contracts import (
@@ -38,8 +39,9 @@ def safe_error(code: str, status_code: int):
                         status_code=status_code)
 
 
-def install_workflow_routes(app, store, identity, settings, provider=None):
+def install_workflow_routes(app, store, identity, settings, provider=None, hubspot_transport=None):
     router = APIRouter()
+    hubspot = HubSpotWrites(settings, hubspot_transport)
 
     @app.exception_handler(PolicyDenied)
     async def policy_error(request: Request, error: PolicyDenied):
@@ -54,7 +56,8 @@ def install_workflow_routes(app, store, identity, settings, provider=None):
         return actor
 
     def service(request: Request) -> Workflow:
-        return Workflow(store, session_token=request.cookies.get("vitaai_session"), session_required=True, provider=provider)
+        return Workflow(store, session_token=request.cookies.get("vitaai_session"), session_required=True,
+                        provider=provider, hubspot=hubspot)
 
     Current = Annotated[Actor, Depends(current)]
     Service = Annotated[Workflow, Depends(service)]

@@ -889,6 +889,8 @@ export interface components {
             mode: "simulation" | "live";
             /** Preparer Id */
             preparer_id: string;
+            /** Provider Request */
+            provider_request?: string | null;
             /**
              * Status
              * @enum {string}
@@ -2171,6 +2173,12 @@ export interface components {
             schema_version: "1";
             /** Expected Revision */
             expected_revision: number;
+            /**
+             * Mode
+             * @default simulation
+             * @enum {string}
+             */
+            mode: "simulation" | "live";
             /**
              * Alternative Id
              * Format: uuid

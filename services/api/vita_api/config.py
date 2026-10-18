@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     nebius_model: str = ""
     nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
     hubspot_enabled: bool = False
+    hubspot_write_enabled: bool = False
+    hubspot_configuration_revision: int = Field(default=1, ge=1)
     hubspot_access_token: SecretStr = SecretStr("")
     hubspot_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
     hubspot_portal_id: str = Field(default="", pattern=r"^(?:[1-9][0-9]{0,19})?$")
