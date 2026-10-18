@@ -120,6 +120,9 @@ details dd { overflow-wrap: anywhere; font-size: 12px; }
 .research-panel h3, .research-panel h4 { font-size: 15px; margin: 16px 0 8px; overflow-wrap: anywhere; }
 .research-panel li, .research-panel button { overflow-wrap: anywhere; }
 .research-panel p { white-space: pre-wrap; }
+.detection-panel h3, .detection-panel h4 { font-size: 15px; margin: 16px 0 8px; }
+.detection-panel p, .detection-panel li, .detection-panel button { overflow-wrap: anywhere; }
+.detection-panel p { white-space: pre-wrap; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .sr-only, .skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
