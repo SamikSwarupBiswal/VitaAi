@@ -21,8 +21,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|supersede|outcomes))?|actions/${uuid}/(?:submit|review|renew-review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
   const workflowPath = request.method === "GET" ? workflowRead.test(joined) : workflowWrite.test(joined);
   const hubspotPath = request.method === "GET"
-    ? new RegExp(`^integrations/hubspot(?:/(?:runs|observations|sources)/${uuid}|/accounts/${uuid}/(?:preview|execution-readiness))?$`).test(joined)
-    : request.method === "POST" && new RegExp(`^integrations/hubspot/accounts/${uuid}/(?:sync|promote|restore-sample)$`).test(joined);
+    ? new RegExp(`^integrations/hubspot(?:/(?:runs|observations|sources|detections)/${uuid}|/accounts/${uuid}/(?:preview|execution-readiness|detections))?$`).test(joined)
+    : request.method === "POST" && new RegExp(`^integrations/hubspot/accounts/${uuid}/(?:sync|promote|restore-sample|detect-changes)$`).test(joined);
   // Callback stays on the fixed API redirect; codes/state never enter the Next proxy.
   const microsoftPath = request.method === "GET"
     ? new RegExp(`^integrations/microsoft(?:/missions/${uuid}/execution-readiness)?$`).test(joined)

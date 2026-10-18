@@ -168,6 +168,13 @@ test("HubSpot routes allow staged reads and explicit bounded source operations",
     ["GET", "integrations/hubspot", 200], ["GET", `integrations/hubspot/runs/${id}`, 200],
     ["GET", `integrations/hubspot/observations/${id}`, 200],
     ["GET", `integrations/hubspot/sources/${id}`, 200],
+    ["GET", `integrations/hubspot/detections/${id}`, 200],
+    ["GET", `integrations/hubspot/accounts/${id}/detections`, 200],
+    ["POST", `integrations/hubspot/accounts/${id}/detect-changes`, 200],
+    ["GET", `integrations/hubspot/accounts/${id}/detect-changes`, 404],
+    ["POST", `integrations/hubspot/accounts/${id}/detections`, 404],
+    ["POST", `integrations/hubspot/detections/${id}`, 404],
+    ["POST", `integrations/hubspot/accounts/${id}/detect-changes/extra`, 404],
     ["GET", `integrations/hubspot/accounts/${id}/preview`, 200],
     ["GET", `integrations/hubspot/accounts/${id}/execution-readiness`, 200],
     ["POST", `integrations/hubspot/accounts/${id}/execution-readiness`, 404],
@@ -192,14 +199,14 @@ test("HubSpot routes allow staged reads and explicit bounded source operations",
     const response = await route.exports[method](request, { params: Promise.resolve({ path: name.split("/") }) });
     assert.equal(response.status, expected, `${method} ${name}`);
   }
-  assert.equal(upstream.mock.callCount(), 9);
+  assert.equal(upstream.mock.callCount(), 12);
 });
 
 test("Next implicit HEAD cannot forward a HubSpot source mutation", async t => {
   const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods.js");
   const methods = autoImplementMethods(route.exports);
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}, { status: 405 }));
-  for (const operation of ["sync", "promote", "restore-sample"]) {
+  for (const operation of ["sync", "promote", "restore-sample", "detect-changes"]) {
     const name = `integrations/hubspot/accounts/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8/${operation}`;
     const request = new NextRequest(`http://localhost:3000/api/${name}`, { method: "HEAD", headers: {
       host: "127.0.0.1:3000", origin: "https://foreign.example",

@@ -32,6 +32,14 @@ from .hubspot import (
     HubSpotSyncRequest,
     HubSpotSyncRun,
 )
+from .hubspot_changes import (
+    SourceDetection,
+    SourceDetectionBatch,
+    SourceDetectionRequest,
+    detect,
+    detections,
+    snapshot,
+)
 from .hubspot_normalize import (
     AccountSourceVersion,
     HubSpotPreview,
@@ -258,6 +266,56 @@ class HubSpotSync:
             self.account(connection, actor, version.account_id)
             return version
 
+    def _source_snapshot(self, connection, version):
+        observation = None
+        if version.selection.observation_id:
+            payload = connection.execute(select(observations.c.payload).where(
+                observations.c.organization_id == version.account.organization_id,
+                observations.c.account_id == str(version.account_id),
+                observations.c.id == version.selection.observation_id)).scalar()
+            observation = HubSpotObservation.model_validate(payload) if payload else None
+        return snapshot(version, observation)
+
+    def detect_changes(self, account_id, body):
+        with self.transaction(write=True) as (connection, actor):
+            account = self.account(connection, actor, account_id, body.expected_account_revision)
+            current = selected_source(connection, actor.organization_id, account.id)
+            if current is None or current["selection"]["id"] != str(body.expected_source_id):
+                raise PolicyDenied("source_selection_changed", 409)
+            cursor = connection.execute(select(detections.c.account_revision).where(
+                detections.c.organization_id == actor.organization_id, detections.c.account_id == account.id)
+                .order_by(detections.c.account_revision.desc()).limit(1)).scalar()
+            pending = connection.execute(select(source_versions.c.payload).where(
+                source_versions.c.organization_id == actor.organization_id, source_versions.c.account_id == account.id,
+                source_versions.c.account_revision > (cursor or 0))
+                .order_by(source_versions.c.account_revision).limit(21)).scalars().all()
+            previous = None
+            if cursor is not None:
+                previous = connection.execute(select(source_versions.c.payload).where(
+                    source_versions.c.organization_id == actor.organization_id, source_versions.c.account_id == account.id,
+                    source_versions.c.account_revision == cursor)).scalar_one()
+            before = self._source_snapshot(connection, AccountSourceVersion.model_validate(previous)) if previous else None
+            processed, detected_at = [], datetime.now(UTC)
+            for payload in pending[:20]:
+                after = self._source_snapshot(connection, AccountSourceVersion.model_validate(payload))
+                result = detect(actor.organization_id, account.id, actor.id, before, after, detected_at)
+                connection.execute(detections.insert().values(id=str(result.id), organization_id=actor.organization_id,
+                    account_id=account.id, source_version_id=str(after.source_version_id),
+                    account_revision=after.account_revision, payload=result.model_dump(mode="json")))
+                processed.append(result)
+                before, cursor = after, after.account_revision
+            return SourceDetectionBatch(organization_id=actor.organization_id, account_id=account.id,
+                account_revision=account.revision, selected_source_id=body.expected_source_id,
+                processed=processed, last_processed_revision=cursor, has_more=len(pending) > 20)
+
+    def detection_history(self, account_id):
+        with self.transaction() as (connection, actor):
+            self.account(connection, actor, account_id)
+            payloads = connection.execute(select(detections.c.payload).where(
+                detections.c.organization_id == actor.organization_id, detections.c.account_id == str(account_id))
+                .order_by(detections.c.account_revision.desc()).limit(20)).scalars()
+            return [SourceDetection.model_validate(payload) for payload in payloads]
+
 
 def install_hubspot_routes(app, store, identity, settings, transport=None):
     connector = HubSpot(settings, transport)
@@ -308,5 +366,17 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     @router.get("/sources/{source_id}", response_model=AccountSourceVersion)
     def source_version(source_id: UUID, actor: Current, operation: Service):
         return operation.source_version(source_id)
+
+    @router.post("/accounts/{account_id}/detect-changes", response_model=SourceDetectionBatch)
+    def detect_changes(account_id: UUID, body: SourceDetectionRequest, actor: Current, operation: Service):
+        return operation.detect_changes(account_id, body)
+
+    @router.get("/accounts/{account_id}/detections", response_model=list[SourceDetection])
+    def detection_history(account_id: UUID, actor: Current, operation: Service):
+        return operation.detection_history(account_id)
+
+    @router.get("/detections/{detection_id}", response_model=SourceDetection)
+    def detection(detection_id: UUID, actor: Current, operation: Service):
+        return operation.get(detections, detection_id, SourceDetection)
 
     app.include_router(router)

@@ -817,6 +817,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/detect-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Detect Changes */
+        post: operations["detect_changes_api_integrations_hubspot_accounts__account_id__detect_changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/accounts/{account_id}/detections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detection History */
+        get: operations["detection_history_api_integrations_hubspot_accounts__account_id__detections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/detections/{detection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detection */
+        get: operations["detection_api_integrations_hubspot_detections__detection_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/research": {
         parameters: {
             query?: never;
@@ -2939,6 +2990,203 @@ export interface components {
             /** Negative Count */
             negative_count: number;
         };
+        /** SourceChangeEvent */
+        SourceChangeEvent: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Changes */
+            changes: components["schemas"]["SourceFieldChange"][];
+        };
+        /** SourceDetection */
+        SourceDetection: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+            /**
+             * Policy Version
+             * @default source-change-1
+             * @constant
+             */
+            policy_version: "source-change-1";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "baseline" | "unchanged" | "changed" | "source_reset";
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "first_source" | "local_sample" | "source_switch" | "source_identity_changed" | "mapping_changed" | "values_unchanged" | "values_changed";
+            before: components["schemas"]["SourceSnapshot"] | null;
+            after: components["schemas"]["SourceSnapshot"];
+            event?: components["schemas"]["SourceChangeEvent"] | null;
+        };
+        /** SourceDetectionBatch */
+        SourceDetectionBatch: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /**
+             * Selected Source Id
+             * Format: uuid
+             */
+            selected_source_id: string;
+            /** Processed */
+            processed: components["schemas"]["SourceDetection"][];
+            /** Last Processed Revision */
+            last_processed_revision: number | null;
+            /** Has More */
+            has_more: boolean;
+        };
+        /** SourceDetectionRequest */
+        SourceDetectionRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /**
+             * Expected Source Id
+             * Format: uuid
+             */
+            expected_source_id: string;
+        };
+        /** SourceField */
+        SourceField: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Value */
+            value: string | number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "valid" | "missing" | "invalid" | "unconfigured";
+            /** Unit */
+            unit: string;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Evidence Id */
+            evidence_id?: string | null;
+        };
+        /** SourceFieldChange */
+        SourceFieldChange: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "name" | "industry" | "annual_value" | "renewal_date" | "usage_change" | "support_cases" | "expansion";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "value_changed" | "availability_changed";
+            before: components["schemas"]["SourceField"];
+            after: components["schemas"]["SourceField"];
+        };
+        /** SourceSnapshot */
+        SourceSnapshot: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Source Version Id
+             * Format: uuid
+             */
+            source_version_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "hubspot" | "local_sample";
+            /**
+             * Selected At
+             * Format: date-time
+             */
+            selected_at: string;
+            /** Observation Id */
+            observation_id?: string | null;
+            /** Portal Id */
+            portal_id?: string | null;
+            /** Company Id */
+            company_id?: string | null;
+            /** Mapping Hash */
+            mapping_hash?: string | null;
+            /** Provider Created At */
+            provider_created_at?: string | null;
+            /** Provider Updated At */
+            provider_updated_at?: string | null;
+            /** Fetched At */
+            fetched_at?: string | null;
+            /** Fields */
+            fields?: {
+                [key: string]: components["schemas"]["SourceField"];
+            };
+        };
         /** SubmitRequest */
         SubmitRequest: {
             /**
@@ -4481,6 +4729,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSourceVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detect_changes_api_integrations_hubspot_accounts__account_id__detect_changes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceDetectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceDetectionBatch"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detection_history_api_integrations_hubspot_accounts__account_id__detections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceDetection"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detection_api_integrations_hubspot_detections__detection_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                detection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceDetection"];
                 };
             };
             /** @description Validation Error */
