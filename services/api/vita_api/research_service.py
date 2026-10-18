@@ -26,6 +26,7 @@ from .research import (
     PREFIX,
     Research,
     ResearchFailure,
+    ResearchReadiness,
     ResearchRequest,
     ResearchRun,
     ResearchStatus,
@@ -159,6 +160,25 @@ class ResearchService:
                 self.finish(connection, run)
             raise
 
+    def readiness(self, account_id):
+        with self.transaction() as (connection, actor):
+            account = self.account(connection, actor, account_id)
+            status = self.connector.status(actor.organization_id)
+            target = self.connector.settings.research_account_map.get(str(account_id)) if (
+                actor.organization_id == self.connector.settings.research_organization_id) else None
+            scope = (research_runs.c.organization_id == actor.organization_id,
+                     research_runs.c.account_id == str(account_id))
+            pending = connection.execute(select(research_runs.c.id).where(
+                *scope, research_runs.c.status == "pending").limit(1)).scalar()
+            latest = connection.execute(select(research_runs.c.started_at).where(*scope)
+                .order_by(research_runs.c.started_at.desc()).limit(1)).scalar()
+            next_start = datetime.fromtimestamp(latest, UTC) + timedelta(seconds=60) if latest is not None else None
+            return ResearchReadiness(**status.model_dump(), organization_id=actor.organization_id,
+                account_id=account_id, account_revision=account.revision, target=target,
+                can_start=bool(status.enabled and target and actor.role != "viewer" and not pending
+                    and (next_start is None or datetime.now(UTC) >= next_start)),
+                pending_run_id=pending, next_start_at=next_start)
+
     @staticmethod
     def finish(connection, run):
         connection.execute(update(research_runs).where(research_runs.c.id == str(run.id),
@@ -195,6 +215,10 @@ def install_research_routes(app, store, identity, settings, transport=None):
     @router.get("/runs/{run_id}", response_model=ResearchRun)
     def get_run(run_id: UUID, actor: Current, operation: Service):
         return operation.get(run_id)
+
+    @router.get("/accounts/{account_id}/readiness", response_model=ResearchReadiness)
+    def readiness(account_id: UUID, actor: Current, operation: Service):
+        return operation.readiness(account_id)
 
     @router.get("/accounts/{account_id}/runs", response_model=list[ResearchRun])
     def history(account_id: UUID, actor: Current, operation: Service):

@@ -10,6 +10,7 @@ import { AccountTable, type SortKey } from "./account-table";
 import { PipelinePanel } from "./pipeline-panel";
 import { SessionGate } from "./session-gate";
 import { HubSpotPanel } from "./hubspot-panel";
+import { ResearchPanel } from "./research-panel";
 
 export function Workspace({ accountDirectory = false }: { accountDirectory?: boolean }) {
   const params = useSearchParams();
@@ -218,6 +219,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         {portfolio && persona === "operations" && <p className="data-stamp">Model: {provider?.configured ? "Configured; inspect individual runs for validation." : "Unconfigured."} Evidence assessment: {portfolio.as_of}. External execution unavailable.</p>}
         {selected && <HubSpotPanel view={selected} key={`${selected.account.id}:${selected.account.revision}:${sourceGeneration}`}
           blocked={authorityBlocked} onInvalidate={() => { setSourcePending(true); invalidateAuthority(); }} onRefresh={refreshSource} />}
+        {selected && !authorityBlocked && <ResearchPanel view={selected} key={`${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
         {portfolio && !authorityBlocked && <PipelinePanel onSelect={selectAccount} organizationId={portfolio.organization_id}
           snapshots={Object.fromEntries(portfolio.accounts.map(view => [view.account.id, view.assessment.snapshot_hash]))}
           configured={provider?.configured || false} key={persona} expanded={persona === "seller"} />}

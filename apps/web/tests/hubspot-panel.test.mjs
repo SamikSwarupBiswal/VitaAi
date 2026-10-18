@@ -171,11 +171,11 @@ function workspaceHarness(t) {
     useEffect(callback, deps) { const i = cursor++; if (!(i in slots) || deps.some((value, index) => value !== slots[i][index])) {
       slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = callback(); }); } },
   };
-  const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel"].map(name => [name, () => null]));
+  const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel", "ResearchPanel"].map(name => [name, () => null]));
   const workspace = load("../components/workspace.tsx", { react: hooks,
     "next/navigation": { useRouter: () => ({}), useSearchParams: () => new URLSearchParams({ account: "a" }) },
     "next/link": { __esModule: true, default: () => null }, "./session-gate": {},
-    "./account-table": children, "./account-detail": children, "./pipeline-panel": children, "./hubspot-panel": children,
+    "./account-table": children, "./account-detail": children, "./pipeline-panel": children, "./hubspot-panel": children, "./research-panel": children,
     "@/lib/api": { currency: String, api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
   }, "\nexports.contentForAcceptance = WorkspaceContent;");
   const render = () => { cursor = 0; const tree = workspace.contentForAcceptance({ accountDirectory: false, persona: "operations" });
@@ -193,11 +193,13 @@ async function readyWorkspace(app) {
 
 test("parent invalidation cancels old analysis and reads; failed refresh keeps authority blocked", async t => {
   const app = workspaceHarness(t); await readyWorkspace(app);
+  const researchKey = app.child("ResearchPanel").key;
   const analysis = app.child("AccountDetail").props.onAnalyze(); const oldAnalysis = app.requests.shift();
   app.refreshButton().props.onClick(); const oldPortfolio = app.requests.shift(), oldProvider = app.requests.shift();
   app.child("HubSpotPanel").props.onInvalidate();
   assert.equal(oldAnalysis.init.signal.aborted, true); assert.equal(oldPortfolio.init.signal.aborted, true);
   assert.equal(app.child("AccountDetail"), undefined); assert.equal(app.child("PipelinePanel"), undefined);
+  assert.equal(app.child("ResearchPanel"), undefined);
   assert.equal(app.child("HubSpotPanel").props.blocked, true);
   assert.equal(app.refreshButton().props.disabled, true);
   const refresh = app.child("HubSpotPanel").props.onRefresh("Request may have persisted.");
@@ -211,6 +213,8 @@ test("parent invalidation cancels old analysis and reads; failed refresh keeps a
   assert.equal(app.child("AccountDetail").props.run, null);
   assert.deepEqual(app.child("PipelinePanel").props.snapshots, { a: "snapshot-4" });
   assert.equal(app.child("HubSpotPanel").props.blocked, false);
+  assert.equal(app.child("ResearchPanel").props.view.account.revision, 4);
+  assert.notEqual(app.child("ResearchPanel").key, researchKey);
 });
 
 test("source completion after navigation refreshes mounted workspace and mission readers", async t => {

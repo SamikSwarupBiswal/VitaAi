@@ -97,6 +97,7 @@ test("workspace discloses incomplete totals and sorts unknowns last in both dire
       "./account-table": table, "./account-detail": detail,
       "./pipeline-panel": { PipelinePanel: () => null }, "./session-gate": {},
       "./hubspot-panel": { HubSpotPanel: () => null },
+      "./research-panel": { ResearchPanel: () => null },
     }, "\nexports.contentForAcceptance = WorkspaceContent;");
     const tree = workspace.contentForAcceptance({ accountDirectory: true, persona: "executive" });
     const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"

@@ -153,6 +153,33 @@ class ResearchApiTests(unittest.TestCase):
         return self.client.post(f"{PREFIX}/accounts/{ACCOUNT}/search", headers=HEADERS,
             json={"expected_account_revision": 1, "mode": "live", **changes})
 
+    def test_readiness_is_account_scoped_current_and_never_searches(self):
+        path = f"{PREFIX}/accounts/{ACCOUNT}/readiness"
+        before = self.client.get("/api/portfolio").json()
+        ready = self.client.get(path)
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json()["target"], TARGET)
+        self.assertEqual(ready.json()["account_revision"], 1)
+        self.assertTrue(ready.json()["can_start"])
+        self.assertEqual(ready.json()["live_status"], "configured_unverified")
+        self.assertEqual(self.client.get(f"{PREFIX}/accounts/{uuid4()}/readiness").status_code, 404)
+        self.identity.create_user("viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        self.login("viewer")
+        self.assertFalse(self.client.get(path).json()["can_start"])
+        self.login()
+        self.search(mode="mock")
+        cooldown = self.client.get(path).json()
+        self.assertFalse(cooldown["can_start"])
+        self.assertIsNotNone(cooldown["next_start_at"])
+        self.assertIsNone(cooldown["pending_run_id"])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        self.assertEqual(self.calls, [])
+        self.identity.create_user("foreign", "test-password-long", "other", "admin")
+        self.login("foreign")
+        self.assertEqual(self.client.get(path).status_code, 404)
+        self.client.post("/api/auth/logout", headers=HEADERS)
+        self.assertEqual(self.client.get(path).status_code, 401)
+
     def test_saved_sources_history_reconstruction_and_unchanged_authority(self):
         before = self.client.get("/api/portfolio").json()
         response = self.search()
@@ -258,6 +285,9 @@ class ResearchApiTests(unittest.TestCase):
             service.start(ACCOUNT, ResearchRequest(expected_account_revision=1, mode="live"))
         run = self.client.get(f"{PREFIX}/accounts/{ACCOUNT}/runs").json()[0]
         self.assertEqual(run["status"], "pending")
+        readiness = self.client.get(f"{PREFIX}/accounts/{ACCOUNT}/readiness").json()
+        self.assertEqual(readiness["pending_run_id"], run["id"])
+        self.assertFalse(readiness["can_start"])
         self.assertEqual(self.search().status_code, 409)
         self.assertEqual(self.calls, [])
 

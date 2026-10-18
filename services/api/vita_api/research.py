@@ -32,6 +32,16 @@ class ResearchStatus(ResearchContract):
     provider: Literal["tavily"] = "tavily"
 
 
+class ResearchReadiness(ResearchStatus):
+    organization_id: str
+    account_id: UUID
+    account_revision: int = Field(ge=1)
+    target: ResearchTarget | None
+    can_start: bool
+    pending_run_id: UUID | None
+    next_start_at: AwareDatetime | None
+
+
 class ResearchSource(ResearchContract):
     url: str = Field(min_length=1, max_length=2048)
     title: str = Field(min_length=1, max_length=500)

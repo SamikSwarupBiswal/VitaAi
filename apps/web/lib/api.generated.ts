@@ -868,6 +868,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/accounts/{account_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness */
+        get: operations["readiness_api_integrations_research_accounts__account_id__readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/research/accounts/{account_id}/runs": {
         parameters: {
             query?: never;
@@ -2592,6 +2609,44 @@ export interface components {
             governance: components["schemas"]["GovernanceResult"];
             action: components["schemas"]["ActionProposal"];
             communication: components["schemas"]["CommunicationResult"];
+        };
+        /** ResearchReadiness */
+        ResearchReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Live Status
+             * @enum {string}
+             */
+            live_status: "unconfigured" | "configured_unverified";
+            /**
+             * Provider
+             * @default tavily
+             * @constant
+             */
+            provider: "tavily";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            target: components["schemas"]["ResearchTarget"] | null;
+            /** Can Start */
+            can_start: boolean;
+            /** Pending Run Id */
+            pending_run_id: string | null;
+            /** Next Start At */
+            next_start_at: string | null;
         };
         /** ResearchRequest */
         ResearchRequest: {
@@ -4512,6 +4567,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readiness_api_integrations_research_accounts__account_id__readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchReadiness"];
                 };
             };
             /** @description Validation Error */

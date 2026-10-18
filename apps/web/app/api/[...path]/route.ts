@@ -27,9 +27,12 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const microsoftPath = request.method === "GET"
     ? new RegExp(`^integrations/microsoft(?:/missions/${uuid}/execution-readiness)?$`).test(joined)
     : request.method === "POST" && /^integrations\/microsoft\/(?:connect|signout)$/.test(joined);
+  const researchPath = request.method === "GET"
+    ? new RegExp(`^integrations/research(?:/runs/${uuid}|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
+    : request.method === "POST" && new RegExp(`^integrations/research/accounts/${uuid}/search$`).test(joined);
   const allowed = request.method === "GET"
-    ? workflowPath || hubspotPath || microsoftPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
-    : workflowPath || hubspotPath || microsoftPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
+    ? workflowPath || hubspotPath || microsoftPath || researchPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
+    : workflowPath || hubspotPath || microsoftPath || researchPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
   try {
     const body = request.method === "POST" ? await request.text() : undefined;
