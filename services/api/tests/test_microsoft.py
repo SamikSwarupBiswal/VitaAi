@@ -138,6 +138,52 @@ class MicrosoftTests(unittest.TestCase):
         with self.assertRaises(PolicyDenied):
             self.ms.status(self.seller.id, self.token)
 
+    def test_mission_readiness_uses_original_maker_and_reconnect_only_allows_readback(self):
+        self.configure()
+        self.connect()
+        self.live()
+        reviewer = Workflow(self.store, clock=lambda: self.now, microsoft=self.ms,
+                            session_token=self.review_token, session_required=True)
+        before = len(self.calls)
+        ready = reviewer.microsoft_readiness(self.reviewer.id, self.mission.id)
+        self.assertFalse(ready.can_prepare)  # Reviewer has no mailbox connection of their own.
+        self.assertIsNone(ready.destination)
+        self.assertTrue(ready.actions[0].can_write)
+        self.assertTrue(ready.actions[0].can_reconcile)
+        self.assertEqual(ready.actions[0].binding_hash, self.action.binding_hash)
+        self.assertEqual(len(self.calls), before)
+        self.connect()  # Same mailbox, new binding ID: never revive the old exact write.
+        ready = reviewer.microsoft_readiness(self.reviewer.id, self.mission.id)
+        self.assertFalse(ready.actions[0].can_write)
+        self.assertTrue(ready.actions[0].can_reconcile)
+        self.ms.settings = self.settings.model_copy(update={"microsoft_write_enabled": False})
+        self.assertTrue(reviewer.microsoft_readiness(self.reviewer.id, self.mission.id).actions[0].can_reconcile)
+        self.ms.signout(self.seller.id, self.token)
+        self.assertFalse(reviewer.microsoft_readiness(self.reviewer.id, self.mission.id).actions[0].can_reconcile)
+
+    def test_mission_readiness_denies_foreign_scope_expired_session_and_demoted_maker(self):
+        self.configure()
+        self.connect()
+        self.live()
+        with self.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == self.seller.id).values(role="viewer"))
+        self.assertFalse(self.ms.status(self.seller.id, self.token).connected)
+        ready = self.workflow.microsoft_readiness(self.seller.id, self.mission.id)
+        self.assertFalse(ready.can_prepare)
+        self.assertFalse(ready.actions[0].can_write)
+        self.assertFalse(ready.actions[0].can_reconcile)
+        with self.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == self.reviewer.id).values(organization_id="foreign"))
+        foreign = Workflow(self.store, clock=lambda: self.now, microsoft=self.ms,
+                           session_token=self.review_token, session_required=True)
+        with self.assertRaises(PolicyDenied) as denied:
+            foreign.microsoft_readiness(self.reviewer.id, self.mission.id)
+        self.assertEqual(denied.exception.status_code, 404)
+        self.identity.logout(self.token)
+        with self.assertRaises(PolicyDenied) as denied:
+            self.workflow.microsoft_readiness(self.seller.id, self.mission.id)
+        self.assertEqual(denied.exception.status_code, 401)
+
     def test_concurrent_execution_has_one_durable_claim_and_one_post(self):
         self.configure()
         self.connect()
@@ -329,11 +375,17 @@ class MicrosoftTests(unittest.TestCase):
             self.assertEqual(client.get(PREFIX).status_code, 401)
             client.post("/api/auth/login", headers=headers, json={"username": "seller", "password": "test-password-long"})
             self.assertEqual(client.post(PREFIX + "/connect").status_code, 403)
+            wrong_host = client.post(PREFIX + "/connect", headers={**headers, "Origin": "http://localhost:3000"})
+            self.assertEqual(wrong_host.status_code, 409)
             start = client.post(PREFIX + "/connect", headers=headers)
             self.assertEqual(start.status_code, 200)
             self.assertIn("HttpOnly", start.headers["set-cookie"])
             self.assertIn("SameSite=lax", start.headers["set-cookie"])
-            self.assertEqual(client.get(PREFIX + "/callback", params={"state": self.flow["state"], "code": "test-code"}).status_code, 200)
+            callback = client.get(PREFIX + "/callback", params={"state": self.flow["state"], "code": "test-code"}, follow_redirects=False)
+            self.assertEqual(callback.status_code, 303)
+            self.assertEqual(callback.headers["location"], "http://127.0.0.1:3000/missions")
+            self.assertEqual(callback.headers["referrer-policy"], "no-referrer")
+            self.assertEqual(callback.headers["cache-control"], "no-store")
             before = len(self.calls)
             response = client.get(PREFIX)
             self.assertTrue(response.json()["connected"])
@@ -352,7 +404,7 @@ class MicrosoftTests(unittest.TestCase):
         with TestClient(app) as client:
             client.post("/api/auth/login", headers=headers, json={"username": "seller", "password": "test-password-long"})
             client.post(PREFIX + "/connect", headers=headers)
-            self.assertEqual(client.get(PREFIX + "/callback", params={"state": self.flow["state"], "code": "test-code"}).status_code, 200)
+            self.assertEqual(client.get(PREFIX + "/callback", params={"state": self.flow["state"], "code": "test-code"}, follow_redirects=False).status_code, 303)
             view = next(v for v in client.get("/api/portfolio").json()["accounts"] if v["account"]["id"] == self.account.id)
 
             def post(path, body):
@@ -368,11 +420,19 @@ class MicrosoftTests(unittest.TestCase):
                 "payload": {"kind": "outlook_draft_create", "to": ["buyer@example.com"], "subject": " Exact Ω ", "body_text": "Body\n Ω "}})
             self.assertEqual(action["destination"]["mailbox_id"], MAILBOX)
             action = post(f'/api/actions/{action["id"]}/submit', {"expected_revision": action["revision"], "binding_hash": action["binding_hash"]})
+            before = len(self.calls)
+            readiness = client.get(f'{PREFIX}/missions/{mission["id"]}/execution-readiness')
+            self.assertEqual(readiness.status_code, 200)
+            self.assertTrue(readiness.json()["can_prepare"])
+            self.assertEqual(len(self.calls), before)
             denied = client.post(f'/api/actions/{action["id"]}/execute', headers=headers,
                 json={"expected_revision": action["revision"], "decision_id": str(uuid4()), "idempotency_key": "before-review"})
             self.assertNotEqual(denied.status_code, 200)
             self.assertEqual(sum(r.method == "POST" for r in self.calls), 0)
             client.cookies.set("vitaai_session", self.review_token, domain="testserver.local", path="/")
+            ready = client.get(f'{PREFIX}/missions/{mission["id"]}/execution-readiness').json()
+            self.assertFalse(ready["can_prepare"])
+            self.assertTrue(ready["actions"][0]["can_write"])
             decision = post(f'/api/actions/{action["id"]}/review', {"expected_revision": action["revision"],
                 "binding_hash": action["binding_hash"], "decision": "approved"})
             execution = post(f'/api/actions/{action["id"]}/execute', {"expected_revision": action["revision"],

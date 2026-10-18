@@ -17,6 +17,39 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("Microsoft forwards only bounded paths and response flow cookies", async t => {
+  const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
+  const flow = "vitaai_microsoft_flow=opaque-flow; HttpOnly; SameSite=Lax; Path=/api/integrations/microsoft/callback; Max-Age=600";
+  const upstream = t.mock.method(globalThis, "fetch", async (_url, options) => {
+    assert.equal(options.headers.Cookie, "vitaai_session=opaque-session");
+    return Response.json({ configured: true }, { headers: { "Set-Cookie": flow } });
+  });
+  for (const [method, suffix] of [["GET", ""], ["GET", `/missions/${id}/execution-readiness`], ["POST", "/connect"], ["POST", "/signout"]]) {
+    const name = `integrations/microsoft${suffix}`;
+    const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
+      method, headers: { host: "127.0.0.1:3000", cookie: "vitaai_session=opaque-session; vitaai_microsoft_flow=never-forward; other=private",
+        "X-VitaAi-Request": "1" }, ...(method === "POST" ? { body: "{}" } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(response.headers.get("set-cookie"), method === "POST" ? flow : null);
+    const call = upstream.mock.calls.at(-1).arguments;
+    assert.equal(call[0], `http://127.0.0.1:8000/api/${name}`);
+    if (method === "POST") assert.equal(call[1].headers.Origin, "http://127.0.0.1:3000");
+  }
+  upstream.mock.resetCalls();
+  for (const [method, suffix] of [["GET", "/connect"], ["POST", ""], ["GET", "/callback?code=private&state=private"],
+    ["POST", `/missions/${id}/execution-readiness`], ["GET", "/missions/invalid/execution-readiness"], ["HEAD", "/signout"]]) {
+    const name = `integrations/microsoft${suffix}`;
+    const response = await route.exports[method === "POST" ? "POST" : "GET"](new NextRequest(`http://localhost:3000/api/${name}`, {
+      method, headers: { host: "127.0.0.1:3000" },
+    }), { params: Promise.resolve({ path: name.split("?")[0].split("/") }) });
+    assert.equal(response.status, 404);
+  }
+  assert.equal(upstream.mock.callCount(), 0);
+});
+
 test("loopback Host binds POST origin despite Next URL normalization", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async (_url, options) => {
     assert.equal(options.headers.Cookie, "vitaai_session=opaque-session");

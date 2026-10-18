@@ -7,6 +7,7 @@ import { api, type AccountView, type ModelRun, type Portfolio, type ProviderStat
 import { currentDecision, kindLabel, postWorkflow, readMission, steps, type Action, type Decision,
   type Mission, type MissionData, type OutcomeRequest, type Payload, type Plan, type PlanRequest, type Step } from "@/lib/workflow";
 import { useSession } from "./session-gate";
+import type { components } from "@/lib/api.generated";
 
 function useOperation() {
   const controller = useRef<AbortController | null>(null);
@@ -44,6 +45,59 @@ export function MissionWorkspace() {
 }
 
 type Directory = { portfolio: Portfolio; missions: Mission[]; provider: ProviderStatus; generation: number };
+function MicrosoftConnection({ invalidate, changed, blocked = false }: { invalidate: () => void; changed: (message?: string) => void; blocked?: boolean }) {
+  const actor = useSession()?.actor;
+  const [status, setStatus] = useState<components["schemas"]["MicrosoftStatus"] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const started = useRef(false);
+  const op = useOperation();
+  useEffect(() => {
+    const controller = new AbortController();
+    api<components["schemas"]["MicrosoftStatus"]>("integrations/microsoft", { signal: controller.signal })
+      .then(value => { if (!controller.signal.aborted) setStatus(value); })
+      .catch(() => { if (!controller.signal.aborted) setError("Microsoft status unavailable. Refresh current state."); });
+    return () => controller.abort();
+  }, []);
+  const sameHost = !!status && status.connection_origin === window.location.origin;
+  function change(action: "connect" | "signout") {
+    if (started.current || blocked || op.blocked || !status || (action === "connect"
+      && (!sameHost || !status.configured || actor?.role === "viewer"))) return;
+    started.current = true;
+    invalidate();
+    void op.run(async signal => {
+      let message: string | undefined;
+      try {
+        const result = await postWorkflow<components["schemas"]["MicrosoftStart"] | components["schemas"]["MicrosoftStatus"]>(
+          `integrations/microsoft/${action}`, {}, signal);
+        if (!signal.aborted && action === "connect" && "authorization_url" in result) {
+          const url = new URL(result.authorization_url);
+          if (url.protocol !== "https:" || url.hostname !== "login.microsoftonline.com" || url.port || url.username || url.password) {
+            throw new Error("Microsoft authorization URL is unavailable.");
+          }
+          window.location.assign(url.href);
+        }
+      } catch {
+        message = "Microsoft connection request may have committed. Refresh current records before another operation.";
+      } finally {
+        if (!signal.aborted) changed(message);
+        else window.dispatchEvent(new Event("vitaai-microsoft-changed"));
+      }
+    });
+  }
+  return <section aria-label="Microsoft connection" className="mission-step"><h2>Microsoft connection</h2>
+    <p>Creates unsent Outlook drafts after exact approval. Email sending is unavailable. Connection status grants no execution authority.</p>
+    {error && <p role="alert">{error}</p>}
+    {!status ? <p role="status">Loading connection status...</p> : <>
+      <p>{status.configured ? "Configured" : "Unconfigured"} · {status.connected ? "Connected" : "Disconnected or expired"} · Draft writes {status.write_configured ? "configured" : "disabled"}</p>
+      {status.connected && <p>Mailbox {status.mailbox_id} · binding {status.binding_id} · expires {new Date(status.expires_at! * 1000).toISOString()}</p>}
+      {!sameHost && <p>To connect, sign in at <a href={`${status.connection_origin}/missions`}>{status.connection_origin}</a> so the callback uses the same host.</p>}
+      <p>Reconnect invalidates existing write previews. Prepare and review again before writing; same-mailbox reauthorization supports retained-ID readback only.</p>
+      <button disabled={blocked || op.blocked || !status.configured || !sameHost || actor?.role === "viewer"} onClick={() => change("connect")}>{status.connected ? "Reconnect Microsoft" : "Connect Microsoft"}</button>
+      <button disabled={blocked || op.blocked} onClick={() => change("signout")}>Sign out Microsoft</button>
+    </>}
+  </section>;
+}
+
 function MissionDirectory() {
   const params = useSearchParams();
   const router = useRouter();
@@ -51,12 +105,15 @@ function MissionDirectory() {
   const [loaded, setLoaded] = useState<Directory | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [connectionBusy, setConnectionBusy] = useState(false);
   useEffect(() => {
     const refresh = () => setGeneration(value => value + 1);
+    const microsoftFinished = () => { setConnectionBusy(false); refresh(); };
     window.addEventListener("vitaai-source-changed", refresh);
     window.addEventListener("vitaai-workflow-changed", refresh);
+    window.addEventListener("vitaai-microsoft-changed", microsoftFinished);
     window.addEventListener("focus", refresh);
-    return () => { window.removeEventListener("vitaai-source-changed", refresh); window.removeEventListener("vitaai-workflow-changed", refresh); window.removeEventListener("focus", refresh); };
+    return () => { window.removeEventListener("vitaai-source-changed", refresh); window.removeEventListener("vitaai-workflow-changed", refresh); window.removeEventListener("vitaai-microsoft-changed", microsoftFinished); window.removeEventListener("focus", refresh); };
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -73,7 +130,7 @@ function MissionDirectory() {
   const selected = loaded?.missions.find(item => item.id === selectedId);
   const accountId = requestedAccount || selected?.account_id || loaded?.portfolio.accounts[0]?.account.id;
   const account = loaded?.portfolio.accounts.find(item => item.account.id === accountId);
-  const current = loaded?.generation === generation;
+  const current = loaded?.generation === generation && !connectionBusy;
   function refresh(message?: string) { setError(null); setNotice(message || null); setGeneration(value => value + 1); }
   function select(accountId: string, mission?: string) {
     const next = new URLSearchParams({ account: accountId });
@@ -84,7 +141,8 @@ function MissionDirectory() {
     <header className="mission-heading"><div><Link href={`/?persona=seller${account ? `&account=${account.account.id}` : ""}`}>← Portfolio</Link>
       <h1>Governed missions</h1><p className="muted">Evidence → reviewed action → recorded follow-up</p></div>
       <button onClick={() => refresh()}>Refresh current state</button></header>
-    <p className="mission-disclosure">Preparation defaults to simulation. Live HubSpot work requires server configuration, explicit selection and exact authenticated approval. Provider creation does not establish a business outcome.</p>
+    <p className="mission-disclosure">Preparation defaults to simulation. Live work requires server configuration, explicit selection and exact authenticated approval. Outlook creates unsent drafts only. Provider creation does not establish a business outcome.</p>
+    <MicrosoftConnection key={generation} blocked={connectionBusy} invalidate={() => setConnectionBusy(true)} changed={message => { setConnectionBusy(false); refresh(message); }} />
     {notice && <p role="status">{notice}</p>}
     {error && <p role="alert" className="error-banner">{error}</p>}
     {!current ? <p role="status">Loading current missions...</p> : <div className="mission-layout">
@@ -222,8 +280,15 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
   const mixed = new Set(actions.map(action => action.mode)).size > 1;
   const destinationMatches = (action: Action) => !!readiness?.destination && Object.entries(action.destination)
     .every(([key, value]) => readiness.destination?.[key as keyof typeof readiness.destination] === value);
-  if (live && (!readiness || actions.some(action => action.mode === "live" && (!action.provider_request
-    || !["hubspot_task_create", "hubspot_note_create"].includes(action.payload.kind))))) return <section aria-label="Live mission read-only">
+  const microsoftFor = (action: Action) => data.microsoft?.actions.find(record => record.action_id === action.id
+    && record.action_revision === action.revision && record.binding_hash === action.binding_hash);
+  const canWrite = (action: Action) => action.destination.provider === "microsoft" ? !!microsoftFor(action)?.can_write
+    : !!readiness?.can_prepare && destinationMatches(action);
+  const canReconcile = (action: Action) => action.destination.provider === "microsoft" ? !!microsoftFor(action)?.can_reconcile
+    : !!readiness?.can_reconcile && destinationMatches(action);
+  if (live && actions.some(action => action.mode === "live" && (!action.provider_request
+    || (action.payload?.kind === "outlook_draft_create" ? action.destination?.connector_id !== "microsoft-live" || !data.microsoft
+      : !readiness || action.destination?.connector_id !== "hubspot-live")))) return <section aria-label="Live mission read-only">
     <h2>{account.account.name} · live API mission</h2>
     <p>Live controls are unavailable for these records. Refresh current readiness or inspect the authenticated API; saved records remain authoritative.</p>
     <h3>Saved actions</h3>
@@ -250,6 +315,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
     <span className="mission-id">{mission.id}</span></div>
     <p className="muted">Server step: {mission.current_step}. Viewing a step does not advance this mission.</p>
     <p>HubSpot writes: {readiness?.write_configured ? "Configured, unverified" : "Unavailable"}. Readback: {readiness?.readback_configured ? "Configured, unverified" : "Unavailable"}. Configuration is not connectivity or execution evidence.</p>
+    {choice.steps.some(item => item.kind === "outlook_draft_create") && <p>Microsoft preparation: {data.microsoft?.can_prepare ? "Available for your connected mailbox" : "Unavailable; connect your mailbox or check server configuration"}. Saved drafts retain the original maker mailbox. Reconnect invalidates old write previews; same-mailbox reauthorization permits retained-ID readback only.</p>}
     {mixed && <p role="alert">Mixed simulation/live actions cannot execute together. Before any claim, save every selected step in the same mode and obtain fresh review.</p>}
     {mission.supersedes_id && <p>Replaces <Link href={`/missions?account=${mission.account_id}&mission=${mission.supersedes_id}`}>the previous mission</Link>. Prepare and review new actions before execution.</p>}
     {mission.superseded_by_id && <p>This mission is preserved as history. <Link href={`/missions?account=${mission.account_id}&mission=${mission.superseded_by_id}`}>Open its replacement</Link>.</p>}
@@ -282,8 +348,8 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
         <p>Save all selected steps before submitting. Saving an edit invalidates every related review. Unsaved input is local to this form.</p>
         {choice.steps.filter(item => step === "CRM Note" ? item.kind === "hubspot_note_create" : item.kind !== "hubspot_note_create")
           .map(item => <ActionEditor key={`${item.id}:${actionFor(item)?.revision || 0}`} item={item} action={actionFor(item)} disabled={disabled || frozen}
-            liveAvailable={!!readiness?.can_prepare} save={(payload, mode) => mutate(`missions/${mission.id}/prepare`, { expected_revision: mission.revision,
-              alternative_id: choice.id, step_id: item.id, mode, connector_id: mode === "live" ? "hubspot-live"
+            liveAvailable={item.kind === "outlook_draft_create" ? !!data.microsoft?.can_prepare : !!readiness?.can_prepare} save={(payload, mode) => mutate(`missions/${mission.id}/prepare`, { expected_revision: mission.revision,
+              alternative_id: choice.id, step_id: item.id, mode, connector_id: mode === "live" ? item.kind === "outlook_draft_create" ? "microsoft-live" : "hubspot-live"
                 : item.kind === "outlook_draft_create" ? "simulation-microsoft" : "simulation-hubspot", payload })} />)}
         {!choice.steps.some(item => step === "CRM Note" ? item.kind === "hubspot_note_create" : item.kind !== "hubspot_note_create") && <p>This alternative has no action in this step.</p>}
         {frozen && <p>Content is frozen after the first execution claim or mission completion.</p>}
@@ -294,7 +360,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
           const decision = currentDecision(action, decisions);
           const reviewBlocked = mission.status === "completed" || executions.some(item => item.action_id === action.id)
             || executions.some(item => item.status !== "succeeded")
-            || (action.mode === "live" && (!readiness?.can_prepare || !destinationMatches(action)));
+            || (action.mode === "live" && !canWrite(action));
           return <article className="mission-action" key={action.id}><h4>{kindLabel(action.payload.kind)} · {action.status}</h4><ExactPreview action={action} />
             {decision ? <p>Recorded {decision.decision.replaceAll("_", " ")} by {decision.reviewer_id}. Expires {decision.expires_at}. {decision.reason}</p>
               : action.status === "submitted" ? <ReviewForm disabled={disabled || !reviewer || reviewBlocked} submit={(decision, reason) => mutate(`actions/${action.id}/review`, {
@@ -312,7 +378,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
         <details><summary>All recorded review decisions</summary>{decisions.map(item => <p key={item.id}>
           Action {item.action_id} · revision {item.action_revision} · {item.decision} · {item.decided_at} · {item.reason || "No reason supplied"}</p>)}</details>
       </>}
-      {step === "Execution" && <><p>Execution uses the saved mode, payload, destination and approval. Live execution creates a HubSpot record; simulation creates a local resource. Refreshing never dispatches.</p>
+      {step === "Execution" && <><p>Execution uses the saved mode, payload, destination and approval. Live execution creates a HubSpot record or unsent Outlook draft; simulation creates a local resource. Refreshing never dispatches.</p>
         {choice.steps.map(item => {
           const action = actionFor(item);
           if (!action) return <p key={item.id}>{kindLabel(item.kind)} has no saved action.</p>;
@@ -325,14 +391,15 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
           });
           const allApproved = actions.length === choice.steps.length && actions.every(a => {
             const approval = currentDecision(a, decisions);
-            return executions.some(e => e.action_id === a.id && e.status === "succeeded") || (approval?.decision === "approved" && Date.parse(approval.expires_at) > Date.now());
+            return executions.some(e => e.action_id === a.id && e.status === "succeeded") || (approval?.decision === "approved" && Date.parse(approval.expires_at) > Date.now()
+              && (a.mode !== "live" || canWrite(a)));
           });
-          const dispatchBlocked = disabled || mixed || (action.mode === "live" && (!readiness?.can_prepare || !destinationMatches(action)));
+          const dispatchBlocked = disabled || mixed || (action.mode === "live" && !canWrite(action));
           return <article className="mission-action" key={item.id}><h4>{kindLabel(item.kind)} · {action.mode}</h4><ExactPreview action={action} />
             {execution ? <><p>Execution {execution.id}: <strong>{execution.status}</strong> · attempt {execution.attempt}</p>
               {execution.status === "result_unknown" && <p role="status">Result unknown. The claim is retained; do not repeat this write.</p>}
               {!["succeeded", "failed"].includes(execution.status) && <button disabled={op.blocked || !reviewer || superseded || mission.status === "completed"
-                || (action.mode === "live" && execution.status !== "claimed" && (!readiness?.can_reconcile || !destinationMatches(action)))}
+                || (action.mode === "live" && execution.status !== "claimed" && !canReconcile(action))}
                 onClick={() => void mutate(`executions/${execution.id}/reconcile`, { expected_revision: execution.revision })}>Reconcile recorded execution</button>}
               {!["succeeded", "failed"].includes(execution.status) && !reviewer && <p>A current reviewer or admin must reconcile this result.</p>}
               {execution.status === "failed" && <button disabled={dispatchBlocked || mission.status === "completed" || !allApproved || !dependenciesReady}
@@ -370,7 +437,7 @@ function ActionEditor({ item, action, disabled, liveAvailable, save }: {
   const [dueEdited, setDueEdited] = useState(false);
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (disabled || (mode === "live" && (!liveAvailable || item.kind === "outlook_draft_create"))) return;
+    if (disabled || (mode === "live" && !liveAvailable)) return;
     if (mode === "live" && item.kind === "hubspot_task_create" && (!due || !Number.isFinite(Date.parse(`${due}Z`)))) {
       setError("Choose an explicit UTC due time for the live task."); return;
     }
@@ -384,7 +451,7 @@ function ActionEditor({ item, action, disabled, liveAvailable, save }: {
   return <article className="mission-action"><h4>{kindLabel(item.kind)}</h4><form onSubmit={submit} className="mission-form"><fieldset disabled={disabled}>
     <label>Preparation mode<select aria-label="Preparation mode" value={mode} onChange={event => { setMode(event.target.value as Action["mode"]); setError(null); }}>
       <option value="simulation">Simulation · local resource</option>
-      {item.kind !== "outlook_draft_create" && <option value="live" disabled={!liveAvailable}>Live HubSpot · external record</option>}
+      <option value="live" disabled={!liveAvailable}>{item.kind === "outlook_draft_create" ? "Live Microsoft · unsent draft" : "Live HubSpot · external record"}</option>
     </select></label>
     {mode === "live" && <p>Saving creates an unapproved preview. Review the exact returned provider request, mode and destination before authorizing a live write.</p>}
     {item.kind === "outlook_draft_create" && <label>Recipients (comma separated, ordered)<input required value={to} maxLength={2010} onChange={event => setTo(event.target.value)} /></label>}

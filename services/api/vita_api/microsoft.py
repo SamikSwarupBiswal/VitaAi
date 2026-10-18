@@ -4,7 +4,7 @@ import json
 import re
 import secrets
 from datetime import UTC, datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -51,6 +51,26 @@ class MicrosoftStatus(Contract):
     binding_id: str | None = None
     mailbox_id: str | None = None
     expires_at: int | None = None
+    connection_origin: str
+
+
+class MicrosoftActionReadiness(Contract):
+    action_id: UUID
+    action_revision: int
+    binding_hash: str
+    can_write: bool
+    can_reconcile: bool
+
+
+class MicrosoftExecutionReadiness(Contract):
+    mission_id: UUID
+    mission_revision: int
+    account_id: UUID
+    account_revision: int
+    organization_id: str
+    can_prepare: bool
+    destination: DestinationBinding | None
+    actions: tuple[MicrosoftActionReadiness, ...]
 
 
 class MicrosoftStart(Contract):
@@ -85,6 +105,10 @@ class Microsoft:
 
     def cipher(self):
         return Fernet(self.settings.microsoft_token_key.get_secret_value().encode("ascii"))
+
+    @property
+    def connection_origin(self):
+        return "http://" + urlsplit(self.settings.microsoft_redirect_uri).hostname + ":3000"
 
     def seal(self, value):
         return self.cipher().encrypt(canonical_json(value)).decode("ascii")
@@ -196,6 +220,8 @@ class Microsoft:
 
     def binding(self, connection, actor):
         self.allowed(actor)
+        if actor.role == "viewer":
+            raise PolicyDenied("microsoft_reconnect_required", 409)
         row = connection.execute(select(bindings).where(bindings.c.actor_id == actor.id,
             bindings.c.organization_id == actor.organization_id, bindings.c.revoked.is_(False),
             bindings.c.configuration == self.fingerprint(), bindings.c.expires_at > int(self.clock().timestamp()))).mappings().first()
@@ -222,7 +248,7 @@ class Microsoft:
             return MicrosoftStatus(configured=configured, connected=row is not None,
                 write_configured=configured and self.settings.microsoft_write_enabled,
                 binding_id=row["id"] if row else None, mailbox_id=row["mailbox_id"] if row else None,
-                expires_at=row["expires_at"] if row else None)
+                expires_at=row["expires_at"] if row else None, connection_origin=self.connection_origin)
 
     def signout(self, actor_id, session_token):
         with self._tx(actor_id, session_token, write=False) as (connection, actor):

@@ -23,9 +23,13 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const hubspotPath = request.method === "GET"
     ? new RegExp(`^integrations/hubspot(?:/(?:runs|observations|sources)/${uuid}|/accounts/${uuid}/(?:preview|execution-readiness))?$`).test(joined)
     : request.method === "POST" && new RegExp(`^integrations/hubspot/accounts/${uuid}/(?:sync|promote|restore-sample)$`).test(joined);
+  // Callback stays on the fixed API redirect; codes/state never enter the Next proxy.
+  const microsoftPath = request.method === "GET"
+    ? new RegExp(`^integrations/microsoft(?:/missions/${uuid}/execution-readiness)?$`).test(joined)
+    : request.method === "POST" && /^integrations\/microsoft\/(?:connect|signout)$/.test(joined);
   const allowed = request.method === "GET"
-    ? workflowPath || hubspotPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
-    : workflowPath || hubspotPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
+    ? workflowPath || hubspotPath || microsoftPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
+    : workflowPath || hubspotPath || microsoftPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
   try {
     const body = request.method === "POST" ? await request.text() : undefined;
@@ -35,7 +39,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     const upstream = await fetch(`http://127.0.0.1:8000/api/${joined}`, {
       method: request.method, body, cache: "no-store",
       headers: {
-        "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}),
+        "Content-Type": "application/json", ...(origin ? { Origin: origin }
+          : microsoftPath && request.method === "POST" ? { Origin: `${request.nextUrl.protocol}//${host}` } : {}),
         ...(request.headers.get("x-vitaai-request") === "1" ? { "X-VitaAi-Request": "1" } : {}),
         ...(request.cookies.get("vitaai_session") ? { Cookie: `vitaai_session=${encodeURIComponent(request.cookies.get("vitaai_session")!.value)}` } : {}),
       },
@@ -46,8 +51,11 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     }
     const response = NextResponse.json(await upstream.json(), { status: upstream.status });
     response.headers.set("Cache-Control", "no-store");
+    if (microsoftPath) response.headers.set("Referrer-Policy", "no-referrer");
     for (const cookie of upstream.headers.getSetCookie()) {
-      if (cookie.startsWith("vitaai_session=")) response.headers.append("Set-Cookie", cookie);
+      if (cookie.startsWith("vitaai_session=") || (request.method === "POST"
+        && /^integrations\/microsoft\/(?:connect|signout)$/.test(joined)
+        && cookie.startsWith("vitaai_microsoft_flow="))) response.headers.append("Set-Cookie", cookie);
     }
     return response;
   } catch {

@@ -52,7 +52,7 @@ function harness(role = "reviewer", step = "Execution") {
   const components = load("../components/mission-workspace.tsx", { react: hooks, "@/lib/api": { api }, "@/lib/workflow": workflow,
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) },
     "next/navigation": { useSearchParams: () => new URLSearchParams({ step }), useRouter: () => ({ replace() {} }) },
-  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview;");
+  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory;");
   function render(component, props) {
     cursor = 0; const tree = component(props), pending = effects; effects = []; pending.forEach(fn => fn()); return tree;
   }
@@ -61,6 +61,123 @@ function harness(role = "reviewer", step = "Execution") {
     unmount() { cleanups.forEach(fn => fn?.()); } };
 }
 const button = (tree, label) => walk(tree, n => n.type === "button" && [n.props.children].flat().join("") === label)[0];
+
+function microsoftData() {
+  const value = data(), payload = { kind: "outlook_draft_create", to: ["one@example.com", "two@example.com"], subject: " Exact Ω ", body_text: "Body\n Ω " };
+  value.actions = [{ ...action, payload, destination: { ...destination, connector_id: "microsoft-live", provider: "microsoft",
+    delegated_user_id: "maker", mailbox_id: "maker", target_resource_id: "original-binding" }, provider_request: JSON.stringify(payload) }];
+  value.plan.alternatives[0].steps = [{ ...item, kind: payload.kind }];
+  value.microsoft = { mission_id: "mission", mission_revision: 8, account_id: "account", account_revision: 1,
+    organization_id: "org", can_prepare: false, destination: null,
+    actions: [{ action_id: "action", action_revision: 4, binding_hash: "exact-hash", can_write: true, can_reconcile: true }] };
+  return value;
+}
+
+test("live draft preparation is explicit, ordered and uses current editor capability", async () => {
+  const app = harness("seller", "Outreach"), value = microsoftData();
+  value.microsoft.can_prepare = true;
+  const editor = walk(app.panels(value), n => n.type === app.components.editor)[0];
+  assert.equal(editor.props.liveAvailable, true);
+  const pending = editor.props.save(value.actions[0].payload, "live"); await flush();
+  assert.deepEqual(JSON.parse(app.requests[0].init.body), { expected_revision: 8, alternative_id: "choice", step_id: "task",
+    mode: "live", connector_id: "microsoft-live", payload: value.actions[0].payload });
+  app.requests[0].resolve({}); await pending;
+  const draft = harness(), props = { ...editor.props, save: async (payload, mode) => { props.saved = { payload, mode }; } };
+  let tree = draft.render(draft.components.editor, props);
+  assert.equal(walk(tree, n => n.type === "select")[0].props.value, "live");
+  walk(tree, n => n.type === "form")[0].props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(props.saved, { payload: { schema_version: "1", ...value.actions[0].payload }, mode: "live" });
+  const unavailable = harness("seller", "Outreach"), blocked = microsoftData();
+  assert.equal(walk(unavailable.panels(blocked), n => n.type === unavailable.components.editor)[0].props.liveAvailable, false);
+});
+
+test("original maker readiness enables reviewer without own mailbox; reconnect only enables readback", () => {
+  for (const [role, changes, permitted] of [["reviewer", {}, true], ["seller", {}, true], ["viewer", {}, false],
+    ["reviewer", { can_write: false }, false], ["reviewer", { binding_hash: "obsolete" }, false]]) {
+    const app = harness(role), value = microsoftData(); Object.assign(value.microsoft.actions[0], changes);
+    assert.equal(button(app.panels(value), "Execute live Unsent Outlook draft").props.disabled, !permitted);
+  }
+  const review = harness("reviewer", "Approval"), value = microsoftData(); value.decisions = [];
+  assert.equal(walk(review.panels(value), n => typeof n.type === "function" && n.type.name === "ReviewForm")[0].props.disabled, false);
+  for (const [role, allowed] of [["reviewer", true], ["admin", true], ["seller", false], ["viewer", false]]) {
+    const app = harness(role), value = microsoftData(); value.microsoft.actions[0].can_write = false;
+    value.executions = [{ id: "execution", action_id: "action", status: "result_unknown", revision: 2 }];
+    value.mission.evidence.snapshot_hash = "stale";
+    assert.equal(button(app.panels(value), "Reconcile recorded execution").props.disabled, !allowed);
+    value.microsoft.actions[0].can_reconcile = false;
+    assert.equal(button(app.panels(value), "Reconcile recorded execution").props.disabled, true);
+  }
+});
+
+test("loader rejects stale Microsoft mission/action readiness", async () => {
+  for (const update of [r => { r.mission_revision = 9; }, r => { r.actions[0].binding_hash = "old"; }, r => { r.account_id = "foreign"; }]) {
+    const app = harness(), value = microsoftData(), props = { id: "mission", configured: false, refresh() {} };
+    update(value.microsoft); app.render(app.components.loader, props); app.requests.shift().resolve(value.mission); await flush();
+    for (const request of app.requests.splice(0)) request.resolve(request.url.startsWith("plans/") ? value.plan
+      : request.url.startsWith("accounts/") ? value.account : request.url.includes("microsoft/") ? value.microsoft
+      : request.url.endsWith("execution-readiness") ? value.readiness : request.url.endsWith("/actions") ? value.actions : []);
+    await flush(); for (const request of app.requests.splice(0)) request.resolve([]);
+    await flush(); app.requests.shift().resolve(value.mission); await flush();
+    assert.match(renderToStaticMarkup(app.render(app.components.loader, props)), /Microsoft binding changed/);
+  }
+});
+
+test("connection locks duplicates, blocks wrong host/viewer and refreshes after uncertain completion", async t => {
+  const events = [], navigations = [];
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin: "http://127.0.0.1:3000", assign: url => navigations.push(url) }, dispatchEvent: event => events.push(event.type) } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "window", previous); else delete globalThis.window; });
+  const status = { configured: true, connected: true, write_configured: true, connection_origin: "http://127.0.0.1:3000",
+    mailbox_id: "maker", binding_id: "binding", expires_at: 1800000000 };
+  for (const outcome of ["success", "lost", "unmounted", "unsafe-url"]) {
+    const app = harness(), changes = [], invalidations = [], props = { invalidate: () => invalidations.push(true), changed: m => changes.push(m) };
+    let tree = app.render(app.components.connection, props); app.requests.shift().resolve(status); await flush();
+    tree = app.render(app.components.connection, props);
+    button(tree, "Reconnect Microsoft").props.onClick(); button(tree, "Reconnect Microsoft").props.onClick(); await flush();
+    assert.equal(app.requests.length, 1); assert.equal(invalidations.length, 1);
+    const request = app.requests.shift(); assert.equal(request.url, "integrations/microsoft/connect");
+    if (outcome === "unmounted") { app.unmount(); assert.equal(request.init.signal.aborted, true); }
+    if (outcome === "lost") request.reject(new Error("Lost response"));
+    else request.resolve({ authorization_url: outcome === "unsafe-url" ? "https://foreign.example/authorize" : "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize" });
+    await flush();
+    if (outcome === "unmounted") assert.equal(changes.length, 0);
+    else { assert.equal(changes.length, 1); if (outcome !== "success") assert.match(changes[0], /may have committed/); }
+  }
+  assert.equal(navigations.length, 1); assert.deepEqual(events, ["vitaai-microsoft-changed"]);
+  for (const [role, origin] of [["viewer", status.connection_origin], ["seller", "http://localhost:3000"]]) {
+    const app = harness(role), props = { invalidate() {}, changed() {} };
+    app.render(app.components.connection, props); app.requests.shift().resolve({ ...status, connection_origin: origin }); await flush();
+    const tree = app.render(app.components.connection, props);
+    assert.equal(button(tree, "Reconnect Microsoft").props.disabled, true);
+    button(tree, "Reconnect Microsoft").props.onClick(); assert.equal(app.requests.length, 0);
+    button(tree, "Sign out Microsoft").props.onClick(); await flush(); assert.equal(app.requests.length, 1);
+    app.requests[0].resolve({}); await flush();
+  }
+});
+
+test("connection completion after a focus remount releases directory lock and reloads authority", async t => {
+  const listeners = new Map();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name),
+  } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "window", previous); else delete globalThis.window; });
+  const app = harness(), directory = () => app.render(app.components.directory, {});
+  const loading = tree => walk(tree, n => n.type === "p" && n.props.children === "Loading current missions...").length > 0;
+  const resolveReads = async () => { for (const request of app.requests.splice(0)) request.resolve(request.url === "portfolio"
+    ? { accounts: [] } : request.url === "missions" ? [] : { configured: false }); await flush(); };
+  directory(); await resolveReads();
+  let tree = directory(), connection = walk(tree, n => n.type === app.components.connection)[0];
+  connection.props.invalidate();
+  tree = directory(); assert.equal(loading(tree), true);
+  listeners.get("focus")(); directory(); await resolveReads();
+  tree = directory(); connection = walk(tree, n => n.type === app.components.connection)[0];
+  assert.equal(connection.props.blocked, true);
+  listeners.get("vitaai-microsoft-changed")(); directory(); await resolveReads();
+  tree = directory(); connection = walk(tree, n => n.type === app.components.connection)[0];
+  assert.equal(connection.props.blocked, false);
+  assert.equal(loading(tree), false);
+});
 
 test("preparation defaults to simulation; explicit live task requires UTC due time", () => {
   const app = harness(); let saved;
@@ -78,7 +195,7 @@ test("preparation defaults to simulation; explicit live task requires UTC due ti
   const denied = harness(), blocked = denied.render(denied.components.editor, { ...props, liveAvailable: false });
   assert.equal(walk(blocked, n => n.type === "option" && n.props.value === "live")[0].props.disabled, true);
   const outlook = harness(), draft = outlook.render(outlook.components.editor, { ...props, item: { ...item, kind: "outlook_draft_create" } });
-  assert.equal(walk(draft, n => n.type === "option" && n.props.value === "live").length, 0);
+  assert.equal(walk(draft, n => n.type === "option" && n.props.value === "live")[0].props.children, "Live Microsoft · unsent draft");
 });
 
 test("parent sends exact live preparation; lost response refreshes and duplicate clicks lock", async () => {

@@ -254,6 +254,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/microsoft/missions/{mission_id}/execution-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Microsoft Readiness */
+        get: operations["microsoft_readiness_api_integrations_microsoft_missions__mission_id__execution_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/accounts/{account_id}/execution-readiness": {
         parameters: {
             query?: never;
@@ -1704,6 +1721,58 @@ export interface components {
              */
             password: string;
         };
+        /** MicrosoftActionReadiness */
+        MicrosoftActionReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Action Id
+             * Format: uuid
+             */
+            action_id: string;
+            /** Action Revision */
+            action_revision: number;
+            /** Binding Hash */
+            binding_hash: string;
+            /** Can Write */
+            can_write: boolean;
+            /** Can Reconcile */
+            can_reconcile: boolean;
+        };
+        /** MicrosoftExecutionReadiness */
+        MicrosoftExecutionReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Mission Id
+             * Format: uuid
+             */
+            mission_id: string;
+            /** Mission Revision */
+            mission_revision: number;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Organization Id */
+            organization_id: string;
+            /** Can Prepare */
+            can_prepare: boolean;
+            destination: components["schemas"]["DestinationBinding"] | null;
+            /** Actions */
+            actions: components["schemas"]["MicrosoftActionReadiness"][];
+        };
         /** MicrosoftStart */
         MicrosoftStart: {
             /**
@@ -1735,6 +1804,8 @@ export interface components {
             mailbox_id?: string | null;
             /** Expires At */
             expires_at?: number | null;
+            /** Connection Origin */
+            connection_origin: string;
         };
         /** Mission */
         Mission: {
@@ -3027,6 +3098,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MicrosoftStatus"];
+                };
+            };
+        };
+    };
+    microsoft_readiness_api_integrations_microsoft_missions__mission_id__execution_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MicrosoftExecutionReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -23,7 +23,11 @@ from .governance import (
 from .hubspot import HubSpotFailure
 from .hubspot_execution import HubSpotExecutionReadiness, provider_request
 from .identity import Actor, sessions, token_digest, users
-from .microsoft import draft_request
+from .microsoft import (
+    MicrosoftActionReadiness,
+    MicrosoftExecutionReadiness,
+    draft_request,
+)
 from .pipeline import action_role, governance_role
 from .scoring import assess
 from .storage import accounts, runs, selected_evidence
@@ -145,6 +149,40 @@ class Workflow:
     def _base(self, actor, **changes):
         return {"id": uuid4(), "organization_id": actor.organization_id, "created_at": self.clock(),
                 "revision": 1, "correlation_id": uuid4(), **changes}
+
+    def microsoft_readiness(self, actor_id, mission_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            mission = self._get(connection, actor, missions, mission_id, Mission)
+            view = self._view(connection, actor, mission.account_id)
+            destination = None
+            if self.microsoft:
+                try:
+                    destination = self.microsoft.destination(connection, actor, mission.account_id, write=False)
+                except PolicyDenied:
+                    pass  # No connection; never substitute the reviewer's mailbox for the maker's.
+            writing = bool(self.microsoft and self.microsoft.settings.microsoft_write_enabled)
+            readiness = []
+            for action in self._actions(connection, actor, mission.id):
+                if action.mode != "live" or action.destination.provider != "microsoft":
+                    continue
+                current = None
+                if self.microsoft:
+                    try:
+                        maker = self._actor(connection, action.preparer_id)
+                        if maker.organization_id == actor.organization_id:
+                            current = self.microsoft.destination(connection, maker, mission.account_id, write=False)
+                    except PolicyDenied:
+                        pass
+                same_mailbox = current is not None and current.model_copy(update={
+                    "target_resource_id": action.destination.target_resource_id}) == action.destination
+                readiness.append(MicrosoftActionReadiness(action_id=action.id, action_revision=action.revision,
+                    binding_hash=action.binding_hash,
+                    can_write=writing and actor.role != "viewer" and current == action.destination,
+                    can_reconcile=same_mailbox and actor.role in {"admin", "reviewer"}))
+            return MicrosoftExecutionReadiness(mission_id=mission.id, mission_revision=mission.revision,
+                account_id=mission.account_id, account_revision=view.account.revision, organization_id=actor.organization_id,
+                can_prepare=writing and destination is not None and actor.role != "viewer",
+                destination=destination, actions=tuple(readiness))
 
     def _get(self, connection, actor, table, entity_id, contract):
         row = connection.execute(select(table.c.payload).where(

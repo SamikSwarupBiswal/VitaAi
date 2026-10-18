@@ -3,13 +3,19 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from .contracts import ModelRun
 from .governance import PolicyDenied
 from .hubspot_execution import HubSpotExecutionReadiness, HubSpotWrites
 from .identity import Actor
-from .microsoft import COOKIE, PREFIX, MicrosoftStart, MicrosoftStatus
+from .microsoft import (
+    COOKIE,
+    PREFIX,
+    MicrosoftExecutionReadiness,
+    MicrosoftStart,
+    MicrosoftStatus,
+)
 from .workflow import Workflow
 from .workflow_contracts import (
     ActionPreview,
@@ -69,6 +75,8 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
 
     @router.post(PREFIX + "/connect", response_model=MicrosoftStart)
     def microsoft_connect(request: Request, response: Response, actor: Current):
+        if request.headers.get("origin") not in {None, microsoft.connection_origin}:
+            raise PolicyDenied("microsoft_connection_host_mismatch", 409)
         result, cookie = microsoft.begin(actor.id, request.cookies.get("vitaai_session"))
         response.set_cookie(COOKIE, cookie, httponly=True, samesite="lax", max_age=600,
                             path=PREFIX + "/callback", secure=False)
@@ -77,15 +85,20 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
     @router.get(PREFIX + "/callback")
     def microsoft_callback(request: Request):
         microsoft.complete(request.cookies.get(COOKIE), request.state.microsoft_response)
-        response = JSONResponse({"connected": True, "next": "Return to VitaAi and refresh current records."})
+        response = RedirectResponse(microsoft.connection_origin + "/missions", status_code=303)
         response.delete_cookie(COOKIE, path=PREFIX + "/callback", httponly=True, samesite="lax")
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
     @router.post(PREFIX + "/signout", response_model=MicrosoftStatus)
-    def microsoft_signout(request: Request, actor: Current):
+    def microsoft_signout(request: Request, response: Response, actor: Current):
         microsoft.signout(actor.id, request.cookies.get("vitaai_session"))
+        response.delete_cookie(COOKIE, path=PREFIX + "/callback", httponly=True, samesite="lax")
         return microsoft.status(actor.id, request.cookies.get("vitaai_session"))
+
+    @router.get(PREFIX + "/missions/{mission_id}/execution-readiness", response_model=MicrosoftExecutionReadiness)
+    def microsoft_readiness(mission_id: UUID, actor: Current, workflow: Service):
+        return workflow.microsoft_readiness(actor.id, mission_id)
 
     @router.get("/api/integrations/hubspot/accounts/{account_id}/execution-readiness",
                 response_model=HubSpotExecutionReadiness)
