@@ -21,7 +21,7 @@ from .governance import (
     transition,
 )
 from .hubspot import HubSpotFailure
-from .hubspot_execution import provider_request
+from .hubspot_execution import HubSpotExecutionReadiness, provider_request
 from .identity import Actor, sessions, token_digest, users
 from .pipeline import action_role, governance_role
 from .scoring import assess
@@ -123,6 +123,22 @@ class Workflow:
             except BaseException:
                 connection.rollback()
                 raise
+
+    def hubspot_readiness(self, actor_id, account_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            view = self._view(connection, actor, account_id)
+            destination = None
+            if self.hubspot:
+                try:
+                    destination = self.hubspot.destination(actor.organization_id, account_id, write=False)
+                except PolicyDenied:
+                    pass  # Unconfigured or unmapped: disclose no foreign connector identity.
+            readback = destination is not None
+            write = readback and self.hubspot.settings.hubspot_write_enabled
+            return HubSpotExecutionReadiness(account_id=str(account_id), organization_id=actor.organization_id,
+                account_revision=view.account.revision, write_configured=write, readback_configured=readback,
+                can_prepare=write and actor.role != "viewer",
+                can_reconcile=readback and actor.role in {"admin", "reviewer"}, destination=destination)
 
     def _base(self, actor, **changes):
         return {"id": uuid4(), "organization_id": actor.organization_id, "created_at": self.clock(),

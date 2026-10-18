@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from .contracts import ModelRun
 from .governance import PolicyDenied
-from .hubspot_execution import HubSpotWrites
+from .hubspot_execution import HubSpotExecutionReadiness, HubSpotWrites
 from .identity import Actor
 from .workflow import Workflow
 from .workflow_contracts import (
@@ -61,6 +61,11 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
 
     Current = Annotated[Actor, Depends(current)]
     Service = Annotated[Workflow, Depends(service)]
+
+    @router.get("/api/integrations/hubspot/accounts/{account_id}/execution-readiness",
+                response_model=HubSpotExecutionReadiness)
+    def hubspot_readiness(account_id: UUID, actor: Current, workflow: Service):
+        return workflow.hubspot_readiness(actor.id, account_id)
 
     @router.post("/api/plans", response_model=Plan)
     def create_plan(body: PlanRequest, actor: Current, workflow: Service):

@@ -7,10 +7,21 @@ from datetime import UTC, datetime
 import httpx
 
 from .governance import PolicyDenied, canonical_json
-from .hubspot import HubSpot, HubSpotFailure
+from .hubspot import HubSpot, HubSpotContract, HubSpotFailure
 from .workflow_contracts import DestinationBinding
 
 OBJECTS = "/crm/objects/2026-09"
+
+
+class HubSpotExecutionReadiness(HubSpotContract):
+    account_id: str
+    organization_id: str
+    account_revision: int
+    write_configured: bool
+    readback_configured: bool
+    can_prepare: bool
+    can_reconcile: bool
+    destination: DestinationBinding | None
 
 
 def provider_request(payload, destination, prepared_at):

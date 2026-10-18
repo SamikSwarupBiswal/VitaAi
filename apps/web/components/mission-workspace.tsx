@@ -50,11 +50,13 @@ function MissionDirectory() {
   const [generation, setGeneration] = useState(0);
   const [loaded, setLoaded] = useState<Directory | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     const refresh = () => setGeneration(value => value + 1);
     window.addEventListener("vitaai-source-changed", refresh);
+    window.addEventListener("vitaai-workflow-changed", refresh);
     window.addEventListener("focus", refresh);
-    return () => { window.removeEventListener("vitaai-source-changed", refresh); window.removeEventListener("focus", refresh); };
+    return () => { window.removeEventListener("vitaai-source-changed", refresh); window.removeEventListener("vitaai-workflow-changed", refresh); window.removeEventListener("focus", refresh); };
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -72,7 +74,7 @@ function MissionDirectory() {
   const accountId = requestedAccount || selected?.account_id || loaded?.portfolio.accounts[0]?.account.id;
   const account = loaded?.portfolio.accounts.find(item => item.account.id === accountId);
   const current = loaded?.generation === generation;
-  function refresh() { setError(null); setGeneration(value => value + 1); }
+  function refresh(message?: string) { setError(null); setNotice(message || null); setGeneration(value => value + 1); }
   function select(accountId: string, mission?: string) {
     const next = new URLSearchParams({ account: accountId });
     if (mission) next.set("mission", mission);
@@ -81,8 +83,9 @@ function MissionDirectory() {
   return <main className="mission-shell">
     <header className="mission-heading"><div><Link href={`/?persona=seller${account ? `&account=${account.account.id}` : ""}`}>← Portfolio</Link>
       <h1>Governed missions</h1><p className="muted">Evidence → reviewed action → recorded follow-up</p></div>
-      <button onClick={refresh}>Refresh current state</button></header>
-    <p className="mission-disclosure">This workspace prepares and executes simulations. Live API missions are read-only here.</p>
+      <button onClick={() => refresh()}>Refresh current state</button></header>
+    <p className="mission-disclosure">Preparation defaults to simulation. Live HubSpot work requires server configuration, explicit selection and exact authenticated approval. Provider creation does not establish a business outcome.</p>
+    {notice && <p role="status">{notice}</p>}
     {error && <p role="alert" className="error-banner">{error}</p>}
     {!current ? <p role="status">Loading current missions...</p> : <div className="mission-layout">
       <aside className="mission-directory"><label>Account<select aria-label="Account" value={accountId || ""} onChange={event => select(event.target.value)}>
@@ -170,7 +173,7 @@ function NewMission({ account, configured, onCreated, replaces }: {
   </>;
 }
 
-function MissionLoader({ id, configured, refresh }: { id: string; configured: boolean; refresh: () => void }) {
+function MissionLoader({ id, configured, refresh }: { id: string; configured: boolean; refresh: (message?: string) => void }) {
   const [data, setData] = useState<MissionData | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -198,12 +201,13 @@ function ExactPreview({ action }: { action: Action }) {
   </div>;
 }
 
-function MissionPanels({ data, configured, refresh }: { data: MissionData; configured: boolean; refresh: () => void }) {
+function MissionPanels({ data, configured, refresh }: { data: MissionData; configured: boolean; refresh: (message?: string) => void }) {
   const { mission, plan, account, actions, decisions, executions, receipts, audit } = data;
   const params = useSearchParams();
   const router = useRouter();
   const actor = useSession()?.actor;
   const op = useOperation();
+  const mutationStarted = useRef(false);
   const requestedStep = params.get("step");
   const step = steps.find(item => item === requestedStep) || mission.current_step;
   const choice = plan.alternatives.find(item => item.id === (mission.alternative_id || plan.selected_alternative_id))!;
@@ -213,9 +217,15 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
   const superseded = mission.status === "superseded";
   const frozen = executions.length > 0 || mission.status === "completed" || superseded;
   const disabled = op.blocked || !writer || stale || superseded;
-  if (actions.some(action => action.mode === "live")) return <section aria-label="Live mission read-only">
+  const readiness = data.readiness;
+  const live = actions.some(action => action.mode === "live");
+  const mixed = new Set(actions.map(action => action.mode)).size > 1;
+  const destinationMatches = (action: Action) => !!readiness?.destination && Object.entries(action.destination)
+    .every(([key, value]) => readiness.destination?.[key as keyof typeof readiness.destination] === value);
+  if (live && (!readiness || actions.some(action => action.mode === "live" && (!action.provider_request
+    || !["hubspot_task_create", "hubspot_note_create"].includes(action.payload.kind))))) return <section aria-label="Live mission read-only">
     <h2>{account.account.name} · live API mission</h2>
-    <p>This mission contains live provider actions. It is read-only in this simulation workspace. Live preparation, exact review, execution and reconciliation require the authenticated API.</p>
+    <p>Live controls are unavailable for these records. Refresh current readiness or inspect the authenticated API; saved records remain authoritative.</p>
     <h3>Saved actions</h3>
     {actions.map(action => <ExactPreview key={action.id} action={action} />)}
     <details><summary>Recorded decisions, execution and history</summary>
@@ -223,12 +233,24 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
     </details>
   </section>;
   async function mutate(path: string, body: object) {
-    await op.run(async signal => { await postWorkflow(path, body, signal); if (!signal.aborted) refresh(); });
+    if (mutationStarted.current) return;
+    mutationStarted.current = true; // Only a refreshed, remounted server snapshot may mutate again.
+    await op.run(async signal => {
+      let message: string | undefined;
+      try { await postWorkflow(path, body, signal); }
+      catch (error) { message = `${error instanceof Error ? error.message : "Request failed."} The request may have committed. Current authority must reload before another write.`; }
+      finally {
+        if (!signal.aborted) refresh(message);
+        else window.dispatchEvent(new Event("vitaai-workflow-changed"));
+      }
+    });
   }
   const actionFor = (item: Step) => actions.find(action => action.step_id === item.id || (choice.steps.length === 1 && action.step_id == null));
   return <><div className="mission-heading"><div><h2>{account.account.name}</h2><p>{mission.status.replaceAll("_", " ")} · revision {mission.revision}</p></div>
     <span className="mission-id">{mission.id}</span></div>
     <p className="muted">Server step: {mission.current_step}. Viewing a step does not advance this mission.</p>
+    <p>HubSpot writes: {readiness?.write_configured ? "Configured, unverified" : "Unavailable"}. Readback: {readiness?.readback_configured ? "Configured, unverified" : "Unavailable"}. Configuration is not connectivity or execution evidence.</p>
+    {mixed && <p role="alert">Mixed simulation/live actions cannot execute together. Before any claim, save every selected step in the same mode and obtain fresh review.</p>}
     {mission.supersedes_id && <p>Replaces <Link href={`/missions?account=${mission.account_id}&mission=${mission.supersedes_id}`}>the previous mission</Link>. Prepare and review new actions before execution.</p>}
     {mission.superseded_by_id && <p>This mission is preserved as history. <Link href={`/missions?account=${mission.account_id}&mission=${mission.superseded_by_id}`}>Open its replacement</Link>.</p>}
     {stale && <p role="alert" className="error-banner">The account snapshot changed. This mission cannot use the old evidence for new actions.</p>}
@@ -260,8 +282,9 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
         <p>Save all selected steps before submitting. Saving an edit invalidates every related review. Unsaved input is local to this form.</p>
         {choice.steps.filter(item => step === "CRM Note" ? item.kind === "hubspot_note_create" : item.kind !== "hubspot_note_create")
           .map(item => <ActionEditor key={`${item.id}:${actionFor(item)?.revision || 0}`} item={item} action={actionFor(item)} disabled={disabled || frozen}
-            save={payload => mutate(`missions/${mission.id}/prepare`, { expected_revision: mission.revision,
-              alternative_id: choice.id, step_id: item.id, connector_id: item.kind === "outlook_draft_create" ? "simulation-microsoft" : "simulation-hubspot", payload })} />)}
+            liveAvailable={!!readiness?.can_prepare} save={(payload, mode) => mutate(`missions/${mission.id}/prepare`, { expected_revision: mission.revision,
+              alternative_id: choice.id, step_id: item.id, mode, connector_id: mode === "live" ? "hubspot-live"
+                : item.kind === "outlook_draft_create" ? "simulation-microsoft" : "simulation-hubspot", payload })} />)}
         {!choice.steps.some(item => step === "CRM Note" ? item.kind === "hubspot_note_create" : item.kind !== "hubspot_note_create") && <p>This alternative has no action in this step.</p>}
         {frozen && <p>Content is frozen after the first execution claim or mission completion.</p>}
       </>}
@@ -270,12 +293,13 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
         {actions.map(action => {
           const decision = currentDecision(action, decisions);
           const reviewBlocked = mission.status === "completed" || executions.some(item => item.action_id === action.id)
-            || executions.some(item => item.status !== "succeeded");
+            || executions.some(item => item.status !== "succeeded")
+            || (action.mode === "live" && (!readiness?.can_prepare || !destinationMatches(action)));
           return <article className="mission-action" key={action.id}><h4>{kindLabel(action.payload.kind)} · {action.status}</h4><ExactPreview action={action} />
             {decision ? <p>Recorded {decision.decision.replaceAll("_", " ")} by {decision.reviewer_id}. Expires {decision.expires_at}. {decision.reason}</p>
               : action.status === "submitted" ? <ReviewForm disabled={disabled || !reviewer || reviewBlocked} submit={(decision, reason) => mutate(`actions/${action.id}/review`, {
                 expected_revision: action.revision, binding_hash: action.binding_hash, decision, ...(reason ? { reason } : {}) })} />
-                : <button disabled={disabled || frozen || actions.length !== choice.steps.length} onClick={() => void mutate(`actions/${action.id}/submit`, {
+                : <button disabled={disabled || frozen || reviewBlocked || actions.length !== choice.steps.length} onClick={() => void mutate(`actions/${action.id}/submit`, {
                   expected_revision: action.revision, binding_hash: action.binding_hash })}>Submit saved {kindLabel(action.payload.kind)} for review</button>}
             {decision?.decision === "approved" && !reviewBlocked && <>
               <p>Fresh review invalidates this approval and requires a new decision on the unchanged saved content. Use it after approval expiry or reviewer sign-out.</p>
@@ -288,7 +312,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
         <details><summary>All recorded review decisions</summary>{decisions.map(item => <p key={item.id}>
           Action {item.action_id} · revision {item.action_revision} · {item.decision} · {item.decided_at} · {item.reason || "No reason supplied"}</p>)}</details>
       </>}
-      {step === "Execution" && <><p>Execution uses the saved payload and approval. It creates simulation resources only. Refreshing never dispatches.</p>
+      {step === "Execution" && <><p>Execution uses the saved mode, payload, destination and approval. Live execution creates a HubSpot record; simulation creates a local resource. Refreshing never dispatches.</p>
         {choice.steps.map(item => {
           const action = actionFor(item);
           if (!action) return <p key={item.id}>{kindLabel(item.kind)} has no saved action.</p>;
@@ -297,24 +321,26 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
           const dependenciesReady = (item.dependencies || []).every(id => {
             const predecessor = choice.steps.find(s => s.id === id)!;
             const predecessorAction = actionFor(predecessor);
-            return receipts.some(record => record.action_id === predecessorAction?.id && record.result === "succeeded" && record.verification === "verified");
+            return receipts.some(record => record.action_id === predecessorAction?.id && record.mode === action.mode && record.result === "succeeded" && record.verification === "verified");
           });
           const allApproved = actions.length === choice.steps.length && actions.every(a => {
             const approval = currentDecision(a, decisions);
             return executions.some(e => e.action_id === a.id && e.status === "succeeded") || (approval?.decision === "approved" && Date.parse(approval.expires_at) > Date.now());
           });
-          return <article className="mission-action" key={item.id}><h4>{kindLabel(item.kind)}</h4><ExactPreview action={action} />
+          const dispatchBlocked = disabled || mixed || (action.mode === "live" && (!readiness?.can_prepare || !destinationMatches(action)));
+          return <article className="mission-action" key={item.id}><h4>{kindLabel(item.kind)} · {action.mode}</h4><ExactPreview action={action} />
             {execution ? <><p>Execution {execution.id}: <strong>{execution.status}</strong> · attempt {execution.attempt}</p>
               {execution.status === "result_unknown" && <p role="status">Result unknown. The claim is retained; do not repeat this write.</p>}
-              {!["succeeded", "failed"].includes(execution.status) && <button disabled={disabled || !reviewer || mission.status === "completed"}
+              {!["succeeded", "failed"].includes(execution.status) && <button disabled={op.blocked || !reviewer || superseded || mission.status === "completed"
+                || (action.mode === "live" && execution.status !== "claimed" && (!readiness?.can_reconcile || !destinationMatches(action)))}
                 onClick={() => void mutate(`executions/${execution.id}/reconcile`, { expected_revision: execution.revision })}>Reconcile recorded execution</button>}
               {!["succeeded", "failed"].includes(execution.status) && !reviewer && <p>A current reviewer or admin must reconcile this result.</p>}
-              {execution.status === "failed" && <button disabled={disabled || mission.status === "completed" || !allApproved || !dependenciesReady}
+              {execution.status === "failed" && <button disabled={dispatchBlocked || mission.status === "completed" || !allApproved || !dependenciesReady}
                 onClick={() => void mutate(`executions/${execution.id}/retry`, { expected_revision: execution.revision,
                   decision_id: execution.decision_id, idempotency_key: execution.idempotency_key })}>Retry definite failure with retained claim</button>}
-            </> : <><button disabled={disabled || mission.status === "completed" || !allApproved || !dependenciesReady || decision?.decision !== "approved"}
+            </> : <><button disabled={dispatchBlocked || mission.status === "completed" || !allApproved || !dependenciesReady || decision?.decision !== "approved"}
               onClick={() => void mutate(`actions/${action.id}/execute`, { expected_revision: action.revision, decision_id: decision!.id,
-                idempotency_key: `mission-action:${action.id}` })}>Execute simulated {kindLabel(item.kind)}</button>
+                idempotency_key: `mission-action:${action.id}` })}>Execute {action.mode === "live" ? "live" : "simulated"} {kindLabel(item.kind)}</button>
               {!dependenciesReady && <p>Waiting for a verified prerequisite receipt.</p>}</>}
             {receipts.filter(record => record.action_id === action.id).map(record => <details key={record.id} open><summary>Receipt · {record.result} · {record.verification}</summary>
               <dl><dt>Mode / resource</dt><dd>{record.mode} / {record.provider_resource_id || "No resource verified"}</dd>
@@ -331,8 +357,12 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
   </>;
 }
 
-function ActionEditor({ item, action, disabled, save }: { item: Step; action?: Action; disabled: boolean; save: (payload: Payload) => Promise<void> }) {
+function ActionEditor({ item, action, disabled, liveAvailable, save }: {
+  item: Step; action?: Action; disabled: boolean; liveAvailable: boolean; save: (payload: Payload, mode: Action["mode"]) => Promise<void>;
+}) {
   const payload = action?.payload;
+  const [mode, setMode] = useState<Action["mode"]>(action?.mode || "simulation");
+  const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState(payload?.kind === "hubspot_task_create" ? payload.title : payload?.kind === "outlook_draft_create" ? payload.subject : "");
   const [body, setBody] = useState(payload?.kind === "outlook_draft_create" ? payload.body_text : payload?.body || item.content);
   const [to, setTo] = useState(payload?.kind === "outlook_draft_create" ? payload.to.join(", ") : "");
@@ -340,19 +370,29 @@ function ActionEditor({ item, action, disabled, save }: { item: Step; action?: A
   const [dueEdited, setDueEdited] = useState(false);
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (disabled || (mode === "live" && (!liveAvailable || item.kind === "outlook_draft_create"))) return;
+    if (mode === "live" && item.kind === "hubspot_task_create" && (!due || !Number.isFinite(Date.parse(`${due}Z`)))) {
+      setError("Choose an explicit UTC due time for the live task."); return;
+    }
     const next: Payload = item.kind === "outlook_draft_create" ? { schema_version: "1", kind: item.kind, to: to.split(",").map(value => value.trim()), subject: title, body_text: body }
       : item.kind === "hubspot_task_create" ? { schema_version: "1", kind: item.kind, title, body,
         due_at: dueEdited ? (due ? new Date(`${due}Z`).toISOString() : null) : (payload?.kind === "hubspot_task_create" ? payload.due_at : null) }
         : { schema_version: "1", kind: item.kind, body };
-    void save(next);
+    setError(null);
+    void save(next, mode);
   }
   return <article className="mission-action"><h4>{kindLabel(item.kind)}</h4><form onSubmit={submit} className="mission-form"><fieldset disabled={disabled}>
+    <label>Preparation mode<select aria-label="Preparation mode" value={mode} onChange={event => { setMode(event.target.value as Action["mode"]); setError(null); }}>
+      <option value="simulation">Simulation · local resource</option>
+      {item.kind !== "outlook_draft_create" && <option value="live" disabled={!liveAvailable}>Live HubSpot · external record</option>}
+    </select></label>
+    {mode === "live" && <p>Saving creates an unapproved preview. Review the exact returned provider request, mode and destination before authorizing a live write.</p>}
     {item.kind === "outlook_draft_create" && <label>Recipients (comma separated, ordered)<input required value={to} maxLength={2010} onChange={event => setTo(event.target.value)} /></label>}
     {item.kind !== "hubspot_note_create" && <label>{item.kind === "outlook_draft_create" ? "Subject" : "Title"}<input required value={title} maxLength={255} onChange={event => setTitle(event.target.value)} /></label>}
     <label>Body<textarea aria-label="Body" required maxLength={20000} rows={8} value={body} onChange={event => setBody(event.target.value)} /></label>
-    {item.kind === "hubspot_task_create" && <label>Due time (UTC, optional)<input type="datetime-local" step="0.001" value={due} onChange={event => { setDue(event.target.value); setDueEdited(true); }} /></label>}
-    <button type="submit">Save {kindLabel(item.kind)} preview</button>
-  </fieldset></form>{action && <ExactPreview action={action} />}</article>;
+    {item.kind === "hubspot_task_create" && <label>Due time (UTC{mode === "live" ? ", required" : ", optional"})<input type="datetime-local" required={mode === "live"} step="0.001" value={due} onChange={event => { setDue(event.target.value); setDueEdited(true); }} /></label>}
+    <button type="submit" disabled={mode === "live" && !liveAvailable}>Save {mode} {kindLabel(item.kind)} preview</button>
+  </fieldset></form>{error && <p role="alert">{error}</p>}{action && <ExactPreview action={action} />}</article>;
 }
 
 function ReviewForm({ disabled, submit }: { disabled: boolean; submit: (decision: Decision["decision"], reason: string) => Promise<void> }) {
@@ -385,9 +425,9 @@ function OutcomeForm({ data, disabled, save }: { data: MissionData; disabled: bo
     <form className="mission-form" onSubmit={event => { event.preventDefault(); void save({ schema_version: "1", expected_revision: mission.revision,
       supersedes_id: latest?.id || null, receipt_id: manual ? null : receiptId, manual_action_reference: manual ? reference : null,
       kind: onlyFollowUp ? "follow_up_required" : kind, basis: "manual_report", evidence_ids: mission.evidence.evidence_ids, note }); }}>
-      <fieldset disabled={disabled}><label><input type="checkbox" checked={manual} onChange={event => setManual(event.target.checked)} /> Identify a manual action instead of a simulation receipt</label>
+      <fieldset disabled={disabled}><label><input type="checkbox" checked={manual} onChange={event => setManual(event.target.checked)} /> Identify a manual action instead of an adapter receipt</label>
         {manual ? <label>Manual action reference<input required maxLength={200} value={reference} onChange={event => setReference(event.target.value)} /></label>
-          : <label>Simulation receipt<select aria-label="Simulation receipt" required value={receiptId} onChange={event => setReceiptId(event.target.value)}>{receipts.map(item => <option key={item.id} value={item.id}>{item.id} · {item.result}</option>)}</select></label>}
+          : <label>Adapter receipt<select aria-label="Adapter receipt" required value={receiptId} onChange={event => setReceiptId(event.target.value)}>{receipts.map(item => <option key={item.id} value={item.id}>{item.mode} · {item.id} · {item.result}</option>)}</select></label>}
         <label>Reported result<select aria-label="Reported result" value={onlyFollowUp ? "follow_up_required" : kind} disabled={onlyFollowUp} onChange={event => setKind(event.target.value as OutcomeRequest["kind"])}>
           {["follow_up_required", "meeting_booked", "customer_contacted", "renewal_risk_reduced", "opportunity_created", "no_response"].map(item => <option key={item} value={item}>{item.replaceAll("_", " ")}</option>)}</select></label>
         <label>Human report<textarea aria-label="Human report" required maxLength={2000} value={note} onChange={event => setNote(event.target.value)} /></label>

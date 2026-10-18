@@ -102,6 +102,8 @@ test("HubSpot routes allow staged reads and explicit bounded source operations",
     ["GET", `integrations/hubspot/observations/${id}`, 200],
     ["GET", `integrations/hubspot/sources/${id}`, 200],
     ["GET", `integrations/hubspot/accounts/${id}/preview`, 200],
+    ["GET", `integrations/hubspot/accounts/${id}/execution-readiness`, 200],
+    ["POST", `integrations/hubspot/accounts/${id}/execution-readiness`, 404],
     ["POST", `integrations/hubspot/accounts/${id}/sync`, 200],
     ["POST", `integrations/hubspot/accounts/${id}/promote`, 200],
     ["POST", `integrations/hubspot/accounts/${id}/restore-sample`, 200],
@@ -123,7 +125,7 @@ test("HubSpot routes allow staged reads and explicit bounded source operations",
     const response = await route.exports[method](request, { params: Promise.resolve({ path: name.split("/") }) });
     assert.equal(response.status, expected, `${method} ${name}`);
   }
-  assert.equal(upstream.mock.callCount(), 8);
+  assert.equal(upstream.mock.callCount(), 9);
 });
 
 test("Next implicit HEAD cannot forward a HubSpot source mutation", async t => {

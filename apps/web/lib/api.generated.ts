@@ -186,6 +186,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/execution-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Hubspot Readiness */
+        get: operations["hubspot_readiness_api_integrations_hubspot_accounts__account_id__execution_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plans": {
         parameters: {
             query?: never;
@@ -1378,6 +1395,30 @@ export interface components {
             risk: number;
             /** Factors */
             factors: components["schemas"]["ScoreFactor"][];
+        };
+        /** HubSpotExecutionReadiness */
+        HubSpotExecutionReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Account Id */
+            account_id: string;
+            /** Organization Id */
+            organization_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Write Configured */
+            write_configured: boolean;
+            /** Readback Configured */
+            readback_configured: boolean;
+            /** Can Prepare */
+            can_prepare: boolean;
+            /** Can Reconcile */
+            can_reconcile: boolean;
+            destination: components["schemas"]["DestinationBinding"] | null;
         };
         /** HubSpotObservation */
         HubSpotObservation: {
@@ -2797,6 +2838,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PipelineRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hubspot_readiness_api_integrations_hubspot_accounts__account_id__execution_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HubSpotExecutionReadiness"];
                 };
             };
             /** @description Validation Error */

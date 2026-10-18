@@ -102,6 +102,48 @@ class HubSpotExecutionTests(unittest.TestCase):
         self.assertEqual(self.saved["properties"]["hs_note_body"], self.action.payload.body)
         self.assertEqual(self.saved["associations"][0]["types"][0]["associationTypeId"], 190)
 
+    def test_execution_readiness_is_scoped_role_aware_and_never_contacts_provider(self):
+        self.configure()
+        viewer = self.identity.create_user("viewer", "test-password-long", SAMPLE_ORG, "viewer")
+        foreign = self.identity.create_user("foreign", "test-password-long", "other-org", "admin")
+        for actor, prepare, reconcile in [(self.seller, True, False), (self.reviewer, True, True),
+                                         (viewer, False, False)]:
+            ready = self.workflow.hubspot_readiness(actor.id, self.account.id)
+            self.assertEqual((ready.can_prepare, ready.can_reconcile), (prepare, reconcile))
+            self.assertEqual((ready.account_revision, ready.destination.target_resource_id), (1, "123"))
+            self.assertNotIn("test-only-token", ready.model_dump_json())
+        with self.assertRaises(PolicyDenied) as error:
+            self.workflow.hubspot_readiness(foreign.id, self.account.id)
+        self.assertEqual(error.exception.status_code, 404)
+        for update, expected in [({"hubspot_write_enabled": False}, (False, True)),
+                                 ({"hubspot_enabled": False}, (False, False)),
+                                 ({"hubspot_company_map": {}}, (False, False)),
+                                 ({"hubspot_organization_id": "other-org"}, (False, False))]:
+            workflow = Workflow(self.store, hubspot=HubSpotWrites(self.settings.model_copy(update=update)))
+            ready = workflow.hubspot_readiness(self.reviewer.id, self.account.id)
+            self.assertEqual((ready.can_prepare, ready.can_reconcile), expected)
+            self.assertEqual(ready.destination is not None, expected[1])
+        self.assertEqual(self.calls, [])
+
+    def test_authenticated_execution_readiness_requires_current_session_without_dispatch(self):
+        self.configure()
+        settings = self.settings.model_copy(update={"database_url": self.store.engine.url.render_as_string(hide_password=False)})
+        app = create_app(settings, hubspot_transport=httpx.MockTransport(self.respond))
+        path = f"/api/integrations/hubspot/accounts/{self.account.id}/execution-readiness"
+        headers = {"X-VitaAi-Request": "1"}
+        with TestClient(app) as client:
+            self.assertEqual(client.get(path).status_code, 401)
+            self.assertEqual(client.post("/api/auth/login", headers=headers,
+                json={"username": "reviewer", "password": "test-password-long"}).status_code, 200)
+            response = client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertTrue(response.json()["can_reconcile"])
+            self.assertEqual(client.post(path, headers=headers, json={}).status_code, 405)
+            client.post("/api/auth/logout", headers=headers)
+            self.assertEqual(client.get(path).status_code, 401)
+        self.assertEqual(self.calls, [])
+
     def test_readback_failure_retains_id_and_reconciles_without_new_write(self):
         self.configure()
         request = self.live()
