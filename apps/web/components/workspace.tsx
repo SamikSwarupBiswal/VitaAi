@@ -46,7 +46,7 @@ function Entry() {
       {perspectives.map(item => <Link key={item.id} href={`/?persona=${item.id}`}><strong>{item.label}</strong><span>{item.description}</span><span>Open {item.label.toLowerCase()} workspace →</span></Link>)}
     </nav>
     {previous && <Link href={`/?persona=${previous}`}>Resume {previous} workspace</Link>}
-    <p className="caveat">This build uses synthetic account evidence. Analysis and drafts are advisory. Governed missions require session identity and use simulation; external actions remain unavailable.</p>
+    <p className="caveat">Account evidence identifies its source; the default portfolio is synthetic. Analysis and drafts are advisory. Governed missions require session identity and use simulation; external actions remain unavailable.</p>
   </main>;
 }
 
@@ -154,7 +154,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         <Link href={`/${selectedQuery}`} className={!accountDirectory ? "active" : ""} aria-current={!accountDirectory ? "page" : undefined}><PieChart size={20} />Portfolio</Link>
         <Link href={`/accounts${selectedQuery}`} className={accountDirectory ? "active" : ""} aria-current={accountDirectory ? "page" : undefined}><Building2 size={20} />Accounts</Link>
         <Link href={`/missions${selected ? `?account=${encodeURIComponent(selected.account.id)}` : ""}`}>Missions</Link>
-      </nav><footer><p><Settings size={18} />Sample workspace</p><p><Code2 size={18} />Local development</p></footer>
+      </nav><footer><p><Settings size={18} />Local workspace</p><p><Code2 size={18} />Local development</p></footer>
     </aside>
     <div className="workspace-body"><header className="topbar"><span>Workspace <span className="slash">/</span> <strong>{title}</strong></span>
       <label>Perspective <select aria-label="Workspace perspective" value={persona} onChange={event => router.replace(`${accountDirectory ? "/accounts" : "/"}?persona=${event.target.value}${selected ? `&account=${encodeURIComponent(selected.account.id)}` : ""}`, { scroll: false })}>
@@ -176,9 +176,11 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         {error && <p role="alert" className="error-banner">{error}</p>}
         {loading && !portfolio ? <p role="status" className="loading">Loading accounts...</p>
           : <AccountTable rows={rows} selectedId={selected?.account.id} onSelect={selectAccount} sort={sort} descending={descending} onSort={key => { setDescending(sort === key ? !descending : key !== "name"); setSort(key); }} />}
-        {portfolio && <p className="data-stamp">Sample CRM / assessment {portfolio.as_of}</p>}
+        {portfolio && <p className="data-stamp">{portfolio.mode === "mixed" ? "Mixed HubSpot and synthetic sources" : portfolio.mode === "hubspot" ? "HubSpot source" : "Sample CRM"} / assessment {portfolio.as_of}</p>}
         {portfolio && persona === "operations" && <p className="data-stamp">Model: {provider?.configured ? "Configured; inspect individual runs for validation." : "Unconfigured."} Evidence assessment: {portfolio.as_of}. External execution unavailable.</p>}
-        {portfolio && <PipelinePanel onSelect={selectAccount} organizationId={portfolio.organization_id} configured={provider?.configured || false} key={persona} expanded={persona === "seller"} />}
+        {portfolio && <PipelinePanel onSelect={selectAccount} organizationId={portfolio.organization_id}
+          snapshots={Object.fromEntries(portfolio.accounts.map(view => [view.account.id, view.assessment.snapshot_hash]))}
+          configured={provider?.configured || false} key={persona} expanded={persona === "seller"} />}
       </div>
       {selected && <AccountDetail view={selected} provider={provider} busy={busyAccount !== null} onAnalyze={analyze}
         run={runs[selected.account.id] || null} error={analysisError} />}

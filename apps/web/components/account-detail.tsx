@@ -10,6 +10,11 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
   const staleRun = currentRun && currentRun.snapshot_hash !== assessment.snapshot_hash;
   return <aside className="detail-rail" aria-label="Account details">
     <h2>{account.name}</h2><p className="industry">{account.industry}</p>
+    <section><h3>Account source</h3><p>{view.source?.kind === "hubspot" ? "HubSpot" : account.synthetic ? "Synthetic sample" : "Source unavailable"} / revision {account.revision}</p>
+      {view.source?.observation_id && <p className="caveat">Observation {view.source.observation_id} / source updated {view.source.provider_updated_at}</p>}
+      {view.source && Object.entries(view.source.field_status || {}).filter(([, status]) => status !== "valid")
+        .map(([field, status]) => <p className="caveat" key={field}>{field.replaceAll("_", " ")}: {status}</p>)}
+    </section>
     <section><h3>Health and signals</h3>
       <div className="health"><div><span className="muted">Health</span><strong>{assessment.health}</strong></div>
         <meter min="0" max="100" value={assessment.health} low={45} high={70} optimum={100}

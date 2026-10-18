@@ -647,6 +647,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview */
+        get: operations["preview_api_integrations_hubspot_accounts__account_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/accounts/{account_id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote */
+        post: operations["promote_api_integrations_hubspot_accounts__account_id__promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/accounts/{account_id}/restore-sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Sample */
+        post: operations["restore_sample_api_integrations_hubspot_accounts__account_id__restore_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source Version */
+        get: operations["source_version_api_integrations_hubspot_sources__source_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -683,6 +751,62 @@ export interface components {
             /** Synthetic */
             synthetic: boolean;
         };
+        /** AccountSource */
+        AccountSource: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "hubspot" | "local_sample";
+            /** Account Revision */
+            account_revision: number;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Selected At
+             * Format: date-time
+             */
+            selected_at: string;
+            /** Observation Id */
+            observation_id?: string | null;
+            /** Provider Updated At */
+            provider_updated_at?: string | null;
+            /** Mapping Hash */
+            mapping_hash?: string | null;
+            /** Field Status */
+            field_status?: {
+                [key: string]: "valid" | "unconfigured" | "missing" | "invalid";
+            };
+        };
+        /** AccountSourceVersion */
+        AccountSourceVersion: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            selection: components["schemas"]["AccountSource"];
+            account: components["schemas"]["Account"];
+            /** Evidence */
+            evidence: components["schemas"]["Evidence"][];
+            previous_account: components["schemas"]["Account"];
+            /** Previous Evidence */
+            previous_evidence: components["schemas"]["Evidence"][];
+        };
         /** AccountView */
         AccountView: {
             /**
@@ -698,6 +822,7 @@ export interface components {
             /** Renewal Days */
             renewal_days: number | null;
             latest_run?: components["schemas"]["ModelRun"] | null;
+            source?: components["schemas"]["AccountSource"] | null;
         };
         /** ActionPreview */
         ActionPreview: {
@@ -1309,6 +1434,77 @@ export interface components {
             properties: {
                 [key: string]: string | null;
             };
+            /** Property Types */
+            property_types?: {
+                [key: string]: string;
+            };
+            /** Mapping Hash */
+            mapping_hash?: string | null;
+            /** Property Mapping */
+            property_mapping?: {
+                [key: string]: components["schemas"]["HubSpotProperty"];
+            };
+        };
+        /** HubSpotPreview */
+        HubSpotPreview: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Observation Id
+             * Format: uuid
+             */
+            observation_id: string;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Mapping Hash */
+            mapping_hash: string;
+            /** Preview Hash */
+            preview_hash: string;
+            account: components["schemas"]["Account"];
+            /** Evidence */
+            evidence: components["schemas"]["Evidence"][];
+            /** Field Status */
+            field_status: {
+                [key: string]: string;
+            };
+        };
+        /** HubSpotPromoteRequest */
+        HubSpotPromoteRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /**
+             * Observation Id
+             * Format: uuid
+             */
+            observation_id: string;
+            /** Preview Hash */
+            preview_hash: string;
+        };
+        /** HubSpotProperty */
+        HubSpotProperty: {
+            /** Property */
+            property: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "number" | "date";
+            /** Unit */
+            unit: string;
+            /** Meaning */
+            meaning: string;
+            /** Observed At Property */
+            observed_at_property?: string | null;
         };
         /** HubSpotStatus */
         HubSpotStatus: {
@@ -1359,6 +1555,8 @@ export interface components {
             account_id: string;
             /** Actor Id */
             actor_id: string;
+            /** Account Revision */
+            account_revision?: number | null;
             /** Portal Id */
             portal_id: string;
             /** Company Id */
@@ -1941,9 +2139,9 @@ export interface components {
             /**
              * Mode
              * @default local_sample
-             * @constant
+             * @enum {string}
              */
-            mode: "local_sample";
+            mode: "local_sample" | "hubspot" | "mixed";
             /**
              * As Of
              * Format: date
@@ -3514,6 +3712,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HubSpotObservation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_api_integrations_hubspot_accounts__account_id__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HubSpotPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_api_integrations_hubspot_accounts__account_id__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HubSpotPromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSource"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_sample_api_integrations_hubspot_accounts__account_id__restore_sample_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HubSpotSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSource"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_version_api_integrations_hubspot_sources__source_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSourceVersion"];
                 };
             };
             /** @description Validation Error */

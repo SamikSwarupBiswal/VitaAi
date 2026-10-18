@@ -1,4 +1,4 @@
-"""Scoped staging of read-only company observations; never promotes facts or actions."""
+"""Read-only staging and explicit local source promotion; no provider writes."""
 import hashlib
 import json
 from contextlib import contextmanager
@@ -18,9 +18,10 @@ from sqlalchemy import (
     UniqueConstraint,
     select,
     text,
+    update,
 )
 
-from .contracts import Account
+from .contracts import Account, AccountSource
 from .governance import PolicyDenied
 from .hubspot import (
     PREFIX,
@@ -31,8 +32,14 @@ from .hubspot import (
     HubSpotSyncRequest,
     HubSpotSyncRun,
 )
+from .hubspot_normalize import (
+    AccountSourceVersion,
+    HubSpotPreview,
+    HubSpotPromoteRequest,
+    normalize,
+)
 from .identity import Actor, sessions, token_digest, users
-from .storage import accounts
+from .storage import accounts, selected_evidence, selected_source, source_versions
 
 metadata = MetaData()
 # Include the existing table only for composite FK resolution; this metadata never creates it.
@@ -64,8 +71,8 @@ class HubSpotSync:
                     connection.exec_driver_sql("BEGIN IMMEDIATE" if write else "BEGIN")
                 else:
                     connection.begin()
-                    # One lock order: connector/organization, then current user/session/account.
-                    key = int.from_bytes(hashlib.sha256(("hubspot:" + self.connector.settings.hubspot_organization_id)
+                    # Match Workflow's organization lock, then current user/session/account.
+                    key = int.from_bytes(hashlib.sha256((self.connector.settings.hubspot_organization_id)
                                                        .encode()).digest()[:8], "big", signed=True)
                     connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
                 row = connection.execute(select(users).join(sessions, sessions.c.user_id == users.c.id).where(
@@ -132,7 +139,8 @@ class HubSpotSync:
             self.account(connection, current, account_id, account.revision)
             latest = self.latest(connection, current.organization_id, account_id)
             run = HubSpotSyncRun(id=uuid4(), organization_id=current.organization_id, account_id=account_id,
-                actor_id=current.id, portal_id=self.connector.settings.hubspot_portal_id, company_id=company_id,
+                actor_id=current.id, account_revision=account.revision,
+                portal_id=self.connector.settings.hubspot_portal_id, company_id=company_id,
                 started_at=started, finished_at=datetime.now(UTC), status="failed", error_code=error_code)
             if result is not None:
                 fingerprint = hashlib.sha256(json.dumps({"portal_id": run.portal_id,
@@ -151,7 +159,9 @@ class HubSpotSync:
                         company_id=company_id, source_record=f"https://api.hubapi.com/crm/v3/objects/companies/{company_id}",
                         provider_created_at=result.created_at, provider_updated_at=result.updated_at,
                         fetched_at=run.finished_at, fingerprint=fingerprint,
-                        sequence=latest.sequence + 1 if latest else 1, properties=result.properties)
+                        sequence=latest.sequence + 1 if latest else 1, properties=result.properties,
+                        property_types=result.property_types, mapping_hash=result.mapping_hash,
+                        property_mapping=result.property_mapping)
                     connection.execute(observations.insert().values(id=str(observation.id),
                         organization_id=current.organization_id, account_id=str(account_id), sequence=observation.sequence,
                         payload=observation.model_dump(mode="json")))
@@ -161,6 +171,92 @@ class HubSpotSync:
                 account_id=str(account_id), observation_id=str(run.observation_id) if run.observation_id else None,
                 payload=run.model_dump(mode="json")))
             return run
+
+    def _preview(self, connection, actor, account):
+        observation = self.latest(connection, actor.organization_id, account.id)
+        if observation is None:
+            raise PolicyDenied("observation_not_available", 409)
+        if (observation.portal_id != self.connector.settings.hubspot_portal_id
+                or observation.company_id != self.connector.settings.hubspot_company_map[account.id]
+                or observation.mapping_hash != self.connector.mapping_hash
+                or observation.property_mapping != self.connector.settings.hubspot_property_map
+                or observation.property_types != self.connector.property_types()):
+            raise PolicyDenied("observation_configuration_changed", 409)
+        return normalize(account, observation, self.connector), observation
+
+    def preview(self, account_id):
+        with self.transaction() as (connection, actor):
+            account = self.account(connection, actor, account_id)
+            preview, _ = self._preview(connection, actor, account)
+            return preview
+
+    def _select(self, connection, actor, previous, target, facts, selection):
+        version = AccountSourceVersion(account_id=previous.id, selection=selection, account=target, evidence=facts,
+            previous_account=previous, previous_evidence=selected_evidence(connection, actor.organization_id, previous.id))
+        changed = connection.execute(update(accounts).where(accounts.c.id == previous.id,
+            accounts.c.organization_id == actor.organization_id, accounts.c.revision == previous.revision)
+            .values(revision=target.revision, payload=target.model_dump(mode="json")))
+        if changed.rowcount != 1:
+            raise PolicyDenied("stale_account_revision", 409)
+        connection.execute(source_versions.insert().values(id=selection.id, organization_id=actor.organization_id,
+            account_id=previous.id, account_revision=target.revision, payload=version.model_dump(mode="json")))
+        return selection
+
+    def promote(self, account_id, body):
+        if not self.connector.configured:
+            raise PolicyDenied("hubspot_unconfigured", 503)
+        with self.transaction(write=True) as (connection, actor):
+            account = self.account(connection, actor, account_id, body.expected_account_revision)
+            preview, observation = self._preview(connection, actor, account)
+            if observation.id != body.observation_id or preview.preview_hash != body.preview_hash:
+                raise PolicyDenied("normalization_preview_changed", 409)
+            current = selected_source(connection, actor.organization_id, account.id)
+            if (current and current["selection"]["kind"] == "hubspot"
+                    and current["selection"]["observation_id"] == str(observation.id)
+                    and current["selection"]["account_revision"] == account.revision
+                    and current["selection"]["mapping_hash"] == preview.mapping_hash):
+                return AccountSource.model_validate(current["selection"])
+            # Reselecting an unchanged observation requires a read at the current revision.
+            bound_runs = connection.execute(select(sync_runs.c.payload).where(
+                sync_runs.c.organization_id == actor.organization_id,
+                sync_runs.c.account_id == account.id, sync_runs.c.observation_id == str(observation.id))).scalars()
+            if not any(run.get("account_revision") == account.revision and run["status"] == "succeeded"
+                       for run in bound_runs):
+                raise PolicyDenied("observation_account_revision_changed", 409)
+            selection = AccountSource(id=str(uuid4()), kind="hubspot", account_revision=preview.account.revision,
+                actor_id=actor.id, selected_at=datetime.now(UTC), observation_id=str(observation.id),
+                provider_updated_at=observation.provider_updated_at, mapping_hash=preview.mapping_hash,
+                field_status=preview.field_status)
+            return self._select(connection, actor, account, preview.account, preview.evidence, selection)
+
+    def restore_sample(self, account_id, expected):
+        with self.transaction(write=True) as (connection, actor):
+            account = self.account(connection, actor, account_id, expected)
+            current = selected_source(connection, actor.organization_id, account_id)
+            if current is None:
+                raise PolicyDenied("source_not_selected", 409)
+            if current["selection"]["kind"] == "local_sample":
+                return AccountSource.model_validate(current["selection"])
+            original = connection.execute(select(source_versions.c.payload).where(
+                source_versions.c.organization_id == actor.organization_id,
+                source_versions.c.account_id == str(account_id)).order_by(source_versions.c.account_revision).limit(1)).scalar_one()
+            version = AccountSourceVersion.model_validate(original)
+            if not version.previous_account.synthetic or not all(item.synthetic for item in version.previous_evidence):
+                raise PolicyDenied("sample_snapshot_not_available", 409)
+            restored = version.previous_account.model_copy(update={"revision": account.revision + 1})
+            selection = AccountSource(id=str(uuid4()), kind="local_sample", account_revision=restored.revision,
+                actor_id=actor.id, selected_at=datetime.now(UTC))
+            return self._select(connection, actor, account, restored, version.previous_evidence, selection)
+
+    def source_version(self, source_id):
+        with self.transaction() as (connection, actor):
+            payload = connection.execute(select(source_versions.c.payload).where(
+                source_versions.c.organization_id == actor.organization_id, source_versions.c.id == str(source_id))).scalar()
+            if payload is None:
+                raise PolicyDenied("record_not_found", 404)
+            version = AccountSourceVersion.model_validate(payload)
+            self.account(connection, actor, version.account_id)
+            return version
 
 
 def install_hubspot_routes(app, store, identity, settings, transport=None):
@@ -196,5 +292,21 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     @router.get("/observations/{observation_id}", response_model=HubSpotObservation)
     def get_observation(observation_id: UUID, actor: Current, operation: Service):
         return operation.get(observations, observation_id, HubSpotObservation)
+
+    @router.get("/accounts/{account_id}/preview", response_model=HubSpotPreview)
+    def preview(account_id: UUID, actor: Current, operation: Service):
+        return operation.preview(account_id)
+
+    @router.post("/accounts/{account_id}/promote", response_model=AccountSource)
+    def promote(account_id: UUID, body: HubSpotPromoteRequest, actor: Current, operation: Service):
+        return operation.promote(account_id, body)
+
+    @router.post("/accounts/{account_id}/restore-sample", response_model=AccountSource)
+    def restore_sample(account_id: UUID, body: HubSpotSyncRequest, actor: Current, operation: Service):
+        return operation.restore_sample(account_id, body.expected_account_revision)
+
+    @router.get("/sources/{source_id}", response_model=AccountSourceVersion)
+    def source_version(source_id: UUID, actor: Current, operation: Service):
+        return operation.source_version(source_id)
 
     app.include_router(router)

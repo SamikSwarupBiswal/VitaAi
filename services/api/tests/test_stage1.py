@@ -272,7 +272,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(before, self.store.list_accounts(SAMPLE_ORG))
         self.assertIn("alembic_version", inspect(self.store.engine).get_table_names())
         with self.store.engine.connect() as connection:
-            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0005")
+            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0006")
             self.assertEqual(connection.execute(select(users.c.id)).scalar(), self.user.id)
 
     def test_closed_pooled_connection_recovers_before_first_query(self):
@@ -289,9 +289,14 @@ class Stage1Tests(unittest.TestCase):
             for table in (accounts, evidence, runs):
                 table.create(legacy.engine)
             legacy.seed(sample_records(NOW))
-            before = legacy.account_evidence(SAMPLE_ORG, sample_records(NOW)[0][0].id)
+            # Read the pre-migration bootstrap directly; current Store readers require head schema.
+            with legacy.engine.connect() as connection:
+                before = connection.execute(select(evidence.c.payload).where(
+                    evidence.c.account_id == sample_records(NOW)[0][0].id)).scalars().all()
             legacy.initialize()
-            self.assertEqual(before, legacy.account_evidence(SAMPLE_ORG, before[0].account_id))
+            self.assertEqual(sorted(before, key=lambda item: item["id"]), sorted(
+                [item.model_dump(mode="json") for item in legacy.account_evidence(SAMPLE_ORG, before[0]["account_id"])],
+                key=lambda item: item["id"]))
             self.assertEqual(len(legacy.list_accounts(SAMPLE_ORG)), 6)
         finally:
             legacy.engine.dispose()

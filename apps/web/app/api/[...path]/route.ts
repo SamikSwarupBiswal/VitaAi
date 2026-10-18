@@ -21,8 +21,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|supersede|outcomes))?|actions/${uuid}/(?:submit|review|renew-review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
   const workflowPath = request.method === "GET" ? workflowRead.test(joined) : workflowWrite.test(joined);
   const hubspotPath = request.method === "GET"
-    ? new RegExp(`^integrations/hubspot(?:/(?:runs|observations)/${uuid})?$`).test(joined)
-    : request.method === "POST" && new RegExp(`^integrations/hubspot/accounts/${uuid}/sync$`).test(joined);
+    ? new RegExp(`^integrations/hubspot(?:/(?:runs|observations|sources)/${uuid}|/accounts/${uuid}/preview)?$`).test(joined)
+    : request.method === "POST" && new RegExp(`^integrations/hubspot/accounts/${uuid}/(?:sync|promote|restore-sample)$`).test(joined);
   const allowed = request.method === "GET"
     ? workflowPath || hubspotPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
     : workflowPath || hubspotPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);

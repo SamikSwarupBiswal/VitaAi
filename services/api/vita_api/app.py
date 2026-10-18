@@ -114,12 +114,12 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     def views(organization_id: str) -> list[AccountView]:
         as_of = datetime.now(UTC).date()
         result = []
-        for account in store.list_accounts(organization_id):
-            facts = store.account_evidence(organization_id, account.id)
+        for account, facts, source in store.account_records(organization_id):
             result.append(AccountView(
                 account=account, evidence=facts, assessment=assess(account, facts, as_of),
                 renewal_days=(account.renewal_date - as_of).days if account.renewal_date is not None else None,
                 latest_run=store.latest_run(organization_id, account.id),
+                source=source,
             ))
         return sorted(result, key=lambda item: (-item.assessment.risk, item.account.id))
 
@@ -140,6 +140,8 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         values = [item.account.annual_value for item in items if item.account.annual_value is not None]
         return Portfolio(
             organization_id=current.organization_id, as_of=datetime.now(UTC).date(), accounts=items,
+            mode=("mixed" if any(item.account.synthetic for item in items) else "hubspot")
+            if any(item.source and item.source.kind == "hubspot" for item in items) else "local_sample",
             annual_value=sum(values) if values or not items else None,
             annual_value_missing_count=len(items) - len(values),
             attention_count=sum(item.assessment.needs_attention for item in items),
@@ -172,8 +174,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
 
     @app.post("/api/pipeline", response_model=PipelineRun)
     def run_pipeline(body: PipelineRequest, current: Annotated[Actor, Depends(writer)]):
-        records = [(account, store.account_evidence(current.organization_id, account.id))
-                   for account in store.list_accounts(current.organization_id)]
+        records = [(account, facts) for account, facts, _ in store.account_records(current.organization_id)]
         run = Pipeline(provider).run(current.organization_id,
                                      current.id if settings.auth_mode == "session" else None,
                                      records, datetime.now(UTC).date(), body)

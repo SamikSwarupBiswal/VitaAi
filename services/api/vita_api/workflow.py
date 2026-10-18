@@ -7,7 +7,7 @@ from uuid import uuid4, uuid5
 
 from sqlalchemy import func, select, text, update
 
-from .contracts import Account, AccountView, Evidence, ModelRun
+from .contracts import Account, AccountView, ModelRun
 from .governance import (
     PolicyDenied,
     authorize,
@@ -23,7 +23,7 @@ from .governance import (
 from .identity import Actor, sessions, token_digest, users
 from .pipeline import action_role, governance_role
 from .scoring import assess
-from .storage import accounts, evidence, runs
+from .storage import accounts, runs, selected_evidence
 from .workflow_contracts import (
     ActionPreview,
     Alternative,
@@ -253,9 +253,7 @@ class Workflow:
         if row is None:
             raise PolicyDenied("account_not_found", 404)
         account = Account.model_validate(row)
-        facts = [Evidence.model_validate(item) for item in connection.execute(select(evidence.c.payload).where(
-            evidence.c.organization_id == actor.organization_id, evidence.c.account_id == str(account_id))
-            .with_for_update()).scalars()]
+        facts = selected_evidence(connection, actor.organization_id, account_id)
         return AccountView(account=account, evidence=facts, assessment=assess(account, facts, self.clock().date()),
                            renewal_days=(account.renewal_date - self.clock().date()).days
                            if account.renewal_date is not None else None)
@@ -429,7 +427,7 @@ class Workflow:
             if not available:
                 raise PolicyDenied("mission_supersession_not_available", 409)
             view = self._view(connection, actor, mission.account_id)
-            if mission.evidence == evidence_binding(view):
+            if view.evidence and mission.evidence == evidence_binding(view):
                 raise PolicyDenied("mission_evidence_current", 409)
             plan = self._get(connection, actor, plans, body.plan_id, Plan)
             if plan.account_id != mission.account_id:

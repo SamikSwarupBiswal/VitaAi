@@ -124,17 +124,30 @@ class ModelRun(Contract):
     planning: PlanningOutput | None = None
 
 
+class AccountSource(Contract):
+    id: str
+    kind: Literal["hubspot", "local_sample"]
+    account_revision: int = Field(ge=1)
+    actor_id: str
+    selected_at: datetime
+    observation_id: str | None = None
+    provider_updated_at: datetime | None = None
+    mapping_hash: str | None = None
+    field_status: dict[str, Literal["valid", "unconfigured", "missing", "invalid"]] = Field(default_factory=dict)
+
+
 class AccountView(Contract):
     account: Account
     assessment: Assessment
     evidence: list[Evidence]
     renewal_days: int | None
     latest_run: ModelRun | None = None
+    source: AccountSource | None = None
 
 
 class Portfolio(Contract):
     organization_id: str
-    mode: Literal["local_sample"] = "local_sample"
+    mode: Literal["local_sample", "hubspot", "mixed"] = "local_sample"
     as_of: date
     annual_value: int | None
     annual_value_missing_count: int = Field(default=0, ge=0)

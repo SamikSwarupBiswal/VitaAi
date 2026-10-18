@@ -45,6 +45,44 @@ test("account displays distinguish missing value and renewal from actual zero", 
   assert.match(account, /<dt>Renewal<\/dt><dd>Unknown<\/dd>/);
 });
 
+test("account source exposes raw observation and missing or invalid normalized fields", () => {
+  const sourced = { ...view("Sourced", null, null), source: { kind: "hubspot", observation_id: "observation-1",
+    provider_updated_at: "2026-10-17T00:00:00Z", field_status: { annual_value: "unconfigured", renewal_date: "invalid", name: "valid" } } };
+  const html = renderToStaticMarkup(detail.AccountDetail({ view: sourced,
+    provider: null, busy: false, onAnalyze() {}, run: null, error: null }));
+  assert.match(html, /HubSpot.*revision 1/);
+  assert.match(html, /Observation observation-1.*2026-10-17T00:00:00Z/);
+  assert.match(html, /annual value: unconfigured/);
+  assert.match(html, /renewal date: invalid/);
+  assert.doesNotMatch(html, /name: valid/);
+  assert.doesNotThrow(() => renderToStaticMarkup(detail.AccountDetail({ view: { ...sourced, source: { kind: "local_sample" } },
+    provider: null, busy: false, onAnalyze() {}, run: null, error: null })));
+});
+
+test("pipeline suppresses saved drafts after source revision or snapshot changes", () => {
+  const saved = { id: "saved", started_at: "2026-10-17T00:00:00Z", status: "deterministic", steps: [], caveats: [],
+    contexts: [{ account: { id: "a", name: "Account" } }], recommendations: [{ account_id: "a",
+      assessment: { snapshot_hash: "original" }, action: { kind: "follow_up" }, governance: { status: "ready_for_preparation" },
+      communication: { status: "deterministic_template", internal_note: "Original saved draft" } }] };
+  for (const snapshots of [{ a: "original" }, { a: "different-source" }, {}]) {
+    let cursor = 0;
+    const state = ["attention", saved, false, null, false];
+    const pipeline = load("../components/pipeline-panel.tsx", { react: {
+      useEffect() {}, useRef: initial => ({ current: initial }),
+      useState: initial => [state[cursor++] ?? initial, () => {}],
+    }, "@/lib/api": api });
+    const html = renderToStaticMarkup(pipeline.PipelinePanel({ onSelect() {}, organizationId: "org",
+      snapshots, configured: false }));
+    if (snapshots.a === "original") {
+      assert.match(html, /Original saved draft/);
+      assert.doesNotMatch(html, /older account snapshot/);
+    } else {
+      assert.doesNotMatch(html, /Original saved draft/);
+      assert.match(html, /older account snapshot/);
+    }
+  }
+});
+
 test("workspace discloses incomplete totals and sorts unknowns last in both directions", () => {
   const accounts = [view("Unknown", null, null), view("Low", 0, 0), view("High", 100, 10)];
   const portfolio = { annual_value: 100, annual_value_missing_count: 1, accounts, as_of: "2026-10-18" };

@@ -4,10 +4,34 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[3]
+
+PROPERTY_SEMANTICS = {
+    "annual_value": ("number", "USD/year", "customer_annual_contract_value"),
+    "renewal_date": ("date", "date", "customer_contract_renewal_date"),
+    "usage_change": ("number", "percent", "product_usage_change"),
+    "support_cases": ("number", "count", "unresolved_support_cases"),
+    "expansion": ("number", "score/100", "expansion_interest"),
+}
+
+
+class HubSpotProperty(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    property: str = Field(pattern=r"^[a-z][a-z0-9_]{0,99}$")
+    type: Literal["number", "date"]
+    unit: str
+    meaning: str
+    observed_at_property: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,99}$")
 
 
 class Settings(BaseSettings):
@@ -25,6 +49,24 @@ class Settings(BaseSettings):
     hubspot_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
     hubspot_portal_id: str = Field(default="", pattern=r"^(?:[1-9][0-9]{0,19})?$")
     hubspot_company_map: dict[str, str] = Field(default_factory=dict, max_length=50)
+    hubspot_property_map: dict[str, HubSpotProperty] = Field(default_factory=dict, max_length=5)
+
+    @model_validator(mode="after")
+    def property_mapping(self):
+        names = []
+        for target, mapping in self.hubspot_property_map.items():
+            if (target not in PROPERTY_SEMANTICS or
+                    (mapping.type, mapping.unit, mapping.meaning) != PROPERTY_SEMANTICS[target]):
+                raise ValueError("Property type, unit and meaning must match the target account fact")
+            if mapping.property in {"annualrevenue", "name", "domain", "industry"}:
+                raise ValueError("Company metadata cannot supply commercial or product metrics")
+            if target in {"usage_change", "support_cases", "expansion"} and not mapping.observed_at_property:
+                raise ValueError("Metrics require an explicit measurement timestamp property")
+            names.append(mapping.property)
+        if len(set(names)) != len(names) or set(names) & {
+                item.observed_at_property for item in self.hubspot_property_map.values()}:
+            raise ValueError("A value property cannot represent multiple facts or measurement timestamps")
+        return self
 
     @field_validator("hubspot_company_map")
     @classmethod

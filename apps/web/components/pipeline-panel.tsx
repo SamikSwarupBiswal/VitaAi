@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type PipelineRequest, type PipelineRun } from "@/lib/api";
 
-export function PipelinePanel({ onSelect, organizationId, configured, expanded = false }: {
-  onSelect: (id: string) => void; organizationId: string; configured: boolean; expanded?: boolean;
+export function PipelinePanel({ onSelect, organizationId, snapshots, configured, expanded = false }: {
+  onSelect: (id: string) => void; organizationId: string; snapshots: Record<string, string>; configured: boolean; expanded?: boolean;
 }) {
   const [intent, setIntent] = useState<PipelineRequest["intent"]>("attention");
   const [run, setRun] = useState<PipelineRun | null>(null);
@@ -13,6 +13,7 @@ export function PipelinePanel({ onSelect, organizationId, configured, expanded =
   const [useModel, setUseModel] = useState(false);
   const requestSequence = useRef(0);
   const storageKey = `vitaai-pipeline:${organizationId}`;
+  const stale = run && run.recommendations.some(item => snapshots[item.account_id] !== item.assessment.snapshot_hash);
   useEffect(() => {
     let active = true;
     const sequence = ++requestSequence.current;
@@ -44,7 +45,8 @@ export function PipelinePanel({ onSelect, organizationId, configured, expanded =
     </select></label> <label><input type="checkbox" checked={useModel} disabled={busy || !configured} onChange={event => setUseModel(event.target.checked)} /> Use Nebius for one account (paid inference)</label>
     <button onClick={start} disabled={busy}>{busy ? "Preparing..." : "Prepare recommendations"}</button>
     {error && <p role="alert" className="error-banner">{error}</p>}
-    {run && <div aria-live="polite"><p>{run.steps.map(step => `${step.role} (${step.processed})`).join(" → ")}</p>
+    {stale && <p role="status" className="caveat">Saved preparation belongs to an older account snapshot. Prepare a new run to view current drafts.</p>}
+    {run && !stale && <div aria-live="polite"><p>{run.steps.map(step => `${step.role} (${step.processed})`).join(" → ")}</p>
       <details className="preparation-provenance"><summary>Preparation provenance</summary><p>{run.id} / {run.started_at} / {run.status}</p></details>
       <ol>{run.recommendations.map(item => <li key={item.account_id}>
         <button onClick={() => onSelect(item.account_id)}>{run.contexts.find(c => c.account.id === item.account_id)?.account.name}</button>

@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import make_url
 
-from .contracts import Account, Evidence, ModelRun
+from .contracts import Account, AccountSource, Evidence, ModelRun
 from .migrate import upgrade
 from .pipeline import PipelineRun
 
@@ -60,6 +60,33 @@ pipeline_runs = Table(
     Column("actor_id", String(80), nullable=True),
     Column("payload", JSON, nullable=False),
 )
+
+
+source_versions = Table(
+    "account_source_versions", metadata,
+    Column("id", String(80), primary_key=True),
+    Column("organization_id", String(80), nullable=False),
+    Column("account_id", String(80), nullable=False),
+    Column("account_revision", Integer, nullable=False),
+    Column("payload", JSON, nullable=False),
+    UniqueConstraint("organization_id", "account_id", "account_revision"),
+    ForeignKeyConstraint(["organization_id", "account_id"], ["accounts.organization_id", "accounts.id"]),
+)
+
+
+def selected_source(connection, organization_id, account_id):
+    return connection.execute(select(source_versions.c.payload).where(
+        source_versions.c.organization_id == organization_id, source_versions.c.account_id == str(account_id))
+        .order_by(source_versions.c.account_revision.desc()).limit(1)).scalar()
+
+
+def selected_evidence(connection, organization_id, account_id):
+    source = selected_source(connection, organization_id, account_id)
+    if source:
+        return [Evidence.model_validate(item) for item in source["evidence"]]
+    rows = connection.execute(select(evidence.c.payload).where(
+        evidence.c.organization_id == organization_id, evidence.c.account_id == str(account_id))).scalars()
+    return [Evidence.model_validate(item) for item in rows]
 
 
 class Store:
@@ -119,13 +146,26 @@ class Store:
             )).scalars().all()
         return [Account.model_validate(row) for row in rows]
 
+    def account_records(self, organization_id: str):
+        with self.engine.connect() as connection:
+            if self.engine.dialect.name == "sqlite":
+                connection.exec_driver_sql("BEGIN")
+            else:
+                connection.begin()
+            rows = connection.execute(select(accounts.c.payload).where(
+                accounts.c.organization_id == organization_id).order_by(accounts.c.id).with_for_update()).scalars().all()
+            result = []
+            for row in rows:
+                account = Account.model_validate(row)
+                source = selected_source(connection, organization_id, account.id)
+                result.append((account, selected_evidence(connection, organization_id, account.id),
+                               AccountSource.model_validate(source["selection"]) if source else None))
+            connection.commit()
+            return result
+
     def account_evidence(self, organization_id: str, account_id: str) -> list[Evidence]:
         with self.engine.connect() as connection:
-            rows = connection.execute(select(evidence.c.payload).where(
-                evidence.c.organization_id == organization_id,
-                evidence.c.account_id == account_id,
-            )).scalars().all()
-        return [Evidence.model_validate(row) for row in rows]
+            return selected_evidence(connection, organization_id, account_id)
 
     def save_run(self, run: ModelRun):
         with self.engine.begin() as connection:

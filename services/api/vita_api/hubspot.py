@@ -1,4 +1,5 @@
 """Bounded read-only HubSpot transport. Provider data has no execution authority."""
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Literal
@@ -7,7 +8,7 @@ from uuid import UUID
 import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
-from .config import Settings
+from .config import HubSpotProperty, Settings
 
 PREFIX = "/api/integrations/hubspot"
 
@@ -27,6 +28,9 @@ class CompanyRead(HubSpotContract):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     properties: dict[str, str | None]
+    property_types: dict[str, str] = Field(default_factory=dict)
+    mapping_hash: str | None = None
+    property_mapping: dict[str, HubSpotProperty] = Field(default_factory=dict)
 
 
 class HubSpotObservation(HubSpotContract):
@@ -44,6 +48,9 @@ class HubSpotObservation(HubSpotContract):
     fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     sequence: int = Field(ge=1)
     properties: dict[str, str | None]
+    property_types: dict[str, str] = Field(default_factory=dict)
+    mapping_hash: str | None = None
+    property_mapping: dict[str, HubSpotProperty] = Field(default_factory=dict)
 
 
 class HubSpotSyncRequest(HubSpotContract):
@@ -55,6 +62,7 @@ class HubSpotSyncRun(HubSpotContract):
     organization_id: str
     account_id: UUID
     actor_id: str
+    account_revision: int | None = None
     portal_id: str
     company_id: str
     started_at: AwareDatetime
@@ -84,6 +92,19 @@ class HubSpot:
     def status(self, organization_id: str) -> HubSpotStatus:
         ready = self.configured and organization_id == self.settings.hubspot_organization_id
         return HubSpotStatus(configured=ready, status="configured_unverified" if ready else "unconfigured")
+
+    @property
+    def mapping_hash(self):
+        mapping = {key: value.model_dump() for key, value in self.settings.hubspot_property_map.items()}
+        return hashlib.sha256(json.dumps(mapping, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    def property_types(self):
+        result = {}
+        for mapping in self.settings.hubspot_property_map.values():
+            result[mapping.property] = mapping.type
+            if mapping.observed_at_property:
+                result[mapping.observed_at_property] = "datetime"
+        return result
 
     def _get(self, client, path, *, params=None):
         try:
@@ -119,20 +140,29 @@ class HubSpot:
                 raise HubSpotFailure("invalid_response")
             if str(portal) != self.settings.hubspot_portal_id:
                 raise HubSpotFailure("portal_mismatch")
+            types = self.property_types()
+            for name, expected_type in types.items():
+                definition = self._get(client, f"/crm/v3/properties/companies/{name}")
+                if (definition.get("name") != name or definition.get("type") != expected_type
+                        or definition.get("archived") is not False):
+                    raise HubSpotFailure("property_type_mismatch")
+            fields = ["name", "domain", "industry", *sorted(types)]
             data = self._get(client, f"/crm/v3/objects/companies/{company_id}",
-                             params={"properties": "name,domain,industry", "archived": "false"})
+                             params={"properties": ",".join(fields), "archived": "false"})
         try:
             if data["id"] != company_id or data["archived"] is not False:
                 raise HubSpotFailure("company_identity_or_archive_mismatch")
             properties = data["properties"]
             if not isinstance(properties, dict):
                 raise HubSpotFailure("invalid_response")
-            selected = {key: properties[key] for key in ("name", "domain", "industry") if key in properties}
+            selected = {key: properties[key] for key in fields if key in properties}
             if any(value is not None and (not isinstance(value, str) or len(value) > 2000)
                    for value in selected.values()):
                 raise HubSpotFailure("invalid_response")
             result = CompanyRead(company_id=company_id, created_at=data["createdAt"],
-                                 updated_at=data["updatedAt"], properties=selected)
+                                 updated_at=data["updatedAt"], properties=selected,
+                                 property_types=types, mapping_hash=self.mapping_hash,
+                                 property_mapping=self.settings.hubspot_property_map)
             if result.created_at > result.updated_at or result.updated_at > (now or datetime.now(UTC)):
                 raise HubSpotFailure("invalid_source_time")
             return result.model_copy(update={"created_at": result.created_at.astimezone(UTC),
