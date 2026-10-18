@@ -34,6 +34,12 @@ class HubSpotProperty(BaseModel):
     observed_at_property: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,99}$")
 
 
+class ResearchTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    company_name: str = Field(min_length=1, max_length=160, pattern=r"^[\w .,&'()-]+$")
+    domain: str = Field(max_length=253, pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / "services/api/.env", extra="ignore")
 
@@ -44,6 +50,11 @@ class Settings(BaseSettings):
     nebius_api_key: SecretStr = SecretStr("")
     nebius_model: str = ""
     nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
+    research_enabled: bool = False
+    research_live_enabled: bool = False
+    research_api_key: SecretStr = SecretStr("")
+    research_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
+    research_account_map: dict[str, ResearchTarget] = Field(default_factory=dict, max_length=50)
     hubspot_enabled: bool = False
     hubspot_write_enabled: bool = False
     hubspot_configuration_revision: int = Field(default=1, ge=1)
@@ -69,6 +80,14 @@ class Settings(BaseSettings):
     @classmethod
     def empty_microsoft_id(cls, value):
         return None if value == "" else value
+
+    @field_validator("research_account_map")
+    @classmethod
+    def research_mapping(cls, value):
+        for account_id in value:
+            if str(UUID(account_id)) != account_id:
+                raise ValueError("Use canonical account UUIDs")
+        return value
 
     @model_validator(mode="after")
     def property_mapping(self):
