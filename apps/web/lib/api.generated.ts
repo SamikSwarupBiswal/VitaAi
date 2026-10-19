@@ -305,6 +305,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/detections/{detection_id}/mission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source Mission */
+        get: operations["source_mission_api_integrations_hubspot_detections__detection_id__mission_get"];
+        put?: never;
+        /** Select Source Mission */
+        post: operations["select_source_mission_api_integrations_hubspot_detections__detection_id__mission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/plans/generate": {
         parameters: {
             query?: never;
@@ -2018,6 +2036,8 @@ export interface components {
             supersedes_id?: string | null;
             /** Superseded By Id */
             superseded_by_id?: string | null;
+            /** Source Detection Id */
+            source_detection_id?: string | null;
         };
         /** MissionRequest */
         MissionRequest: {
@@ -3143,6 +3163,100 @@ export interface components {
             before: components["schemas"]["SourceField"];
             after: components["schemas"]["SourceField"];
         };
+        /** SourceMissionRequest */
+        SourceMissionRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Plan Id
+             * Format: uuid
+             */
+            plan_id: string;
+            /**
+             * Template
+             * @default account-action-1
+             * @enum {string}
+             */
+            template: "account-action-1" | "account-note-1" | "account-outlook-draft-1" | "account-follow-up-1";
+            /** Alternative Id */
+            alternative_id?: string | null;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /**
+             * Expected Source Id
+             * Format: uuid
+             */
+            expected_source_id: string;
+        };
+        /** SourceMissionResult */
+        SourceMissionResult: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "mission_created" | "mission_exists";
+            selection: components["schemas"]["SourceMissionSelection"];
+        };
+        /** SourceMissionSelection */
+        SourceMissionSelection: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /**
+             * Policy Version
+             * @default source-mission-1
+             * @constant
+             */
+            policy_version: "source-mission-1";
+            /** Actor Id */
+            actor_id: string;
+            detection: components["schemas"]["SourceDetection"];
+            request: components["schemas"]["SourceMissionRequest"];
+            /**
+             * Mission Id
+             * Format: uuid
+             */
+            mission_id: string;
+        };
         /** SourceSnapshot */
         SourceSnapshot: {
             /**
@@ -3707,6 +3821,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Plan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_mission_api_integrations_hubspot_detections__detection_id__mission_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                detection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceMissionSelection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_source_mission_api_integrations_hubspot_detections__detection_id__mission_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                detection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceMissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceMissionResult"];
                 };
             };
             /** @description Validation Error */

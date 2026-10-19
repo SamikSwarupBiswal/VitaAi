@@ -20,8 +20,11 @@ from .governance import (
     payload_hash,
     transition,
 )
-from .hubspot import HubSpotFailure
+from .hubspot import HubSpot, HubSpotFailure, HubSpotObservation
+from .hubspot_changes import SourceDetection, detections, snapshot
 from .hubspot_execution import HubSpotExecutionReadiness, provider_request
+from .hubspot_normalize import AccountSourceVersion
+from .hubspot_sync import observations
 from .identity import Actor, sessions, token_digest, users
 from .microsoft import (
     MicrosoftActionReadiness,
@@ -30,7 +33,12 @@ from .microsoft import (
 )
 from .pipeline import action_role, governance_role
 from .scoring import assess
-from .storage import accounts, runs, selected_evidence
+from .source_missions import (
+    SourceMissionResult,
+    SourceMissionSelection,
+    source_missions,
+)
+from .storage import accounts, runs, selected_evidence, selected_source
 from .workflow_contracts import (
     ActionPreview,
     Alternative,
@@ -450,7 +458,86 @@ class Workflow:
         with self._transaction(actor_id) as (connection, actor):
             return self._create_mission(connection, actor, body)
 
-    def _create_mission(self, connection, actor, body, *, supersedes_id=None):
+    def _source_detection(self, connection, actor, detection_id):
+        detection = self._get(connection, actor, detections, detection_id, SourceDetection)
+        settings = self.hubspot.settings if self.hubspot else None
+        if (settings is None or actor.organization_id != settings.hubspot_organization_id
+                or str(detection.account_id) not in settings.hubspot_company_map):
+            raise PolicyDenied("record_not_found", 404)
+        return detection, self._view(connection, actor, detection.account_id)
+
+    def source_mission(self, actor_id, detection_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            self._source_detection(connection, actor, detection_id)
+            payload = connection.execute(select(source_missions.c.payload).where(
+                source_missions.c.organization_id == actor.organization_id,
+                source_missions.c.detection_id == str(detection_id))).scalar()
+            if payload is None:
+                raise PolicyDenied("record_not_found", 404)
+            return SourceMissionSelection.model_validate(payload)
+
+    def select_source_mission(self, actor_id, detection_id, body):
+        with self._transaction(actor_id) as (connection, actor):
+            detection, view = self._source_detection(connection, actor, detection_id)
+            payload = connection.execute(select(source_missions.c.payload).where(
+                source_missions.c.organization_id == actor.organization_id,
+                source_missions.c.detection_id == str(detection_id))).scalar()
+            if payload is not None:
+                saved = SourceMissionSelection.model_validate(payload)
+                if saved.request != body:
+                    raise PolicyDenied("source_mission_selection_conflict", 409)
+                # Historical replay returns the original selection, never renewed authority.
+                return SourceMissionResult(status="mission_exists", selection=saved)
+            current = selected_source(connection, actor.organization_id, view.account.id)
+            if (view.account.revision != body.expected_account_revision or current is None
+                    or current["selection"]["id"] != str(body.expected_source_id)
+                    or detection.after.source_version_id != body.expected_source_id
+                    or detection.after.account_revision != view.account.revision):
+                raise PolicyDenied("source_selection_changed", 409)
+            settings = self.hubspot.settings
+            if (detection.status != "changed" or detection.event is None or detection.event.id != body.event_id
+                    or detection.after.kind != "hubspot" or detection.before is None
+                    or detection.before.kind != "hubspot"):
+                raise PolicyDenied("source_event_not_eligible", 409)
+            if (detection.after.portal_id != settings.hubspot_portal_id
+                    or detection.after.company_id != settings.hubspot_company_map[view.account.id]
+                    or detection.after.mapping_hash != HubSpot(settings).mapping_hash):
+                raise PolicyDenied("source_configuration_changed", 409)
+            version = AccountSourceVersion.model_validate(current)
+            observation = self._get(connection, actor, observations, version.selection.observation_id,
+                                    HubSpotObservation)
+            if snapshot(version, observation) != detection.after:
+                raise PolicyDenied("source_history_invalid", 409)
+            plan = self._get(connection, actor, plans, body.plan_id, Plan)
+            self._version(plan, body.expected_revision)
+            self._plan_check(connection, actor, plan)
+            if plan.account_id != detection.account_id:
+                raise PolicyDenied("mission_account_changed", 409)
+            alternative = next((item for item in plan.alternatives
+                if item.id == (body.alternative_id or plan.selected_alternative_id)), None)
+            eligible = {item.after.evidence_id for item in detection.event.changes
+                if item.kind == "value_changed" and item.field in {"usage_change", "support_cases", "expansion", "renewal_date"}
+                and item.before.status == item.after.status == "valid" and item.after.evidence_id}
+            cited = {str(item) for step in alternative.steps for item in step.evidence_ids} if alternative else set()
+            if not eligible.intersection(cited):
+                raise PolicyDenied("source_event_not_eligible", 409)
+            if connection.execute(select(missions.c.id).where(missions.c.organization_id == actor.organization_id,
+                    missions.c.plan_id == str(plan.id)).limit(1)).scalar() is not None:
+                raise PolicyDenied("source_plan_already_used", 409)
+            mission = self._create_mission(connection, actor, body, source_detection_id=detection.id)
+            selection = SourceMissionSelection(**self._base(actor), actor_id=actor.id, detection=detection,
+                                               request=body, mission_id=mission.id)
+            connection.execute(source_missions.insert().values(id=str(selection.id), organization_id=actor.organization_id,
+                detection_id=str(detection.id), event_id=str(detection.event.id), plan_id=str(plan.id),
+                mission_id=str(mission.id), payload=selection.model_dump(mode="json")))
+            self._audit(connection, actor, mission, "source_event_selected", mission_id=mission.id)
+            return SourceMissionResult(status="mission_created", selection=selection)
+
+    def _create_mission(self, connection, actor, body, *, supersedes_id=None, source_detection_id=None):
+        if connection.execute(select(source_missions.c.id).where(
+                source_missions.c.organization_id == actor.organization_id,
+                source_missions.c.plan_id == str(body.plan_id)).limit(1)).scalar() is not None:
+            raise PolicyDenied("source_plan_already_used", 409)
         plan = self._get(connection, actor, plans, body.plan_id, Plan)
         self._version(plan, body.expected_revision)
         self._plan_check(connection, actor, plan)
@@ -469,7 +556,8 @@ class Workflow:
         mission = Mission(**self._base(actor), account_id=plan.account_id, owner_id=actor.id,
                           template=body.template, plan_id=plan.id, plan_revision=plan.revision,
                           evidence=plan.evidence, status="draft", current_step="Review", supersedes_id=supersedes_id,
-                          alternative_id=selected, allowed_kinds=tuple(dict.fromkeys(kinds)))
+                          alternative_id=selected, allowed_kinds=tuple(dict.fromkeys(kinds)),
+                          source_detection_id=source_detection_id)
         self._put(connection, missions, mission, new=True, plan_id=str(plan.id))
         self._audit(connection, actor, mission, "mission_created", mission_id=mission.id)
         return mission

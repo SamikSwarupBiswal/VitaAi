@@ -207,6 +207,7 @@ class Mission(Record):
     transition_ids: tuple[UUID, ...] = ()
     supersedes_id: UUID | None = None
     superseded_by_id: UUID | None = None
+    source_detection_id: UUID | None = None
 
     @model_validator(mode="after")
     def account_binding(self) -> Self:

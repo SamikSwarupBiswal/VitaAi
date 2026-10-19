@@ -16,6 +16,11 @@ from .microsoft import (
     MicrosoftStart,
     MicrosoftStatus,
 )
+from .source_missions import (
+    SourceMissionRequest,
+    SourceMissionResult,
+    SourceMissionSelection,
+)
 from .workflow import Workflow
 from .workflow_contracts import (
     ActionPreview,
@@ -108,6 +113,14 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
     @router.post("/api/plans", response_model=Plan)
     def create_plan(body: PlanRequest, actor: Current, workflow: Service):
         return workflow.create_plan(actor.id, body)
+
+    @router.post("/api/integrations/hubspot/detections/{detection_id}/mission", response_model=SourceMissionResult)
+    def select_source_mission(detection_id: UUID, body: SourceMissionRequest, actor: Current, workflow: Service):
+        return workflow.select_source_mission(actor.id, detection_id, body)
+
+    @router.get("/api/integrations/hubspot/detections/{detection_id}/mission", response_model=SourceMissionSelection)
+    def source_mission(detection_id: UUID, actor: Current, workflow: Service):
+        return workflow.source_mission(actor.id, detection_id)
 
     @router.post("/api/plans/generate", response_model=ModelRun)
     def generate_plan(body: PlanRequest, actor: Current, workflow: Service):

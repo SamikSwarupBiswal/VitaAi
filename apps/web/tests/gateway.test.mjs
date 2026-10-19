@@ -171,6 +171,10 @@ test("HubSpot routes allow staged reads and explicit bounded source operations",
     ["GET", `integrations/hubspot/detections/${id}`, 200],
     ["GET", `integrations/hubspot/accounts/${id}/detections`, 200],
     ["POST", `integrations/hubspot/accounts/${id}/detect-changes`, 200],
+    ["GET", `integrations/hubspot/detections/${id}/mission`, 200],
+    ["POST", `integrations/hubspot/detections/${id}/mission`, 200],
+    ["POST", `integrations/hubspot/detections/${id}/mission/extra`, 404],
+    ["GET", "integrations/hubspot/detections/not-a-uuid/mission", 404],
     ["GET", `integrations/hubspot/accounts/${id}/detect-changes`, 404],
     ["POST", `integrations/hubspot/accounts/${id}/detections`, 404],
     ["POST", `integrations/hubspot/detections/${id}`, 404],
@@ -199,7 +203,7 @@ test("HubSpot routes allow staged reads and explicit bounded source operations",
     const response = await route.exports[method](request, { params: Promise.resolve({ path: name.split("/") }) });
     assert.equal(response.status, expected, `${method} ${name}`);
   }
-  assert.equal(upstream.mock.callCount(), 12);
+  assert.equal(upstream.mock.callCount(), 14);
 });
 
 test("Next implicit HEAD cannot forward a HubSpot source mutation", async t => {
@@ -214,6 +218,11 @@ test("Next implicit HEAD cannot forward a HubSpot source mutation", async t => {
     const response = await methods.HEAD(request, { params: Promise.resolve({ path: name.split("/") }) });
     assert.equal(response.status, 404);
   }
+  const path = "integrations/hubspot/detections/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8/mission";
+  const request = new NextRequest(`http://localhost:3000/api/${path}`, { method: "HEAD", headers: {
+    host: "127.0.0.1:3000",
+  } });
+  assert.equal((await methods.HEAD(request, { params: Promise.resolve({ path: path.split("/") }) })).status, 404);
   assert.equal(upstream.mock.callCount(), 0);
 });
 

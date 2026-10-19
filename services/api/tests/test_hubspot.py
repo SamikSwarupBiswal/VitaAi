@@ -24,7 +24,17 @@ from vita_api.hubspot_changes import SourceDetection, detections
 from vita_api.hubspot_sync import observations, sync_runs
 from vita_api.identity import Identity, users
 from vita_api.sample import SAMPLE_ORG, sample_records
+from vita_api.source_missions import source_missions
 from vita_api.storage import source_versions
+from vita_api.workflow_storage import (
+    actions,
+    audits,
+    claims,
+    decisions,
+    missions,
+    plans,
+    versions,
+)
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=UTC)
 ACCOUNT_ID = sample_records(NOW)[0][0].id
@@ -193,6 +203,178 @@ class HubSpotApiTests(unittest.TestCase):
         return self.client.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes",
             headers=HEADERS, json={"expected_account_revision": view["account"]["revision"],
                 "expected_source_id": view["source"]["id"], **changes})
+
+    def source_mission_fixture(self):
+        self.enable_mapping()
+        self.company["properties"].update({"vita_annual_value": "45000", "vita_renewal_date": "2027-02-01",
+            "vita_usage_change": "-25", "vita_support_cases": "3", "vita_expansion": "65",
+            "vita_measured_at": self.company["updatedAt"]})
+        self.promote_source()
+        baseline = self.detect_sources().json()["processed"][0]
+        selected = self.promote_source(vita_usage_change="-40")
+        changed = self.detect_sources().json()["processed"][0]
+        view = self.client.get(f"/api/accounts/{ACCOUNT_ID}").json()
+        plan = self.client.post("/api/plans", headers=HEADERS, json={"account_id": ACCOUNT_ID,
+            "expected_revision": view["account"]["revision"], "expected_snapshot_hash": view["assessment"]["snapshot_hash"],
+            "intent": "risk"})
+        self.assertEqual(plan.status_code, 200, plan.text)
+        body = {"plan_id": plan.json()["id"], "expected_revision": 1, "event_id": changed["event"]["id"],
+                "expected_account_revision": view["account"]["revision"], "expected_source_id": selected["id"]}
+        path = f'/api/integrations/hubspot/detections/{changed["id"]}/mission'
+        return baseline, changed, plan.json(), path, body
+
+    def test_source_event_selection_creates_one_unprepared_mission_without_authority(self):
+        _, changed, plan, path, body = self.source_mission_fixture()
+        before = self.client.get(f"/api/accounts/{ACCOUNT_ID}").json()
+        calls = len(self.calls)
+        self.assertEqual(self.client.get(path).status_code, 404)
+        created = self.client.post(path, headers=HEADERS, json=body)
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["status"], "mission_created")
+        selection = created.json()["selection"]
+        self.assertEqual(selection["detection"], changed)
+        self.assertEqual(selection["request"]["plan_id"], plan["id"])
+        mission_id = selection["mission_id"]
+        mission = self.client.get(f"/api/missions/{mission_id}").json()
+        self.assertEqual(mission["status"], "draft")
+        self.assertEqual(mission["source_detection_id"], changed["id"])
+        self.assertEqual(self.client.get(f"/api/missions/{mission_id}/actions").json(), [])
+        self.assertEqual(self.client.get(f'/api/plans/{plan["id"]}').json(), plan)
+        self.assertEqual(self.client.get(f"/api/accounts/{ACCOUNT_ID}").json(), before)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).json(),
+                         {"schema_version": "1", "status": "mission_exists", "selection": selection})
+        self.assertEqual(self.client.get(path).json(), selection)
+        self.assertEqual(len(self.calls), calls)
+
+    def test_source_event_selection_migration_preserves_populated_detection_and_plan_history(self):
+        from sqlalchemy import text
+
+        from vita_api.migrate import upgrade
+        _, changed, plan, path, body = self.source_mission_fixture()
+        with self.app.state.store.engine.begin() as connection:
+            before = {table.name: list(connection.execute(select(table)).mappings())
+                      for table in (detections, source_versions, observations, plans, audits, versions)}
+            source_missions.drop(connection)
+            connection.execute(text("UPDATE alembic_version SET version_num='0009'"))
+        upgrade(self.app.state.store.engine)
+        with self.app.state.store.engine.connect() as connection:
+            for table in (detections, source_versions, observations, plans, audits, versions):
+                self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0010")
+        selected = self.client.post(path, headers=HEADERS, json=body)
+        self.assertEqual(selected.status_code, 200, selected.text)
+        self.assertEqual(selected.json()["selection"]["detection"], changed)
+        self.assertEqual(self.client.get(f'/api/plans/{plan["id"]}').json(), plan)
+
+    def test_source_event_selection_reconstruction_concurrency_conflicts_and_plan_reservation(self):
+        _, changed, _, path, body = self.source_mission_fixture()
+        calls = len(self.calls)
+        with TestClient(create_app(self.settings)) as other, ThreadPoolExecutor(max_workers=2) as pool:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            pending = [pool.submit(client.post, path, headers=HEADERS, json=body) for client in (self.client, other)]
+            results = [item.result(timeout=15) for item in pending]
+            self.assertTrue(all(item.status_code == 200 for item in results))
+            self.assertEqual(sorted(item.json()["status"] for item in results), ["mission_created", "mission_exists"])
+            selection = results[0].json()["selection"]
+            self.assertEqual(other.get(path).json(), selection)
+        self.assertEqual(self.rows(source_missions), 1)
+        self.assertEqual(self.rows(missions), 1)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, "plan_id": str(uuid4())}).status_code, 409)
+        ordinary = {key: body[key] for key in ("plan_id", "expected_revision")}
+        self.assertEqual(self.client.post("/api/missions", headers=HEADERS, json=ordinary).status_code, 409)
+        # A later source change makes the mission stale but cannot recreate it from the old event.
+        self.promote_source(vita_usage_change="-50")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).json()["selection"], selection)
+        self.assertEqual(self.client.get(path).json()["detection"], changed)
+        self.assertEqual(self.rows(missions), 1)
+        fetched = len(self.calls)  # Only the explicit test sync above fetched.
+        self.assertGreater(fetched, calls)
+        self.client.get(path)
+        self.client.post(path, headers=HEADERS, json=body)
+        self.assertEqual(len(self.calls), fetched)
+        for table in (actions, decisions, claims):
+            self.assertEqual(self.rows(table), 0)
+
+    def test_source_event_selection_atomic_failure_and_used_plan_denial(self):
+        _, _, _, path, body = self.source_mission_fixture()
+        from vita_api.workflow import Workflow
+        original = Workflow._audit
+        def fail_selection(service, connection, actor, record, event, **kwargs):
+            if event == "source_event_selected":
+                raise RuntimeError("isolated selection failure")
+            return original(service, connection, actor, record, event, **kwargs)
+        with patch.object(Workflow, "_audit", fail_selection), self.assertRaisesRegex(RuntimeError, "isolated selection failure"):
+            self.client.post(path, headers=HEADERS, json=body)
+        for table in (source_missions, missions, actions, decisions, claims):
+            self.assertEqual(self.rows(table), 0)
+        self.assertEqual(self.rows(audits), 1)  # Only the earlier plan creation.
+        self.assertEqual(self.rows(versions), 1)
+        ordinary = {key: body[key] for key in ("plan_id", "expected_revision")}
+        existing = self.client.post("/api/missions", headers=HEADERS, json=ordinary)
+        self.assertEqual(existing.status_code, 200)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 409)
+        self.assertEqual(self.rows(source_missions), 0)
+        self.assertEqual(self.rows(missions), 1)
+
+    def test_source_event_selection_scope_session_revision_source_and_configuration_gates(self):
+        baseline, changed, _, path, body = self.source_mission_fixture()
+        calls = len(self.calls)
+        for changes in ({"event_id": str(uuid4())}, {"expected_source_id": str(uuid4())},
+                        {"expected_account_revision": 2}, {"expected_revision": 2}):
+            self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, **changes}).status_code, 409)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, "actor_id": "invented"}).status_code, 422)
+        self.assertEqual(self.client.post(path, json=body).status_code, 403)
+        baseline_path = path.replace(changed["id"], baseline["id"])
+        self.assertEqual(self.client.post(baseline_path, headers=HEADERS, json=body).status_code, 409)
+        for username, organization, role, expected in [("viewer", SAMPLE_ORG, "viewer", 403),
+                ("foreign", "foreign", "admin", 404), ("seller", SAMPLE_ORG, "seller", 200)]:
+            self.identity.create_user(username, "test-password-long", organization, role)
+            self.login(username)
+            if role != "seller":
+                self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, expected)
+                self.assertEqual(self.client.get(path).status_code, 404)
+        self.login()
+        for changes in ({"hubspot_portal_id": "999"}, {"hubspot_company_map": {ACCOUNT_ID: "999"}},
+                        {"hubspot_property_map": {}}, {"hubspot_company_map": {}}):
+            with TestClient(create_app(self.settings.model_copy(update=changes))) as other:
+                other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+                self.assertIn(other.post(path, headers=HEADERS, json=body).status_code, {404, 409})
+        with TestClient(create_app(self.settings.model_copy(update={"hubspot_enabled": False}))) as offline:
+            offline.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            self.assertEqual(offline.post(path, headers=HEADERS, json=body).status_code, 200)
+        self.login("viewer")
+        self.assertEqual(self.client.get(path).status_code, 200)
+        self.client.post("/api/auth/logout", headers=HEADERS)
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
+        self.assertEqual(len(self.calls), calls)
+
+    def test_source_event_selection_rejects_stale_metadata_only_and_uncited_events(self):
+        _, _, plan, path, body = self.source_mission_fixture()
+        # A valid plan whose chosen action omits the changed usage evidence is incompatible.
+        from vita_api.workflow_contracts import Plan
+        original = Plan.model_validate(plan)
+        usage = next(item for item in original.alternatives[0].steps[0].evidence_ids
+                     if str(item) in {fact["id"] for fact in self.client.get(f"/api/accounts/{ACCOUNT_ID}").json()["evidence"]
+                                     if fact["metric"] == "usage_change"})
+        altered = original.model_dump(mode="json")
+        altered["alternatives"][0]["steps"][0]["evidence_ids"].remove(str(usage))
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(plans).where(plans.c.id == plan["id"]).values(payload=altered))
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 409)
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(plans).where(plans.c.id == plan["id"]).values(payload=plan))
+        self.promote_source(name="Metadata change only")
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 409)
+        changed = self.detect_sources().json()["processed"][0]
+        view = self.client.get(f"/api/accounts/{ACCOUNT_ID}").json()
+        new_plan = self.client.post("/api/plans", headers=HEADERS, json={"account_id": ACCOUNT_ID,
+            "expected_revision": view["account"]["revision"], "expected_snapshot_hash": view["assessment"]["snapshot_hash"],
+            "intent": "risk"}).json()
+        body.update(plan_id=new_plan["id"], expected_account_revision=view["account"]["revision"],
+                    expected_source_id=view["source"]["id"], event_id=changed["event"]["id"])
+        self.assertEqual(self.client.post(path.replace(path.split("/")[-2], changed["id"]), headers=HEADERS, json=body).status_code, 409)
+        self.assertEqual(self.rows(source_missions), 0)
 
     def test_promoted_source_detection_baseline_unchanged_event_and_restart(self):
         self.enable_mapping()
@@ -386,7 +568,8 @@ class HubSpotApiTests(unittest.TestCase):
         before = self.client.get("/api/portfolio").json()
         with self.app.state.store.engine.begin() as connection:
             saved = list(connection.execute(select(source_versions)).mappings())
-            # Reproduce populated 0008: 0009 only adds this new table.
+            # Reproduce populated 0008: later revisions only add detection/selection tables.
+            source_missions.drop(connection)
             detections.drop(connection)
             connection.execute(text("UPDATE alembic_version SET version_num='0008'"))
         with TestClient(create_app(self.settings)) as upgraded:
@@ -394,7 +577,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0009")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0010")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)
