@@ -85,6 +85,84 @@ test("explicit planning exposes saved ID for event selection without starting a 
   assert.equal(app.requests.length, 0); app.unmount();
 });
 
+function sourcedData() {
+  const value = microsoftData(); value.actions = []; value.microsoft.actions = [];
+  value.account.evidence = [];
+  value.plan.caveats = []; value.plan.alternatives[0].risks = [];
+  value.plan.alternatives[0].steps[0].evidence_ids = ["evidence"];
+  Object.assign(value.mission, { organization_id: "org", plan_id: "plan", plan_revision: 2,
+    template: "account-action-1", alternative_id: "choice", source_detection_id: "detection" });
+  value.account.source = { id: "new-source" };
+  const snapshot = n => ({ kind: "hubspot", source_version_id: `source-${n}`, account_revision: n,
+    selected_at: "2026-10-17T01:00:00Z", observation_id: `observation-${n}`, portal_id: "12", company_id: "34", mapping_hash: "c".repeat(64),
+    provider_created_at: "2026-10-01T00:00:00Z", provider_updated_at: "2026-10-16T00:00:00Z", fetched_at: "2026-10-16T01:00:00Z" });
+  const field = n => ({ value: n, status: "valid", unit: "percent", observed_at: "2026-10-15T00:00:00Z", evidence_id: `evidence-${n}` });
+  value.sourceSelection = { id: "selection", organization_id: "org", actor_id: "original <actor>", created_at: "2026-10-18T03:00:00Z",
+    policy_version: "source-mission-1", mission_id: "mission", request: { event_id: "event", expected_account_revision: 3,
+      expected_source_id: "source-3", plan_id: "plan", expected_revision: 2, template: "account-action-1", alternative_id: "choice" },
+    detection: { id: "detection", account_id: "account", organization_id: "org", actor_id: "detector", detected_at: "2026-10-18T02:00:00Z",
+      before: snapshot(2), after: snapshot(3), event: { id: "event", fingerprint: "a".repeat(64),
+        changes: [{ field: "usage_change", kind: "value_changed", before: field(-10), after: field(-20) }] } } };
+  return value;
+}
+
+async function loadSavedMission(app, value, reply = value.sourceSelection) {
+  const props = { id: "mission", configured: false, refresh() {} }, urls = [];
+  app.render(app.components.loader, props); app.requests.shift().resolve(value.mission); await flush();
+  for (const request of app.requests.splice(0)) {
+    assert.ok(!request.init.method); urls.push(request.url);
+    if (request.url.endsWith("/mission") && reply instanceof Error) { request.reject(reply); continue; }
+    request.resolve(request.url.startsWith("plans/") ? value.plan : request.url.startsWith("accounts/") ? value.account
+      : request.url.endsWith("/mission") ? reply : request.url.includes("microsoft/") ? value.microsoft
+        : request.url.endsWith("execution-readiness") ? value.readiness : []);
+  }
+  await flush(); const latest = app.requests.shift(); if (latest) latest.resolve(value.mission); await flush();
+  return { tree: app.render(app.components.loader, props), urls };
+}
+
+test("mission reload reads original selection only for sourced missions and rejects crossed provenance", async () => {
+  const app = harness(), value = sourcedData();
+  const { tree, urls } = await loadSavedMission(app, value);
+  assert.ok(urls.includes("integrations/hubspot/detections/detection/mission"));
+  assert.deepEqual(tree.props.data.sourceSelection, value.sourceSelection); assert.equal(app.requests.length, 0); app.unmount();
+  for (const alter of [s => { s.mission_id = "other"; }, s => { s.detection.account_id = "other"; },
+    s => { s.organization_id = "foreign"; }, s => { s.request.expected_revision = 9; },
+    s => { s.request.alternative_id = "other"; }, s => { s.request.expected_source_id = "other"; }]) {
+    const app = harness(), value = sourcedData(), invalid = structuredClone(value.sourceSelection); alter(invalid);
+    const { tree } = await loadSavedMission(app, value, invalid);
+    assert.match(renderToStaticMarkup(tree), /Source provenance changed/); app.unmount();
+  }
+  const legacy = harness(), old = sourcedData(); old.mission.source_detection_id = null;
+  const loaded = await loadSavedMission(legacy, old); assert.ok(!loaded.urls.some(url => url.endsWith("/mission")));
+  assert.equal(loaded.tree.props.data.sourceSelection, undefined); legacy.unmount();
+});
+
+test("all mission steps retain read-only dated provenance and disclose current-source mismatch", () => {
+  for (const step of ["Review", "Evidence", "Outreach", "CRM Note", "Approval", "Execution", "Outcome"]) {
+    const app = harness("viewer", step), value = sourcedData(), tree = app.panels(value);
+    const provenance = walk(tree, n => typeof n.type === "function" && n.type.name === "MissionSourceProvenance")[0];
+    assert.ok(provenance); const html = renderToStaticMarkup(provenance);
+    for (const text of ["Historical source selection", "differs", "No renewed approval", "original &lt;actor&gt;", "event", "a".repeat(64), "c".repeat(64), "source-2", "source-3",
+      "observation-2", "observation-3", "2026-10-15T00:00:00Z", "2026-10-16T01:00:00Z", "2026-10-18T03:00:00Z", "percent", "-20"]) assert.ok(html.includes(text), text);
+    assert.equal(walk(provenance.type(provenance.props), n => n.type === "button" || n.type === "form").length, 0); app.unmount();
+  }
+});
+
+test("unavailable optional provenance preserves mission reads and safe claimed cancellation", async () => {
+  const app = harness("reviewer"), value = sourcedData();
+  value.readiness = { account_id: "account", organization_id: "org", account_revision: 1,
+    write_configured: false, readback_configured: false, can_prepare: false, can_reconcile: false, destination: null };
+  const { tree } = await loadSavedMission(app, value, new Error("Request failed (404)."));
+  assert.ok(tree.props.data, "Otherwise authorized mission records must remain readable");
+  assert.equal(tree.props.data.sourceSelection, undefined);
+  const data = tree.props.data;
+  data.actions = [action]; data.executions = [{ id: "claim", action_id: "action", status: "claimed", revision: 1 }];
+  const recovery = harness("reviewer"), panels = recovery.panels(data);
+  assert.match(renderToStaticMarkup(walk(panels, n => n.type === "p" && n.props.role === "status")[0]), /Original source provenance unavailable/);
+  assert.equal(button(panels, "Reconcile recorded execution").props.disabled, false);
+  assert.equal(app.requests.length, 0); app.unmount(); recovery.unmount();
+});
+
 test("live draft preparation is explicit, ordered and uses current editor capability", async () => {
   const app = harness("seller", "Outreach"), value = microsoftData();
   value.microsoft.can_prepare = true;

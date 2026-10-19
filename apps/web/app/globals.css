@@ -179,6 +179,7 @@ details dd { overflow-wrap: anywhere; font-size: 12px; }
 .mission-main, .mission-directory { min-width: 0; }
 .mission-main p { margin: 12px 0; }
 .mission-id, .mission-main dd, .mission-main small { overflow-wrap: anywhere; }
+.mission-provenance { overflow-wrap: anywhere; }
 .mission-id { font-size: 12px; color: var(--muted); }
 .mission-steps { display: flex; gap: 8px; flex-wrap: wrap; margin: 28px 0; }
 .mission-steps button { display: flex; align-items: center; gap: 8px; font-size: 12px; }

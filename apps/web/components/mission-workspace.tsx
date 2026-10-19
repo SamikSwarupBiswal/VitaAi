@@ -260,6 +260,26 @@ function ExactPreview({ action }: { action: Action }) {
   </div>;
 }
 
+function MissionSourceProvenance({ selection, account }: { selection: NonNullable<MissionData["sourceSelection"]>; account: AccountView }) {
+  const { detection, request } = selection;
+  const matches = request.expected_account_revision === account.account.revision && request.expected_source_id === account.source?.id;
+  return <details className="mission-step mission-provenance"><summary>Original saved source event</summary><h3>Historical source selection</h3>
+    <p>Selection {selection.id}; original actor {selection.actor_id}; selected {selection.created_at}; policy {selection.policy_version}.</p>
+    <p>{matches ? "Original source matches the displayed selection." : "Original source or account revision differs from the displayed current selection."} No renewed approval or execution authority. Readiness, review and execution use fresh server checks.</p>
+    <p>Original plan {request.plan_id} revision {request.expected_revision}; template {request.template}; alternative {request.alternative_id || "original plan default"}.</p>
+    <p>Detection {detection.id}; original detector {detection.actor_id}; detected {detection.detected_at}. Event {request.event_id}; fingerprint {detection.event?.fingerprint}.</p>
+    {[detection.before, detection.after].map((snapshot, index) => snapshot && <section key={index} aria-label={`${index ? "After" : "Before"} original source`}>
+      <h4>{index ? "After" : "Before"} original source</h4>
+      <p>{snapshot.kind}; source {snapshot.source_version_id}; account revision {snapshot.account_revision}; selected {snapshot.selected_at}.</p>
+      <p>Observation {snapshot.observation_id || "none"}; portal {snapshot.portal_id || "none"}; company {snapshot.company_id || "none"}; mapping {snapshot.mapping_hash || "none"}.</p>
+      <p>Provider created {snapshot.provider_created_at || "Unknown"}; updated {snapshot.provider_updated_at || "Unknown"}; fetched {snapshot.fetched_at || "Unknown"}.</p>
+    </section>)}
+    <ul>{detection.event?.changes.map(change => <li key={change.field}>{change.field.replaceAll("_", " ")} · {change.kind.replaceAll("_", " ")}
+      {[change.before, change.after].map((field, index) => <p key={index}>{index ? "After" : "Before"}: {field.value === null ? "Unknown" : String(field.value)} · {field.status} · {field.unit}; measured {field.observed_at || "Unknown"}; evidence {field.evidence_id || "none"}.</p>)}</li>)}</ul>
+    <p>These retained changes do not establish a cause, risk direction or business outcome.</p>
+  </details>;
+}
+
 function MissionPanels({ data, configured, refresh }: { data: MissionData; configured: boolean; refresh: (message?: string) => void }) {
   const { mission, plan, account, actions, decisions, executions, receipts, audit } = data;
   const params = useSearchParams();
@@ -291,6 +311,8 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
     || (action.payload?.kind === "outlook_draft_create" ? action.destination?.connector_id !== "microsoft-live" || !data.microsoft
       : !readiness || action.destination?.connector_id !== "hubspot-live")))) return <section aria-label="Live mission read-only">
     <h2>{account.account.name} · live API mission</h2>
+    {mission.source_detection_id && !data.sourceSelection && <p role="status">Original source provenance unavailable. Refresh records or check source access. Retained mission records remain subject to their separate authority checks.</p>}
+    {data.sourceSelection && <MissionSourceProvenance selection={data.sourceSelection} account={account} />}
     <p>Live controls are unavailable for these records. Refresh current readiness or inspect the authenticated API; saved records remain authoritative.</p>
     <h3>Saved actions</h3>
     {actions.map(action => <ExactPreview key={action.id} action={action} />)}
@@ -315,6 +337,8 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
   return <><div className="mission-heading"><div><h2>{account.account.name}</h2><p>{mission.status.replaceAll("_", " ")} · revision {mission.revision}</p></div>
     <span className="mission-id">{mission.id}</span></div>
     <p className="muted">Server step: {mission.current_step}. Viewing a step does not advance this mission.</p>
+    {mission.source_detection_id && !data.sourceSelection && <p role="status">Original source provenance unavailable. Refresh records or check source access. Retained mission records remain subject to their separate authority checks.</p>}
+    {data.sourceSelection && <MissionSourceProvenance selection={data.sourceSelection} account={account} />}
     <p>HubSpot writes: {readiness?.write_configured ? "Configured, unverified" : "Unavailable"}. Readback: {readiness?.readback_configured ? "Configured, unverified" : "Unavailable"}. Configuration is not connectivity or execution evidence.</p>
     {choice.steps.some(item => item.kind === "outlook_draft_create") && <p>Microsoft preparation: {data.microsoft?.can_prepare ? "Available for your connected mailbox" : "Unavailable; connect your mailbox or check server configuration"}. Saved drafts retain the original maker mailbox. Reconnect invalidates old write previews; same-mailbox reauthorization permits retained-ID readback only.</p>}
     {mixed && <p role="alert">Mixed simulation/live actions cannot execute together. Before any claim, save every selected step in the same mode and obtain fresh review.</p>}
