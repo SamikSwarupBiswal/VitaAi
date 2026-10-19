@@ -20,6 +20,8 @@ from .microsoft import Microsoft
 from .models import AdvisoryProvider
 from .nebius import Nebius
 from .pipeline import Pipeline, PipelineRequest, PipelineRun
+from .provider_catalog import PREFIX as COMPARISON_PREFIX
+from .provider_catalog import install_catalog_routes
 from .research import PREFIX as RESEARCH_PREFIX
 from .research_service import install_research_routes
 from .sample import SAMPLE_ORG, sample_records
@@ -31,7 +33,8 @@ from .workflow_api import WORKFLOW_PREFIXES, install_workflow_routes, safe_error
 def create_app(settings: Settings | None = None, provider: AdvisoryProvider | None = None,
                *, hubspot_transport: httpx.BaseTransport | None = None,
                microsoft_transport: httpx.BaseTransport | None = None, microsoft_client_factory=None,
-               research_transport: httpx.BaseTransport | None = None) -> FastAPI:
+               research_transport: httpx.BaseTransport | None = None,
+               comparison_transport: httpx.BaseTransport | None = None) -> FastAPI:
     settings = settings or Settings()
     store = Store(settings.database_url)
     provider = provider or Nebius(settings)
@@ -55,7 +58,8 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     async def validation_error(request: Request, error: RequestValidationError):
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
-        if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX, RESEARCH_PREFIX)):
+        if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX, RESEARCH_PREFIX,
+                                        COMPARISON_PREFIX)):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
@@ -205,6 +209,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_workflow_routes(app, store, identity, settings, provider, hubspot_transport, microsoft)
     install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     install_research_routes(app, store, identity, settings, research_transport)
+    install_catalog_routes(app, store, identity, settings, comparison_transport)
     return app
 
 

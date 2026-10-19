@@ -40,6 +40,15 @@ class ResearchTarget(BaseModel):
     domain: str = Field(max_length=253, pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
+class ComparisonProviderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    live_enabled: bool = False
+    api_key: SecretStr = SecretStr("")
+    model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
+    revision: int = Field(default=1, ge=1)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / "services/api/.env", extra="ignore")
 
@@ -50,6 +59,9 @@ class Settings(BaseSettings):
     nebius_api_key: SecretStr = SecretStr("")
     nebius_model: str = ""
     nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
+    comparison_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
+    comparison_providers: dict[Literal["nebius", "openai", "anthropic", "nvidia"], ComparisonProviderConfig] = Field(
+        default_factory=dict, max_length=4)
     research_enabled: bool = False
     research_live_enabled: bool = False
     research_api_key: SecretStr = SecretStr("")
