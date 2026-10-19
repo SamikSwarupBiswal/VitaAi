@@ -5,6 +5,7 @@ import type { AccountView } from "@/lib/api";
 import { detectionPending, detectSourceChanges, readDetection, readDetections,
   type SourceDetection, type SourceField, type SourceSnapshot } from "@/lib/hubspot";
 import { useSession } from "./session-gate";
+import { SourceMissionPanel } from "./source-mission-panel";
 
 export function SourceDetectionPanel({ view }: { view: AccountView }) {
   const session = useSession();
@@ -141,5 +142,6 @@ function DetectionRecord({ record, view }: { record: SourceDetection; view: Acco
       <ul>{record.event.changes.map(change => <li key={change.field}>{change.field.replaceAll("_", " ")} · {change.kind.replaceAll("_", " ")}
         <p>Before: <FieldValue field={change.before} /></p><p>After: <FieldValue field={change.after} /></p></li>)}</ul></>}
     <Snapshot label="Before" snapshot={record.before} /><Snapshot label="After" snapshot={record.after} />
+    <SourceMissionPanel key={record.id} record={record} view={view} />
   </section>;
 }

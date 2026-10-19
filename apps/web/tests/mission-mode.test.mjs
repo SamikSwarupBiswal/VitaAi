@@ -52,7 +52,7 @@ function harness(role = "reviewer", step = "Execution") {
   const components = load("../components/mission-workspace.tsx", { react: hooks, "@/lib/api": { api }, "@/lib/workflow": workflow,
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) },
     "next/navigation": { useSearchParams: () => new URLSearchParams({ step }), useRouter: () => ({ replace() {} }) },
-  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory;");
+  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission;");
   function render(component, props) {
     cursor = 0; const tree = component(props), pending = effects; effects = []; pending.forEach(fn => fn()); return tree;
   }
@@ -72,6 +72,18 @@ function microsoftData() {
     actions: [{ action_id: "action", action_revision: 4, binding_hash: "exact-hash", can_write: true, can_reconcile: true }] };
   return value;
 }
+
+test("explicit planning exposes saved ID for event selection without starting a mission", async () => {
+  const app = harness("seller"), account = data().account;
+  const props = { account, configured: false, onCreated() { assert.fail("Planning must not start a mission"); } };
+  const render = () => app.render(app.components.newMission, props);
+  walk(render(), n => n.type === "form")[0].props.onSubmit({ preventDefault() {} }); await flush();
+  assert.equal(app.requests.length, 1); assert.equal(app.requests[0].url, "plans");
+  app.requests.shift().resolve({ id: "saved-plan", revision: 3, source: "deterministic", validation: "valid", caveats: [],
+    selected_alternative_id: "choice", alternatives: [{ id: "choice", rationale: "Review", risks: [], steps: [item] }] }); await flush();
+  assert.match(renderToStaticMarkup(render()), /Saved plan ID: saved-plan/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
 
 test("live draft preparation is explicit, ordered and uses current editor capability", async () => {
   const app = harness("seller", "Outreach"), value = microsoftData();

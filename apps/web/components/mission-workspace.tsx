@@ -213,7 +213,8 @@ function NewMission({ account, configured, onCreated, replaces }: {
     </fieldset></form>
     {op.error && <p role="alert" className="error-banner">{op.error}</p>}
     {run && <p role="status">Planning run {run.id}: {run.status} · {run.validation} {run.error_code || ""}</p>}
-    {plan && <><p>Source: {plan.source} · validation: {plan.validation}</p><p>{plan.caveats.join(" ")}</p>
+    {plan && <><p>Saved plan ID: {plan.id} · revision {plan.revision}.{!replaces && " Copy this ID to select a saved source event before starting a mission here."}</p>
+      <p>Source: {plan.source} · validation: {plan.validation}</p><p>{plan.caveats.join(" ")}</p>
       <fieldset disabled={op.blocked}><legend>Select an alternative</legend>{plan.alternatives.map(item => <label className="mission-choice" key={item.id}>
         <input type="radio" name="alternative" checked={alternative === item.id} onChange={() => setAlternative(item.id)} />
         <span>{item.rationale}<small>{item.steps.map(step => kindLabel(step.kind)).join(" → ")}</small><small>{item.risks.join(" ")}</small></span>

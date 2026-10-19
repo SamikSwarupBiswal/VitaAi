@@ -33,7 +33,7 @@ function walk(node, predicate) {
   return [...(predicate(node) ? [node] : []), ...walk(node.props?.children, predicate)];
 }
 function environment(t) {
-  const requests = [], events = [], listeners = new Map();
+  const requests = [], events = [], listeners = new Map(), selections = [];
   const previous = globalThis.window;
   globalThis.window = { addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); },
     removeEventListener(name, fn) { listeners.get(name)?.delete(fn); },
@@ -53,6 +53,7 @@ function environment(t) {
         slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = fn(); }); } },
     };
     const panel = load("../components/source-detection-panel.tsx", { react: hooks, "@/lib/hubspot": helper,
+      "./source-mission-panel": { SourceMissionPanel: props => { selections.push(props); return null; } },
       "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", organization_id: "org", role } }) } });
     const render = () => { cursor = 0; const outer = panel.SourceDetectionPanel({ view: currentView });
       const tree = outer.type(outer.props); const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
@@ -67,7 +68,7 @@ function environment(t) {
     await flush();
   }
   async function ready(app, current = view, history = []) { app.render(); await flush(); await settle(current, history); }
-  return { requests, events, helper, mount, settle, ready, focus() { globalThis.window.dispatchEvent(new Event("focus")); } };
+  return { requests, events, selections, helper, mount, settle, ready, focus() { globalThis.window.dispatchEvent(new Event("focus")); } };
 }
 
 test("reads never detect; explicit admin batches bind displayed revision/source and require another click", async t => {
@@ -147,6 +148,7 @@ test("saved records render exact historical identities/status/units/dates safely
     { ...record(24), status: "source_reset", reason: "local_sample", after: { ...snapshot(24), kind: "local_sample", fields: {} } }]) {
     app.input().props.onChange({ target: { value: saved.id } }); app.form().props.onSubmit({ preventDefault() {} }); env.requests.shift().resolve(saved); await flush();
     const html = renderToStaticMarkup(app.render()); assert.match(html, /Historical selection/); assert.match(html, new RegExp(saved.reason.replaceAll("_", " ")));
+    assert.equal(env.selections.at(-1).record, saved); assert.equal(env.selections.at(-1).view, view);
     assert.match(html, /2026-10-18T00:00:00Z/); assert.match(html, /historical-actor/); assert.doesNotMatch(html, /<img /);
     if (saved === changed) for (const text of ["availability changed", "Unknown", "0", "percent", "12", "34", id(124), "mapping", "2026-10-14T00:00:00Z", "2026-10-16T00:00:00Z", "&lt;img"]) assert.ok(html.includes(text), text);
   }
