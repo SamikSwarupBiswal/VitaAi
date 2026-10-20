@@ -22,6 +22,7 @@ from .nebius import Nebius
 from .pipeline import Pipeline, PipelineRequest, PipelineRun
 from .provider_catalog import PREFIX as COMPARISON_PREFIX
 from .provider_catalog import install_catalog_routes
+from .provider_comparison import install_comparison_routes
 from .research import PREFIX as RESEARCH_PREFIX
 from .research_service import install_research_routes
 from .sample import SAMPLE_ORG, sample_records
@@ -210,6 +211,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     install_research_routes(app, store, identity, settings, research_transport)
     install_catalog_routes(app, store, identity, settings, comparison_transport)
+    install_comparison_routes(app, store, identity, settings, comparison_transport)
     return app
 
 

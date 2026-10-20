@@ -1,12 +1,22 @@
 """Isolated database/API components and explicit mocked provider transport."""
+import json
+import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
+from uuid import uuid4
 
 import httpx
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import update
+from sqlalchemy import create_engine, select, update
+from sqlalchemy.engine import make_url
+from sqlalchemy.schema import CreateSchema, DropSchema
 
 from vita_api.app import create_app
 from vita_api.config import ComparisonProviderConfig, Settings
@@ -17,7 +27,13 @@ from vita_api.provider_catalog import (
     DiscoveryRequest,
     ProviderCatalog,
 )
-from vita_api.sample import SAMPLE_ORG
+from vita_api.provider_comparison import (
+    ComparisonRequest,
+    ComparisonService,
+    comparisons,
+)
+from vita_api.sample import SAMPLE_ORG, sample_records
+from vita_api.storage import Store, accounts
 
 HEADERS = {"X-VitaAi-Request": "1"}
 
@@ -30,6 +46,26 @@ def settings(**changes):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_populated_0010_upgrade_preserves_original_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            url = f"sqlite:///{Path(directory) / 'legacy.sqlite'}"
+            store = Store(url)
+            config = Config()
+            config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "migrations"))
+            with store.engine.begin() as connection:
+                config.attributes["connection"] = connection
+                command.upgrade(config, "0010")
+            store.seed(sample_records(datetime.now(UTC)))
+            identity = Identity(store.engine)
+            user = identity.create_user("migration-user", "synthetic-password-123", SAMPLE_ORG, "admin")
+            before = store.account_records(SAMPLE_ORG)
+            store.initialize()
+            self.assertEqual(store.account_records(SAMPLE_ORG), before)
+            with store.engine.connect() as connection:
+                self.assertEqual(connection.execute(select(users.c.id)).scalar_one(), user.id)
+                self.assertEqual(connection.execute(select(comparisons)).all(), [])
+            store.engine.dispose()
+
     def test_no_implicit_network_or_shared_keys(self):
         calls = []
         catalog = ProviderCatalog(settings(), httpx.MockTransport(lambda request: calls.append(request)))
@@ -98,12 +134,24 @@ class CatalogTests(unittest.TestCase):
 class CatalogApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.settings = settings(database_url=f"sqlite:///{Path(self.temp.name) / 'comparison.sqlite'}")
+        self.pg_admin = None
+        database_url = f"sqlite:///{Path(self.temp.name) / 'comparison.sqlite'}"
+        if os.environ.get("VITAAI_POSTGRES_TEST_URL"):
+            self.pg_admin = create_engine(os.environ["VITAAI_POSTGRES_TEST_URL"])
+            self.schema = "vitaai_comparison_" + uuid4().hex
+            with self.pg_admin.begin() as connection:
+                connection.execute(CreateSchema(self.schema))
+            database_url = make_url(os.environ["VITAAI_POSTGRES_TEST_URL"]).update_query_dict({
+                "options": "-csearch_path=" + self.schema}).render_as_string(hide_password=False)
+        self.settings = settings(database_url=database_url)
         self.calls, self.callback = [], None
+        self.inference = None
         def respond(request):
             self.calls.append(request)
             if self.callback:
                 self.callback()
+            if self.inference:
+                return self.inference(request)
             return httpx.Response(200, json={"data": [{"id": "test-model"}]})
         self.app = create_app(self.settings, comparison_transport=httpx.MockTransport(respond))
         self.client = TestClient(self.app).__enter__()
@@ -117,6 +165,10 @@ class CatalogApiTests(unittest.TestCase):
 
     def tearDown(self):
         self.client.__exit__(None, None, None)
+        if self.pg_admin is not None:
+            with self.pg_admin.begin() as connection:
+                connection.execute(DropSchema(self.schema, cascade=True))
+            self.pg_admin.dispose()
         self.temp.cleanup()
 
     def test_scope_modes_schema_and_authority_recheck(self):
@@ -140,3 +192,229 @@ class CatalogApiTests(unittest.TestCase):
         with self.app.state.store.engine.begin() as connection:
             connection.execute(update(users).where(users.c.id == self.admin.id).values(role="seller"))
         self.assertEqual(self.client.post(path, headers=HEADERS, json={}).status_code, 403)
+
+
+class ComparisonApiTests(unittest.TestCase):
+    login = CatalogApiTests.login
+    tearDown = CatalogApiTests.tearDown
+
+    def setUp(self):
+        CatalogApiTests.setUp(self)
+        self.inference = self.valid_response
+        self.views = self.client.get("/api/portfolio").json()["accounts"]
+        self.view = self.views[0]
+        self.account_id = self.view["account"]["id"]
+        self.path = PREFIX + "/accounts/" + self.account_id
+        self.contexts = []
+
+    def body(self, providers=None, **changes):
+        return {"expected_revision": self.view["account"]["revision"],
+            "expected_snapshot_hash": self.view["assessment"]["snapshot_hash"],
+            "providers": providers or [{"provider": name, "mode": "live", "expected_configuration_revision": 1}
+                for name in ENDPOINTS], **changes}
+
+    def valid_response(self, request):
+        body = json.loads(request.content)
+        self.assertEqual(request.method, "POST")
+        context = body["messages"][-1]["content"]
+        self.contexts.append(context)
+        evidence = json.loads(context)["evidence"][0]["id"]
+        output = json.dumps({"findings": [{"text": "Advisory finding", "evidence_ids": [evidence]}],
+            "next_steps": [{"text": "Review the supplied facts", "evidence_ids": [evidence]}], "caveats": ["Unverified"]})
+        if request.url.host == "api.anthropic.com":
+            self.assertEqual(request.url.path, "/v1/messages")
+            self.assertEqual(body["max_tokens"], 1600)
+            return httpx.Response(200, json={"id": "msg-test", "model": body["model"], "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": output}], "usage": {"input_tokens": 20, "output_tokens": 12}})
+        self.assertEqual(request.url.path, "/v1/chat/completions")
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+        self.assertEqual(body["max_completion_tokens" if request.url.host == "api.openai.com" else "max_tokens"], 1600)
+        return httpx.Response(200, json={"id": "chat-test", "model": body["model"],
+            "choices": [{"finish_reason": "stop", "message": {"content": output}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 12}})
+
+    def compare(self, **changes):
+        return self.client.post(self.path + "/compare", headers=HEADERS, json=self.body(**changes))
+
+    def test_identical_snapshots_independent_provenance_and_unchanged_authority(self):
+        before = self.client.get("/api/portfolio").json()
+        response = self.compare()
+        self.assertEqual(response.status_code, 200, response.text)
+        run = response.json()
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(len(self.contexts), 4)
+        self.assertEqual(len(set(self.contexts)), 1)
+        self.assertEqual(len({result["id"] for result in run["results"]}), 4)
+        self.assertTrue(all(result["mode"] == "live" and result["status"] == "succeeded" and
+            result["validation"] == "schema_and_references_valid" and result["input_tokens"] == 20 and
+            result["output_tokens"] == 12 and result["factual_confidence"] == "unverified" for result in run["results"]))
+        self.assertEqual(run["snapshot"]["assessment"], self.view["assessment"])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        self.assertEqual(self.client.get("/api/missions").json(), [])
+        self.assertNotIn("synthetic-openai", response.text)
+        self.assertEqual(self.client.get(PREFIX + "/runs/" + run["id"]).json(), run)
+        self.assertEqual(self.client.get(self.path + "/runs").json(), [run])
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(self.compare().status_code, 429)
+        with TestClient(create_app(self.settings)) as restarted:
+            restarted.cookies.update(self.client.cookies)
+            self.assertEqual(restarted.get(PREFIX + "/runs/" + run["id"]).json(), run)
+
+    def test_modes_and_partial_failure_remain_independent(self):
+        self.settings.comparison_providers["nebius"].enabled = False
+        self.settings.comparison_providers["nvidia"].api_key = ComparisonProviderConfig().api_key
+        choices = self.body()["providers"]
+        choices[1]["mode"] = "mock"
+        self.inference = lambda _: httpx.Response(429, json={"error": "synthetic-anthropic"})
+        result = self.compare(providers=choices)
+        self.assertEqual(result.status_code, 200)
+        rows = {item["provider"]: item for item in result.json()["results"]}
+        self.assertEqual([rows[name]["mode"] for name in ENDPOINTS], ["disabled", "mock", "fallback", "fallback"])
+        self.assertEqual(rows["anthropic"]["error_code"], "provider_http_429")
+        self.assertTrue(all(item["analysis"] is None for item in rows.values()))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_invalid_output_does_not_hide_another_success(self):
+        def response(request):
+            if request.url.host == "api.openai.com":
+                return httpx.Response(200, json={"model": "test-model", "id": "rejected-test",
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 4}, "choices": [{"finish_reason": "stop",
+                    "message": {"content": json.dumps({"findings": [{"text": "Crossed", "evidence_ids": [str(uuid4())]}],
+                    "next_steps": [{"text": "Review", "evidence_ids": [str(uuid4())]}], "caveats": []})}}]})
+            return self.valid_response(request)
+        self.inference = response
+        result = self.compare(providers=[{"provider": name, "mode": "live", "expected_configuration_revision": 1}
+            for name in ["openai", "anthropic"]]).json()
+        self.assertEqual(result["results"][0]["status"], "invalid_output")
+        self.assertEqual(result["results"][0]["validation"], "rejected")
+        self.assertEqual(result["results"][0]["request_id"], "rejected-test")
+        self.assertEqual(result["results"][1]["status"], "succeeded")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_truncated_output_retains_safe_usage_and_request_provenance(self):
+        def response(request):
+            if request.url.host == "api.anthropic.com":
+                return httpx.Response(200, json={"id": "msg-truncated", "model": "test-model", "stop_reason": "max_tokens",
+                    "content": [], "usage": {"input_tokens": 20, "output_tokens": 1600}})
+            return httpx.Response(200, json={"id": "chat-truncated", "model": "test-model",
+                "choices": [{"finish_reason": "length", "message": {"content": "{"}}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 1600}})
+        self.inference = response
+        result = self.compare(providers=[{"provider": name, "mode": "live", "expected_configuration_revision": 1}
+            for name in ["openai", "anthropic"]]).json()
+        for row, request_id in zip(result["results"], ["chat-truncated", "msg-truncated"], strict=True):
+            self.assertEqual((row["status"], row["error_code"], row["analysis"]), ("failed", "incomplete_generation", None))
+            self.assertEqual((row["request_id"], row["input_tokens"], row["output_tokens"]), (request_id, 20, 1600))
+
+    def test_explicit_alias_response_binding_retains_requested_and_returned_model(self):
+        self.settings.comparison_providers["openai"] = ComparisonProviderConfig(
+            enabled=True, live_enabled=True, api_key="synthetic-openai", model="test-alias", response_model="test-model")
+        def response(request):
+            body = self.valid_response(request).json()
+            body["model"] = "test-model"
+            return httpx.Response(200, json=body)
+        self.inference = response
+        response = self.compare(providers=[{"provider": "openai", "mode": "live", "expected_configuration_revision": 1}])
+        self.assertEqual(response.status_code, 200)
+        row = response.json()["results"][0]
+        self.assertEqual(row["status"], "succeeded")
+        self.assertEqual((row["model"], row["response_model"], row["expected_response_model"]),
+                         ("test-alias", "test-model", "test-model"))
+
+    def test_schema_scope_and_stale_bindings_deny_without_call(self):
+        for changes in [{"expected_revision": 999}, {"expected_snapshot_hash": "0" * 64},
+                        {"providers": [{"provider": "openai", "expected_configuration_revision": 999}]}]:
+            self.assertEqual(self.compare(**changes).status_code, 409)
+        choices = [{"provider": "openai", "expected_configuration_revision": 1}] * 2
+        self.assertEqual(self.compare(providers=choices).status_code, 422)
+        response = self.client.post(self.path + "/compare", headers=HEADERS, json={**self.body(), "api_key": "never-echo"})
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn("never-echo", response.text)
+        self.assertEqual(self.client.head(self.path + "/compare").status_code, 405)
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == self.admin.id).values(role="viewer"))
+        self.assertEqual(self.compare().status_code, 403)
+        self.assertEqual(self.calls, [])
+
+    def test_session_loss_discards_unpublished_output_and_stops_later_calls(self):
+        self.callback = lambda: self.identity.logout(self.client.cookies.get("vitaai_session"))
+        result = self.compare()
+        self.assertEqual(result.status_code, 401)
+        self.callback = None
+        self.login()
+        saved = self.client.get(self.path + "/runs").json()[0]
+        self.assertEqual(saved["status"], "discarded")
+        self.assertTrue(all(item["status"] == "discarded" and item["analysis"] is None for item in saved["results"]))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_source_revision_change_discards_without_refreshing_original_snapshot(self):
+        def change():
+            with self.app.state.store.engine.begin() as connection:
+                payload = connection.execute(select(accounts.c.payload).where(accounts.c.id == self.account_id)).scalar_one()
+                payload["revision"] += 1
+                connection.execute(update(accounts).where(accounts.c.id == self.account_id).values(payload=payload))
+        self.callback = change
+        self.assertEqual(self.compare().status_code, 409)
+        saved = self.client.get(self.path + "/runs").json()[0]
+        self.assertEqual(saved["status"], "discarded")
+        self.assertEqual(saved["account_revision"], self.view["account"]["revision"])
+        self.assertEqual(saved["snapshot"]["assessment"], self.view["assessment"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_two_engines_block_duplicate_comparison_during_network(self):
+        entered, release = Event(), Event()
+        def wait():
+            entered.set()
+            self.assertTrue(release.wait(20))
+        self.callback = wait
+        with TestClient(create_app(self.settings)) as other, ThreadPoolExecutor(max_workers=1) as pool:
+            other.cookies.update(self.client.cookies)
+            pending = pool.submit(self.compare)
+            try:
+                self.assertTrue(entered.wait(20))
+                response = other.post(self.path + "/compare", headers=HEADERS, json=self.body())
+                self.assertEqual(response.status_code, 409)
+                saved = other.get(self.path + "/runs").json()[0]
+                self.assertEqual(saved["status"], "pending")
+                self.assertTrue(all(item["analysis"] is None for item in saved["results"]))
+            finally:
+                release.set()
+            self.assertEqual(pending.result(30).status_code, 200)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_worker_loss_retains_completed_result_and_pending_blocks_without_retry(self):
+        def response(request):
+            if len(self.calls) == 2:
+                raise SystemExit("controlled-worker-loss")
+            return self.valid_response(request)
+        self.inference = response
+        catalog = ProviderCatalog(self.settings, httpx.MockTransport(lambda request: self.transport_call(request)))
+        operation = ComparisonService(self.app.state.store, catalog, self.client.cookies.get("vitaai_session"))
+        with self.assertRaises(SystemExit):
+            operation.start(self.admin.id, self.account_id, ComparisonRequest(**self.body()))
+        with TestClient(create_app(self.settings)) as restarted:
+            restarted.cookies.update(self.client.cookies)
+            saved = restarted.get(self.path + "/runs").json()[0]
+            self.assertEqual(saved["status"], "pending")
+            self.assertEqual(saved["results"][0]["status"], "succeeded")
+            self.assertEqual(saved["results"][1]["status"], "pending")
+            self.assertEqual(restarted.post(self.path + "/compare", headers=HEADERS, json=self.body()).status_code, 409)
+        self.assertEqual(len(self.calls), 2)
+
+    def transport_call(self, request):
+        self.calls.append(request)
+        return self.inference(request)
+
+    def test_bounded_history_preserves_terminal_records_and_never_calls_provider(self):
+        choice = [{"provider": "openai", "expected_configuration_revision": 1}]
+        for index in range(22):
+            result = self.compare(providers=choice)
+            self.assertEqual(result.status_code, 200)
+            with self.app.state.store.engine.begin() as connection:
+                connection.execute(update(comparisons).values(started_at=int(datetime.now(UTC).timestamp()) - 120 - index))
+        latest = self.client.get(self.path + "/runs").json()
+        self.assertEqual(len(latest), 20)
+        self.assertEqual(len({item["id"] for item in latest}), 20)
+        original = self.client.get(PREFIX + "/runs/" + result.json()["id"]).json()
+        self.assertEqual(original, result.json())
+        self.assertEqual(self.calls, [])

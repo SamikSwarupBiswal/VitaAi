@@ -1005,6 +1005,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-comparison/accounts/{account_id}/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Compare */
+        post: operations["compare_api_provider_comparison_accounts__account_id__compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-comparison/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_provider_comparison_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-comparison/accounts/{account_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_provider_comparison_accounts__account_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1406,13 +1457,15 @@ export interface components {
             configuration_revision: number;
             /** Model */
             model: string | null;
+            /** Expected Response Model */
+            expected_response_model: string | null;
             /**
              * Status
              * @enum {string}
              */
             status: "disabled" | "unconfigured" | "configured_unverified";
             /** Capabilities */
-            capabilities: "model_discovery"[];
+            capabilities: ("model_discovery" | "account_analysis")[];
         };
         /** CommunicationDrafts */
         CommunicationDrafts: {
@@ -1453,6 +1506,162 @@ export interface components {
             evidence_ids: string[];
             model_run?: components["schemas"]["ModelRun"] | null;
             drafts?: components["schemas"]["CommunicationDrafts"] | null;
+        };
+        /** ComparisonChoice */
+        ComparisonChoice: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "nebius" | "openai" | "anthropic" | "nvidia";
+            /**
+             * Mode
+             * @default mock
+             * @enum {string}
+             */
+            mode: "mock" | "live";
+            /** Expected Configuration Revision */
+            expected_configuration_revision: number;
+        };
+        /** ComparisonRequest */
+        ComparisonRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /** Providers */
+            providers: components["schemas"]["ComparisonChoice"][];
+        };
+        /** ComparisonResult */
+        ComparisonResult: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id?: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "nebius" | "openai" | "anthropic" | "nvidia";
+            /**
+             * Requested Mode
+             * @enum {string}
+             */
+            requested_mode: "mock" | "live";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "disabled" | "mock" | "live" | "fallback";
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Model */
+            model: string | null;
+            /** Expected Response Model */
+            expected_response_model: string | null;
+            /** Response Model */
+            response_model?: string | null;
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded";
+            /**
+             * Validation
+             * @default not_run
+             * @enum {string}
+             */
+            validation: "not_run" | "rejected" | "schema_and_references_valid";
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Request Id */
+            request_id?: string | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            analysis?: components["schemas"]["Analysis"] | null;
+        };
+        /** ComparisonRun */
+        ComparisonRun: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Policy Version
+             * @default comparison-1
+             * @constant
+             */
+            policy_version: "comparison-1";
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "completed" | "discarded";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            snapshot: components["schemas"]["AccountView"];
+            /** Results */
+            results: components["schemas"]["ComparisonResult"][];
         };
         /** DestinationBinding */
         DestinationBinding: {
@@ -5332,6 +5541,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DiscoveryResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_api_provider_comparison_accounts__account_id__compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComparisonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparisonRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_provider_comparison_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparisonRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_provider_comparison_accounts__account_id__runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparisonRun"][];
                 };
             };
             /** @description Validation Error */

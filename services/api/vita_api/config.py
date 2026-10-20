@@ -46,6 +46,7 @@ class ComparisonProviderConfig(BaseModel):
     live_enabled: bool = False
     api_key: SecretStr = SecretStr("")
     model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
+    response_model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
     revision: int = Field(default=1, ge=1)
 
 
