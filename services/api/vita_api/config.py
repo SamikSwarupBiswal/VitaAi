@@ -48,6 +48,8 @@ class ComparisonProviderConfig(BaseModel):
     model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
     response_model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
     revision: int = Field(default=1, ge=1)
+    resource_name: str = Field(default="", pattern=r"^(?:[a-z0-9][a-z0-9-]{0,61}[a-z0-9])?$")
+    endpoint_domain: Literal["services.ai.azure.com", "openai.azure.com"] = "services.ai.azure.com"
 
 
 class Settings(BaseSettings):
@@ -61,8 +63,8 @@ class Settings(BaseSettings):
     nebius_model: str = ""
     nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
     comparison_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
-    comparison_providers: dict[Literal["nebius", "openai", "anthropic", "nvidia"], ComparisonProviderConfig] = Field(
-        default_factory=dict, max_length=4)
+    comparison_providers: dict[Literal["nebius", "openai", "anthropic", "nvidia", "foundry"], ComparisonProviderConfig] = Field(
+        default_factory=dict, max_length=5)
     research_enabled: bool = False
     research_live_enabled: bool = False
     research_api_key: SecretStr = SecretStr("")

@@ -270,7 +270,8 @@ test("comparison allows only bounded paths; implicit HEAD cannot discover or com
     return Response.json({ status: "pending" });
   });
   for (const [method, suffix] of [["GET", "/catalog"], ["GET", `/accounts/${id}/readiness`], ["GET", `/accounts/${id}/runs`],
-    ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/compare`], ["POST", "/providers/openai/discover"]]) {
+    ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/compare`], ["POST", "/providers/openai/discover"],
+    ["POST", "/providers/foundry/discover"]]) {
     const name = `provider-comparison${suffix}`;
     const body = '{"expected_revision":3,"mode":"mock"}';
     const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
@@ -286,7 +287,9 @@ test("comparison allows only bounded paths; implicit HEAD cannot discover or com
   const methods = autoImplementMethods(route.exports);
   for (const [method, suffix] of [["GET", `/accounts/${id}/compare`], ["HEAD", `/accounts/${id}/compare`],
     ["POST", `/accounts/${id}/runs`], ["POST", `/accounts/${id}/readiness`], ["GET", "/accounts/invalid/runs"],
-    ["GET", `/runs/${id}/extra`], ["POST", "/catalog"], ["HEAD", "/providers/openai/discover"], ["GET", "/providers/openai/discover"], ["POST", "/providers/unknown/discover"]]) {
+    ["GET", `/runs/${id}/extra`], ["POST", "/catalog"], ["HEAD", "/providers/openai/discover"], ["GET", "/providers/openai/discover"],
+    ["HEAD", "/providers/foundry/discover"], ["GET", "/providers/foundry/discover"],
+    ["POST", "/providers/foundry/discover/extra"], ["POST", "/providers/unknown/discover"]]) {
     const name = `provider-comparison${suffix}`;
     const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },

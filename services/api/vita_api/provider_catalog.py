@@ -15,13 +15,14 @@ from .identity import Actor
 from .workflow import Workflow
 
 PREFIX = "/api/provider-comparison"
-ProviderId = Literal["nebius", "openai", "anthropic", "nvidia"]
+ProviderId = Literal["nebius", "openai", "anthropic", "nvidia", "foundry"]
 ENDPOINTS = {
     "nebius": "https://api.tokenfactory.nebius.com/v1",
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com/v1",
     "nvidia": "https://integrate.api.nvidia.com/v1",
 }
+PROVIDERS = (*ENDPOINTS, "foundry")
 MODEL_ID = re.compile(r"[A-Za-z0-9_./:-]{1,200}")
 
 
@@ -61,7 +62,7 @@ class ProviderCatalog:
         self.settings, self.transport = settings, transport
 
     def config(self, organization_id, provider):
-        if provider not in ENDPOINTS:
+        if provider not in PROVIDERS:
             raise PolicyDenied("provider_not_supported", 404)
         if organization_id != self.settings.comparison_organization_id:
             return ComparisonProviderConfig()
@@ -69,25 +70,37 @@ class ProviderCatalog:
 
     def entries(self, organization_id):
         result = []
-        for provider in ENDPOINTS:
+        for provider in PROVIDERS:
             config = self.config(organization_id, provider)
-            configured = bool(config.enabled and config.live_enabled and config.api_key.get_secret_value() and config.model)
+            configured = bool(config.enabled and config.live_enabled and config.api_key.get_secret_value()
+                and config.model and (provider != "foundry" or config.resource_name))
             result.append(CatalogEntry(provider=provider, enabled=config.enabled, live_configured=configured,
                 configuration_revision=config.revision, model=config.model or None,
                 expected_response_model=config.response_model or config.model or None,
                 status="disabled" if not config.enabled else "configured_unverified" if configured else "unconfigured",
-                capabilities=["model_discovery", "account_analysis"]))
+                capabilities=["model_discovery"] if provider == "foundry" else ["model_discovery", "account_analysis"]))
         return result
 
     def request(self, provider, config, method, path, body=None):
         headers = {"Accept": "application/json"}
-        if provider == "anthropic":
+        if provider == "foundry":
+            try:
+                config = ComparisonProviderConfig.model_validate(config.model_dump())
+            except ValueError:
+                raise CatalogFailure("invalid_provider_configuration") from None
+            if not config.resource_name:
+                raise CatalogFailure("provider_unconfigured")
+            endpoint = f"https://{config.resource_name}.{config.endpoint_domain}/openai/v1"
+            headers["api-key"] = config.api_key.get_secret_value()
+        elif provider == "anthropic":
             headers.update({"x-api-key": config.api_key.get_secret_value(), "anthropic-version": "2023-06-01"})
         else:
             headers["Authorization"] = "Bearer " + config.api_key.get_secret_value()
+        if provider != "foundry":
+            endpoint = ENDPOINTS[provider]
         try:
             with (httpx.Client(timeout=20, follow_redirects=False, transport=self.transport, trust_env=False) as client,
-                  client.stream(method, ENDPOINTS[provider] + path, headers=headers, json=body) as response):
+                  client.stream(method, endpoint + path, headers=headers, json=body) as response):
                 if response.status_code != 200:
                     raise CatalogFailure(f"provider_http_{response.status_code}")
                 raw = bytearray()
@@ -164,10 +177,13 @@ def install_catalog_routes(app, store, identity, settings, transport=None):
             if fresh.role != "admin":
                 raise PolicyDenied("provider_admin_required", 403)
             organization = fresh.organization_id
+            config = catalog.config(organization, provider)
         result = catalog.discover(organization, provider, body)
         with workflow._transaction(actor.id, write=False) as (_, fresh):
             if fresh.organization_id != organization or fresh.role != "admin":
                 raise PolicyDenied("provider_authority_changed", 403)
+            if catalog.config(organization, provider) != config:
+                raise PolicyDenied("comparison_configuration_changed", 409)
         return result
 
     app.include_router(router)

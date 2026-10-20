@@ -32,7 +32,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     : request.method === "POST" && new RegExp(`^integrations/research/accounts/${uuid}/search$`).test(joined);
   const comparisonPath = request.method === "GET"
     ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}|accounts/${uuid}/(?:runs|readiness))$`).test(joined)
-    : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia)/discover|accounts/${uuid}/compare)$`).test(joined);
+    : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/discover|accounts/${uuid}/compare)$`).test(joined);
   const allowed = request.method === "GET"
     ? workflowPath || hubspotPath || microsoftPath || researchPath || comparisonPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
     : workflowPath || hubspotPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);

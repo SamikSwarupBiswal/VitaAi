@@ -260,6 +260,8 @@ class ComparisonService:
                     result.status, result.error_code = "unavailable", "provider_disabled"
                 elif result.mode == "mock":
                     result.status = "unavailable"  # No fabricated advisory inference; baseline is saved separately.
+                elif result.provider == "foundry":
+                    result.mode, result.status, result.error_code = "fallback", "unavailable", "provider_operation_not_supported"
                 elif not (config.live_enabled and config.api_key.get_secret_value() and config.model):
                     result.mode, result.status, result.error_code = "fallback", "unavailable", "provider_unconfigured"
                 else:

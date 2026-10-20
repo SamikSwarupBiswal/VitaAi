@@ -46,6 +46,60 @@ def settings(**changes):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_foundry_configuration_and_discovery_use_only_bound_azure_resource(self):
+        config = {"enabled": True, "live_enabled": True, "api_key": "synthetic-foundry",
+                  "model": "deployment-test", "response_model": "canonical-test", "resource_name": "test-resource"}
+        calls = []
+        def respond(request):
+            calls.append(request)
+            self.assertEqual(request.method, "GET")
+            self.assertEqual(request.headers["api-key"], "synthetic-foundry")
+            self.assertNotIn("authorization", request.headers)
+            return httpx.Response(200, json={"data": [{"id": "canonical-test"}]})
+        for domain in ["services.ai.azure.com", "openai.azure.com"]:
+            bound = settings(comparison_providers={"foundry": {**config, "endpoint_domain": domain}})
+            catalog = ProviderCatalog(bound, httpx.MockTransport(respond))
+            entry = next(item for item in catalog.entries(SAMPLE_ORG) if item.provider == "foundry")
+            self.assertEqual((entry.status, entry.model, entry.expected_response_model),
+                             ("configured_unverified", "deployment-test", "canonical-test"))
+            before = len(calls)
+            mock = catalog.discover(SAMPLE_ORG, "foundry", DiscoveryRequest())
+            self.assertEqual((mock.mode, mock.models, len(calls)), ("mock", ["deployment-test"], before))
+            live = catalog.discover(SAMPLE_ORG, "foundry", DiscoveryRequest(mode="live"))
+            self.assertEqual((live.mode, live.models), ("live", ["canonical-test"]))
+            self.assertEqual(str(calls[-1].url), f"https://test-resource.{domain}/openai/v1/models")
+            self.assertNotIn("synthetic-foundry", entry.model_dump_json() + live.model_dump_json())
+        for changes in [{"resource_name": "https://foreign.test"}, {"resource_name": "test.resource"},
+                        {"resource_name": "test@foreign"}, {"resource_name": "test/../../foreign"},
+                        {"resource_name": "-test"}, {"resource_name": "test-"},
+                        {"endpoint_domain": "services.ai.azure.com.foreign.test"}, {"endpoint": "https://foreign.test"}]:
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                settings(comparison_providers={"foundry": {**config, **changes}})
+        calls.clear()
+        for changes in [{"resource_name": ""}, {"live_enabled": False}, {"api_key": ""}, {"enabled": False}]:
+            catalog = ProviderCatalog(settings(comparison_providers={"foundry": {**config, **changes}}),
+                                      httpx.MockTransport(respond))
+            self.assertFalse(next(item for item in catalog.entries(SAMPLE_ORG)
+                                  if item.provider == "foundry").live_configured)
+            self.assertIn(catalog.discover(SAMPLE_ORG, "foundry", DiscoveryRequest(mode="live")).mode,
+                          ["disabled", "fallback"])
+        self.assertEqual(calls, [])
+
+    def test_foundry_revalidates_mutated_destination_before_dispatch(self):
+        calls = []
+        def respond(request):
+            calls.append(request)
+            return httpx.Response(200, json={"data": [{"id": "canonical-test"}]})
+        for field, value in [("endpoint_domain", "foreign.test"), ("resource_name", "test@foreign.test"),
+                             ("resource_name", "test/../../foreign")]:
+            bound = settings(comparison_providers={"foundry": {"enabled": True, "live_enabled": True,
+                "api_key": "synthetic-foundry", "model": "deployment-test", "resource_name": "test-resource"}})
+            setattr(bound.comparison_providers["foundry"], field, value)
+            catalog = ProviderCatalog(bound, httpx.MockTransport(respond))
+            result = catalog.discover(SAMPLE_ORG, "foundry", DiscoveryRequest(mode="live"))
+            self.assertEqual((result.mode, result.error_code), ("fallback", "invalid_provider_configuration"))
+        self.assertEqual(calls, [])
+
     def test_populated_0010_upgrade_preserves_original_records(self):
         with tempfile.TemporaryDirectory() as directory:
             url = f"sqlite:///{Path(directory) / 'legacy.sqlite'}"
@@ -69,7 +123,8 @@ class CatalogTests(unittest.TestCase):
     def test_no_implicit_network_or_shared_keys(self):
         calls = []
         catalog = ProviderCatalog(settings(), httpx.MockTransport(lambda request: calls.append(request)))
-        self.assertTrue(all(item.status == "configured_unverified" for item in catalog.entries(SAMPLE_ORG)))
+        self.assertEqual({item.provider: item.status for item in catalog.entries(SAMPLE_ORG)},
+                         {**{name: "configured_unverified" for name in ENDPOINTS}, "foundry": "disabled"})
         for provider in ENDPOINTS:
             result = catalog.discover(SAMPLE_ORG, provider, DiscoveryRequest())
             self.assertEqual((result.mode, result.source), ("mock", "configuration"))
@@ -192,6 +247,18 @@ class CatalogApiTests(unittest.TestCase):
         with self.app.state.store.engine.begin() as connection:
             connection.execute(update(users).where(users.c.id == self.admin.id).values(role="seller"))
         self.assertEqual(self.client.post(path, headers=HEADERS, json={}).status_code, 403)
+
+    def test_foundry_discovery_rechecks_configuration_after_network(self):
+        self.settings.comparison_providers["foundry"] = ComparisonProviderConfig(enabled=True,
+            live_enabled=True, api_key="synthetic-foundry", model="deployment-test", resource_name="test-resource")
+        path = PREFIX + "/providers/foundry/discover"
+        self.assertEqual(self.client.post(path, headers=HEADERS, json={}).status_code, 200)
+        self.assertEqual(self.calls, [])
+        self.callback = lambda: setattr(self.settings.comparison_providers["foundry"], "resource_name", "new-resource")
+        response = self.client.post(path, headers=HEADERS, json={"mode": "live"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(len(self.calls), 1)
+        self.assertNotIn("test-model", response.text)
 
 
 class ComparisonApiTests(unittest.TestCase):

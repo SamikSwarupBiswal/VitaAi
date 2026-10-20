@@ -1465,7 +1465,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "nebius" | "openai" | "anthropic" | "nvidia";
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
             /** Enabled */
             enabled: boolean;
             /** Live Configured */
@@ -1536,7 +1536,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "nebius" | "openai" | "anthropic" | "nvidia";
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
             /**
              * Mode
              * @default mock
@@ -1606,7 +1606,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "nebius" | "openai" | "anthropic" | "nvidia";
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
             /**
              * Requested Mode
              * @enum {string}
@@ -1766,7 +1766,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "nebius" | "openai" | "anthropic" | "nvidia";
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
             /**
              * Requested Mode
              * @enum {string}
@@ -5569,7 +5569,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                provider: "nebius" | "openai" | "anthropic" | "nvidia";
+                provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
             };
             cookie?: never;
         };
