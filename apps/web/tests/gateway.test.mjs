@@ -261,3 +261,37 @@ test("workflow allowlist rejects wrong verbs, invalid IDs and extra paths before
   }
   assert.equal(upstream.mock.callCount(), 0);
 });
+
+test("comparison allows only bounded paths; implicit HEAD cannot discover or compare", async t => {
+  const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
+  const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+    assert.equal(init.headers.Cookie, "vitaai_session=opaque-session");
+    assert.equal(init.cache, "no-store");
+    return Response.json({ status: "pending" });
+  });
+  for (const [method, suffix] of [["GET", "/catalog"], ["GET", `/accounts/${id}/readiness`], ["GET", `/accounts/${id}/runs`],
+    ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/compare`], ["POST", "/providers/openai/discover"]]) {
+    const name = `provider-comparison${suffix}`;
+    const body = '{"expected_revision":3,"mode":"mock"}';
+    const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
+      method, headers: { host: "127.0.0.1:3000", cookie: "vitaai_session=opaque-session; other=private", "X-VitaAi-Request": "1" },
+      ...(method === "POST" ? { body } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(upstream.mock.calls.at(-1).arguments[0], `http://127.0.0.1:8000/api/${name}`);
+    if (method === "POST") assert.equal(upstream.mock.calls.at(-1).arguments[1].body, body);
+  }
+  upstream.mock.resetCalls();
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  for (const [method, suffix] of [["GET", `/accounts/${id}/compare`], ["HEAD", `/accounts/${id}/compare`],
+    ["POST", `/accounts/${id}/runs`], ["POST", `/accounts/${id}/readiness`], ["GET", "/accounts/invalid/runs"],
+    ["GET", `/runs/${id}/extra`], ["POST", "/catalog"], ["HEAD", "/providers/openai/discover"], ["GET", "/providers/openai/discover"], ["POST", "/providers/unknown/discover"]]) {
+    const name = `provider-comparison${suffix}`;
+    const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
+      method, headers: { host: "127.0.0.1:3000" },
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, 404);
+  }
+  assert.equal(upstream.mock.callCount(), 0);
+});

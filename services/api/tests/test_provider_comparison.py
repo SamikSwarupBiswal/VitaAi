@@ -236,6 +236,42 @@ class ComparisonApiTests(unittest.TestCase):
     def compare(self, **changes):
         return self.client.post(self.path + "/compare", headers=HEADERS, json=self.body(**changes))
 
+    def test_readiness_is_scoped_network_free_and_retains_old_pending(self):
+        before = self.client.get("/api/portfolio").json()
+        ready = self.client.get(self.path + "/readiness")
+        self.assertEqual(ready.status_code, 200)
+        value = ready.json()
+        self.assertEqual((value["account_revision"], value["snapshot_hash"]),
+            (self.view["account"]["revision"], self.view["assessment"]["snapshot_hash"]))
+        self.assertTrue(value["can_start"])
+        self.assertIsNone(value["pending_run_id"])
+        run = self.compare(providers=[{"provider": "openai", "expected_configuration_revision": 1}]).json()
+        self.assertFalse(self.client.get(self.path + "/readiness").json()["can_start"])
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(comparisons).values(status="pending", started_at=1))
+            for index in range(21):
+                connection.execute(comparisons.insert().values(id=str(uuid4()), organization_id=SAMPLE_ORG,
+                    account_id=self.account_id, started_at=index + 2, status="completed", payload=run))
+        value = self.client.get(self.path + "/readiness").json()
+        self.assertEqual(value["pending_run_id"], run["id"])
+        self.assertFalse(value["can_start"])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        self.assertEqual(self.client.get(PREFIX + f"/accounts/{uuid4()}/readiness").status_code, 404)
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(comparisons).values(status="completed"))
+        self.assertTrue(self.client.get(self.path + "/readiness").json()["can_start"])
+        self.settings.comparison_organization_id = "unconfigured-organization"
+        value = self.client.get(self.path + "/readiness").json()
+        self.assertFalse(value["configured"])
+        self.assertFalse(value["can_start"])
+        self.settings.comparison_organization_id = SAMPLE_ORG
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == self.admin.id).values(role="viewer"))
+        self.assertFalse(self.client.get(self.path + "/readiness").json()["can_start"])
+        self.identity.logout(self.client.cookies.get("vitaai_session"))
+        self.assertEqual(self.client.get(self.path + "/readiness").status_code, 401)
+
     def test_identical_snapshots_independent_provenance_and_unchanged_authority(self):
         before = self.client.get("/api/portfolio").json()
         response = self.compare()

@@ -1005,6 +1005,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-comparison/accounts/{account_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness */
+        get: operations["readiness_api_provider_comparison_accounts__account_id__readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-comparison/accounts/{account_id}/compare": {
         parameters: {
             query?: never;
@@ -1528,6 +1545,34 @@ export interface components {
             mode: "mock" | "live";
             /** Expected Configuration Revision */
             expected_configuration_revision: number;
+        };
+        /** ComparisonReadiness */
+        ComparisonReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /** Configured */
+            configured: boolean;
+            /** Can Start */
+            can_start: boolean;
+            /** Pending Run Id */
+            pending_run_id: string | null;
+            /** Next Start At */
+            next_start_at: string | null;
         };
         /** ComparisonRequest */
         ComparisonRequest: {
@@ -5541,6 +5586,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DiscoveryResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readiness_api_provider_comparison_accounts__account_id__readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparisonReadiness"];
                 };
             };
             /** @description Validation Error */

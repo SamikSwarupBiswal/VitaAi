@@ -1,7 +1,7 @@
 """Durable advisory comparisons; no output enters primary model or workflow records."""
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -58,6 +58,17 @@ class ComparisonRequest(Contract):
         if len({choice.provider for choice in self.providers}) != len(self.providers):
             raise ValueError("Select each provider once")
         return self
+
+
+class ComparisonReadiness(Contract):
+    organization_id: str
+    account_id: UUID
+    account_revision: int
+    snapshot_hash: str
+    configured: bool
+    can_start: bool
+    pending_run_id: UUID | None
+    next_start_at: datetime | None
 
 
 class ComparisonResult(Contract):
@@ -181,6 +192,23 @@ class ComparisonService:
             raise PolicyDenied("comparison_snapshot_changed", 409)
         return view
 
+    def readiness(self, actor_id, account_id):
+        with self.workflow._transaction(actor_id, write=False) as (connection, actor):
+            view = self.workflow._view(connection, actor, account_id)
+            scope = (comparisons.c.organization_id == actor.organization_id,
+                     comparisons.c.account_id == str(account_id))
+            pending = connection.execute(select(comparisons.c.id).where(
+                *scope, comparisons.c.status == "pending").limit(1)).scalar()
+            latest = connection.execute(select(comparisons.c.started_at).where(*scope)
+                .order_by(comparisons.c.started_at.desc()).limit(1)).scalar()
+            next_start = datetime.fromtimestamp(latest, UTC) + timedelta(seconds=60) if latest is not None else None
+            configured = actor.organization_id == self.catalog.settings.comparison_organization_id
+            return ComparisonReadiness(organization_id=actor.organization_id, account_id=account_id,
+                account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash,
+                configured=configured, can_start=bool(configured and actor.role != "viewer" and not pending
+                    and (next_start is None or datetime.now(UTC) >= next_start)),
+                pending_run_id=pending, next_start_at=next_start)
+
     @staticmethod
     def save(connection, run):
         result = connection.execute(update(comparisons).where(comparisons.c.id == str(run.id),
@@ -292,6 +320,10 @@ def install_comparison_routes(app, store, identity, settings, transport=None):
 
     Current = Annotated[Actor, Depends(current)]
     Service = Annotated[ComparisonService, Depends(service)]
+
+    @router.get("/accounts/{account_id}/readiness", response_model=ComparisonReadiness)
+    def readiness(account_id: UUID, actor: Current, operation: Service):
+        return operation.readiness(actor.id, account_id)
 
     @router.post("/accounts/{account_id}/compare", response_model=ComparisonRun)
     def compare(account_id: UUID, body: ComparisonRequest, actor: Current, operation: Service):
