@@ -59,16 +59,17 @@ function MicrosoftConnection({ invalidate, changed, blocked = false }: { invalid
     return () => controller.abort();
   }, []);
   const sameHost = !!status && status.connection_origin === window.location.origin;
-  function change(action: "connect" | "signout") {
+  function change(action: "connect" | "signout" | "refresh") {
     if (started.current || blocked || op.blocked || !status || (action === "connect"
       && (!sameHost || !status.configured || actor?.role === "viewer"))) return;
+    if (action === "refresh" && (!status.can_refresh || !status.refresh_binding_id || actor?.role === "viewer")) return;
     started.current = true;
     invalidate();
     void op.run(async signal => {
       let message: string | undefined;
       try {
         const result = await postWorkflow<components["schemas"]["MicrosoftStart"] | components["schemas"]["MicrosoftStatus"]>(
-          `integrations/microsoft/${action}`, {}, signal);
+          `integrations/microsoft/${action}`, action === "refresh" ? { binding_id: status.refresh_binding_id } : {}, signal);
         if (!signal.aborted && action === "connect" && "authorization_url" in result) {
           const url = new URL(result.authorization_url);
           if (url.protocol !== "https:" || url.hostname !== "login.microsoftonline.com" || url.port || url.username || url.password) {
@@ -92,6 +93,11 @@ function MicrosoftConnection({ invalidate, changed, blocked = false }: { invalid
       {status.connected && <p>Mailbox {status.mailbox_id} · binding {status.binding_id} · expires {new Date(status.expires_at! * 1000).toISOString()}</p>}
       {!sameHost && <p>To connect, sign in at <a href={`${status.connection_origin}/missions`}>{status.connection_origin}</a> so the callback uses the same host.</p>}
       <p>Reconnect invalidates existing write previews. Prepare and review again before writing; same-mailbox reauthorization supports retained-ID readback only.</p>
+      {status.refresh_binding_id && <>
+        <p>Refresh renews this mailbox connection and invalidates old write previews. Prepare and review again before writes.</p>
+        {status.refresh_pending && <p role="status">Refresh is pending. Refresh current records; if the worker was interrupted, reconnect explicitly.</p>}
+        <button disabled={blocked || op.blocked || !status.can_refresh || actor?.role === "viewer"} onClick={() => change("refresh")}>Refresh Microsoft connection</button>
+      </>}
       <button disabled={blocked || op.blocked || !status.configured || !sameHost || actor?.role === "viewer"} onClick={() => change("connect")}>{status.connected ? "Reconnect Microsoft" : "Connect Microsoft"}</button>
       <button disabled={blocked || op.blocked} onClick={() => change("signout")}>Sign out Microsoft</button>
     </>}

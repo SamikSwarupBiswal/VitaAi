@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     hubspot_property_map: dict[str, HubSpotProperty] = Field(default_factory=dict, max_length=5)
     microsoft_enabled: bool = False
     microsoft_write_enabled: bool = False
+    microsoft_refresh_enabled: bool = False
     microsoft_configuration_revision: int = Field(default=1, ge=1)
     microsoft_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
     microsoft_tenant_id: UUID | None = None

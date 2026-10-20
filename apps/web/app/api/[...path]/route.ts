@@ -26,7 +26,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   // Callback stays on the fixed API redirect; codes/state never enter the Next proxy.
   const microsoftPath = request.method === "GET"
     ? new RegExp(`^integrations/microsoft(?:/missions/${uuid}/execution-readiness)?$`).test(joined)
-    : request.method === "POST" && /^integrations\/microsoft\/(?:connect|signout)$/.test(joined);
+    : request.method === "POST" && /^integrations\/microsoft\/(?:connect|signout|refresh)$/.test(joined);
   const researchPath = request.method === "GET"
     ? new RegExp(`^integrations/research(?:/runs/${uuid}(?:/recovery-readiness|/context)?|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
     : request.method === "POST" && new RegExp(`^integrations/research/(?:accounts/${uuid}/search|runs/${uuid}/recover)$`).test(joined);

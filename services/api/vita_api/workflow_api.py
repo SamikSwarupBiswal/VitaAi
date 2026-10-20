@@ -13,6 +13,7 @@ from .microsoft import (
     COOKIE,
     PREFIX,
     MicrosoftExecutionReadiness,
+    MicrosoftRefreshRequest,
     MicrosoftStart,
     MicrosoftStatus,
 )
@@ -100,6 +101,10 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
         microsoft.signout(actor.id, request.cookies.get("vitaai_session"))
         response.delete_cookie(COOKIE, path=PREFIX + "/callback", httponly=True, samesite="lax")
         return microsoft.status(actor.id, request.cookies.get("vitaai_session"))
+
+    @router.post(PREFIX + "/refresh", response_model=MicrosoftStatus)
+    def microsoft_refresh(body: MicrosoftRefreshRequest, request: Request, actor: Current):
+        return microsoft.refresh(actor.id, request.cookies.get("vitaai_session"), body)
 
     @router.get(PREFIX + "/missions/{mission_id}/execution-readiness", response_model=MicrosoftExecutionReadiness)
     def microsoft_readiness(mission_id: UUID, actor: Current, workflow: Service):

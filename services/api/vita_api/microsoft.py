@@ -52,6 +52,13 @@ class MicrosoftStatus(Contract):
     mailbox_id: str | None = None
     expires_at: int | None = None
     connection_origin: str
+    refresh_binding_id: UUID | None = None
+    can_refresh: bool = False
+    refresh_pending: bool = False
+
+
+class MicrosoftRefreshRequest(Contract):
+    binding_id: UUID
 
 
 class MicrosoftActionReadiness(Contract):
@@ -121,8 +128,11 @@ class Microsoft:
 
     def fingerprint(self):
         s = self.settings
-        return hashlib.sha256(canonical_json([str(s.microsoft_client_id), str(s.microsoft_tenant_id),
-            s.microsoft_organization_id, s.microsoft_configuration_revision, s.microsoft_redirect_uri])).hexdigest()
+        configuration = [str(s.microsoft_client_id), str(s.microsoft_tenant_id),
+            s.microsoft_organization_id, s.microsoft_configuration_revision, s.microsoft_redirect_uri]
+        if s.microsoft_refresh_enabled:
+            configuration.append("explicit-refresh-1")
+        return hashlib.sha256(canonical_json(configuration)).hexdigest()
 
     def _tx(self, actor_id, session_token=None, *, authenticated=True, write=True):
         from .workflow import Workflow
@@ -137,7 +147,8 @@ class Microsoft:
         return self.client_factory(str(self.settings.microsoft_client_id),
             authority="https://login.microsoftonline.com/" + str(self.settings.microsoft_tenant_id),
             client_credential=self.settings.microsoft_client_secret.get_secret_value(),
-            exclude_scopes=["offline_access"], timeout=15, instance_discovery=False)
+            exclude_scopes=[] if self.settings.microsoft_refresh_enabled else ["offline_access"],
+            timeout=15, instance_discovery=False)
 
     def begin(self, actor_id, session_token):
         cookie = secrets.token_urlsafe(32)
@@ -194,7 +205,13 @@ class Microsoft:
                 raise ValueError("Invalid delegated result")
             if self.get(result["access_token"], "/me", params={"$select": "id"}).get("id") != claims["oid"]:
                 raise ValueError("Mailbox changed")
-            encrypted = self.seal({"access_token": result["access_token"]})
+            credentials = {"access_token": result["access_token"]}
+            if self.settings.microsoft_refresh_enabled:
+                token = result.get("refresh_token")
+                if not isinstance(token, str) or not 1 <= len(token) <= 65536:
+                    raise ValueError("Missing refresh credential")
+                credentials["refresh_token"] = token
+            encrypted = self.seal(credentials)
         except (ValueError, KeyError, TypeError, AttributeError, OSError, httpx.HTTPError, PolicyDenied):
             raise PolicyDenied("microsoft_authorization_failed", 409) from None
         with self._tx(actor_id, authenticated=False) as (connection, actor):
@@ -218,14 +235,20 @@ class Microsoft:
         return connection.execute(select(sessions.c.user_id).where(sessions.c.user_id == actor_id,
             sessions.c.token_hash == session_hash, sessions.c.expires_at > int(self.clock().timestamp()))).scalar() is not None
 
-    def binding(self, connection, actor):
+    def _binding_candidate(self, connection, actor):
         self.allowed(actor)
         if actor.role == "viewer":
             raise PolicyDenied("microsoft_reconnect_required", 409)
         row = connection.execute(select(bindings).where(bindings.c.actor_id == actor.id,
             bindings.c.organization_id == actor.organization_id, bindings.c.revoked.is_(False),
-            bindings.c.configuration == self.fingerprint(), bindings.c.expires_at > int(self.clock().timestamp()))).mappings().first()
+            bindings.c.configuration == self.fingerprint())).mappings().first()
         if row is None or not self.session_valid(connection, actor.id, row["session_hash"]):
+            raise PolicyDenied("microsoft_reconnect_required", 409)
+        return row
+
+    def binding(self, connection, actor):
+        row = self._binding_candidate(connection, actor)
+        if row["expires_at"] <= self.clock().timestamp() or self.unseal(row["encrypted_token"]).get("refresh_pending"):
             raise PolicyDenied("microsoft_reconnect_required", 409)
         return row
 
@@ -242,13 +265,83 @@ class Microsoft:
         with self._tx(actor_id, session_token, write=False) as (connection, actor):
             configured = self.configured and actor.organization_id == self.settings.microsoft_organization_id
             try:
-                row = self.binding(connection, actor)
+                candidate = self._binding_candidate(connection, actor)
+                credentials = self.unseal(candidate["encrypted_token"])
             except PolicyDenied:
-                row = None
+                candidate, credentials = None, {}
+            pending = bool(credentials.get("refresh_pending"))
+            row = candidate if candidate and candidate["expires_at"] > self.clock().timestamp() and not pending else None
             return MicrosoftStatus(configured=configured, connected=row is not None,
                 write_configured=configured and self.settings.microsoft_write_enabled,
                 binding_id=row["id"] if row else None, mailbox_id=row["mailbox_id"] if row else None,
-                expires_at=row["expires_at"] if row else None, connection_origin=self.connection_origin)
+                expires_at=row["expires_at"] if row else None, connection_origin=self.connection_origin,
+                refresh_binding_id=candidate["id"] if candidate and self.settings.microsoft_refresh_enabled else None,
+                can_refresh=bool(candidate and self.settings.microsoft_refresh_enabled and credentials.get("refresh_token")
+                    and not pending and candidate["expires_at"] <= self.clock().timestamp() + 120),
+                refresh_pending=pending)
+
+    def refresh(self, actor_id, session_token, request):
+        # Reservation survives worker loss. Only explicit reconnect/signout can abandon it.
+        with self._tx(actor_id, session_token) as (connection, actor):
+            row = self._binding_candidate(connection, actor)
+            credentials = self.unseal(row["encrypted_token"])
+            if (not self.settings.microsoft_refresh_enabled or row["id"] != str(request.binding_id)
+                    or credentials.get("refresh_pending") or not credentials.get("refresh_token")
+                    or row["expires_at"] > self.clock().timestamp() + 120):
+                raise PolicyDenied("microsoft_refresh_unavailable", 409)
+            configuration = self.settings.model_dump(include={name for name in type(self.settings).model_fields
+                                                             if name.startswith("microsoft_")})
+            credentials["refresh_pending"] = str(uuid4())
+            reserved = self.seal(credentials)
+            connection.execute(update(bindings).where(bindings.c.id == row["id"]).values(encrypted_token=reserved))
+        try:
+            with self._tx(actor_id, session_token) as (connection, actor):
+                self._refresh_current(connection, actor, row, reserved, configuration)
+            # Fixed tenant/resource, one bounded POST; no discovery, redirects or retry.
+            with (httpx.Client(transport=self.transport, timeout=15, follow_redirects=False, trust_env=False) as client,
+                  client.stream("POST", "https://login.microsoftonline.com/"
+                        + str(self.settings.microsoft_tenant_id) + "/oauth2/v2.0/token", data={
+                            "client_id": str(self.settings.microsoft_client_id),
+                            "client_secret": self.settings.microsoft_client_secret.get_secret_value(),
+                            "grant_type": "refresh_token", "refresh_token": credentials["refresh_token"],
+                            "scope": " ".join(SCOPES)}) as response):
+                if response.status_code != 200:
+                    raise ValueError("Refresh rejected")
+                result = self.data(response)
+            received_at = int(self.clock().timestamp())
+            if (result.get("token_type", "").lower() != "bearer"
+                    or not isinstance(result.get("access_token"), str) or not 1 <= len(result["access_token"]) <= 65536
+                    or type(result.get("expires_in")) is not int or result["expires_in"] <= 60
+                    or not {"User.Read", "Mail.ReadWrite"} <= set(result.get("scope", "").split())):
+                raise ValueError("Invalid refreshed credential")
+            token = result.get("refresh_token", credentials["refresh_token"])
+            if not isinstance(token, str) or not 1 <= len(token) <= 65536:
+                raise ValueError("Invalid refresh credential")
+            with self._tx(actor_id, session_token) as (connection, actor):
+                self._refresh_current(connection, actor, row, reserved, configuration)
+            if self.get(result["access_token"], "/me", params={"$select": "id"}).get("id") != row["mailbox_id"]:
+                raise ValueError("Mailbox changed")
+            with self._tx(actor_id, session_token) as (connection, actor):
+                self._refresh_current(connection, actor, row, reserved, configuration)
+                connection.execute(update(bindings).where(bindings.c.id == row["id"]).values(revoked=True, encrypted_token=""))
+                connection.execute(bindings.insert().values(id=str(uuid4()), organization_id=actor.organization_id,
+                    actor_id=actor.id, session_hash=row["session_hash"], configuration=row["configuration"],
+                    mailbox_id=row["mailbox_id"], expires_at=received_at + min(result["expires_in"] - 60, 3600),
+                    revoked=False, encrypted_token=self.seal({"access_token": result["access_token"], "refresh_token": token})))
+        except (PolicyDenied, httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError, OSError, RecursionError):
+            # Private cleanup can only revoke this reservation, including after logout/disablement.
+            with self.store.engine.begin() as connection:
+                connection.execute(update(bindings).where(bindings.c.id == row["id"],
+                    bindings.c.encrypted_token == reserved).values(revoked=True, encrypted_token=""))
+            raise PolicyDenied("microsoft_refresh_failed_reconnect_required", 409) from None
+        return self.status(actor_id, session_token)
+
+    def _refresh_current(self, connection, actor, original, reserved, configuration):
+        current = self._binding_candidate(connection, actor)
+        actual_configuration = self.settings.model_dump(include=set(configuration))
+        if (actual_configuration != configuration or current["id"] != original["id"]
+                or current["encrypted_token"] != reserved or current["session_hash"] != original["session_hash"]):
+            raise PolicyDenied("microsoft_refresh_authority_changed", 409)
 
     def signout(self, actor_id, session_token):
         with self._tx(actor_id, session_token, write=False) as (connection, actor):

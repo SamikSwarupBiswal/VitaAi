@@ -254,6 +254,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/microsoft/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Microsoft Refresh */
+        post: operations["microsoft_refresh_api_integrations_microsoft_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/microsoft/missions/{mission_id}/execution-readiness": {
         parameters: {
             query?: never;
@@ -2472,6 +2489,20 @@ export interface components {
             /** Actions */
             actions: components["schemas"]["MicrosoftActionReadiness"][];
         };
+        /** MicrosoftRefreshRequest */
+        MicrosoftRefreshRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Binding Id
+             * Format: uuid
+             */
+            binding_id: string;
+        };
         /** MicrosoftStart */
         MicrosoftStart: {
             /**
@@ -2505,6 +2536,18 @@ export interface components {
             expires_at?: number | null;
             /** Connection Origin */
             connection_origin: string;
+            /** Refresh Binding Id */
+            refresh_binding_id?: string | null;
+            /**
+             * Can Refresh
+             * @default false
+             */
+            can_refresh: boolean;
+            /**
+             * Refresh Pending
+             * @default false
+             */
+            refresh_pending: boolean;
         };
         /** Mission */
         Mission: {
@@ -4460,6 +4503,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MicrosoftStatus"];
+                };
+            };
+        };
+    };
+    microsoft_refresh_api_integrations_microsoft_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MicrosoftRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MicrosoftStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

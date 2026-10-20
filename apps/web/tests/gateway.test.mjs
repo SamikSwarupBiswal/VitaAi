@@ -61,7 +61,7 @@ test("Microsoft forwards only bounded paths and response flow cookies", async t 
     assert.equal(options.headers.Cookie, "vitaai_session=opaque-session");
     return Response.json({ configured: true }, { headers: { "Set-Cookie": flow } });
   });
-  for (const [method, suffix] of [["GET", ""], ["GET", `/missions/${id}/execution-readiness`], ["POST", "/connect"], ["POST", "/signout"]]) {
+  for (const [method, suffix] of [["GET", ""], ["GET", `/missions/${id}/execution-readiness`], ["POST", "/connect"], ["POST", "/signout"], ["POST", "/refresh"]]) {
     const name = `integrations/microsoft${suffix}`;
     const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000", cookie: "vitaai_session=opaque-session; vitaai_microsoft_flow=never-forward; other=private",
@@ -70,14 +70,15 @@ test("Microsoft forwards only bounded paths and response flow cookies", async t 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("referrer-policy"), "no-referrer");
-    assert.equal(response.headers.get("set-cookie"), method === "POST" ? flow : null);
+    assert.equal(response.headers.get("set-cookie"), method === "POST" && suffix !== "/refresh" ? flow : null);
     const call = upstream.mock.calls.at(-1).arguments;
     assert.equal(call[0], `http://127.0.0.1:8000/api/${name}`);
     if (method === "POST") assert.equal(call[1].headers.Origin, "http://127.0.0.1:3000");
   }
   upstream.mock.resetCalls();
   for (const [method, suffix] of [["GET", "/connect"], ["POST", ""], ["GET", "/callback?code=private&state=private"],
-    ["POST", `/missions/${id}/execution-readiness`], ["GET", "/missions/invalid/execution-readiness"], ["HEAD", "/signout"]]) {
+    ["POST", `/missions/${id}/execution-readiness`], ["GET", "/missions/invalid/execution-readiness"], ["HEAD", "/signout"],
+    ["GET", "/refresh"], ["HEAD", "/refresh"], ["POST", "/refresh/extra"]]) {
     const name = `integrations/microsoft${suffix}`;
     const response = await route.exports[method === "POST" ? "POST" : "GET"](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },

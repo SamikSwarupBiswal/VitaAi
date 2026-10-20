@@ -245,6 +245,41 @@ test("connection locks duplicates, blocks wrong host/viewer and refreshes after 
   }
 });
 
+test("Microsoft refresh binds displayed ID and refreshes uncertain state without retry", async t => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window"), events = [];
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: { origin: "http://127.0.0.1:3000" }, dispatchEvent: e => events.push(e.type),
+  } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "window", previous); else delete globalThis.window; });
+  const status = { configured: true, connected: false, write_configured: true, connection_origin: "http://127.0.0.1:3000",
+    can_refresh: true, refresh_pending: false, refresh_binding_id: "selected-binding" };
+  for (const outcome of ["success", "lost", "unmounted"]) {
+    const app = harness("seller"), changes = [], invalidations = [];
+    const props = { invalidate: () => invalidations.push(true), changed: value => changes.push(value) };
+    app.render(app.components.connection, props); app.requests.shift().resolve(status); await flush();
+    const tree = app.render(app.components.connection, props), refresh = button(tree, "Refresh Microsoft connection");
+    refresh.props.onClick(); refresh.props.onClick(); await flush();
+    assert.equal(invalidations.length, 1); assert.equal(app.requests.length, 1);
+    const request = app.requests.shift();
+    assert.equal(request.url, "integrations/microsoft/refresh");
+    assert.deepEqual(JSON.parse(request.init.body), { binding_id: "selected-binding" });
+    if (outcome === "unmounted") { app.unmount(); assert.equal(request.init.signal.aborted, true); }
+    if (outcome === "lost") request.reject(new Error("Lost response")); else request.resolve({ connected: true });
+    await flush();
+    if (outcome === "unmounted") assert.equal(changes.length, 0);
+    else { assert.equal(changes.length, 1); if (outcome === "lost") assert.match(changes[0], /may have committed/); }
+    assert.equal(app.requests.length, 0);
+  }
+  assert.deepEqual(events, ["vitaai-microsoft-changed"]);
+  for (const [role, record] of [["viewer", status], ["seller", { ...status, can_refresh: false }],
+    ["seller", { ...status, can_refresh: false, refresh_pending: true }]]) {
+    const app = harness(role), props = { invalidate() {}, changed() {} };
+    app.render(app.components.connection, props); app.requests.shift().resolve(record); await flush();
+    const tree = app.render(app.components.connection, props), refresh = button(tree, "Refresh Microsoft connection");
+    assert.equal(refresh.props.disabled, true); refresh.props.onClick(); assert.equal(app.requests.length, 0);
+  }
+});
+
 test("connection completion after a focus remount releases directory lock and reloads authority", async t => {
   const listeners = new Map();
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
