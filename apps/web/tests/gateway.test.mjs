@@ -17,7 +17,7 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
-test("research allows only bounded reads and explicit search; implicit HEAD never searches", async t => {
+test("research allows bounded reads, explicit search/finalization; implicit HEAD cannot mutate", async t => {
   const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
   const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
     assert.equal(init.headers.Cookie, "vitaai_session=opaque-session");
@@ -25,7 +25,8 @@ test("research allows only bounded reads and explicit search; implicit HEAD neve
     return Response.json({ status: "pending" });
   });
   for (const [method, suffix] of [["GET", ""], ["GET", `/accounts/${id}/readiness`], ["GET", `/accounts/${id}/runs`],
-    ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/search`]]) {
+    ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/search`],
+    ["GET", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover`]]) {
     const name = `integrations/research${suffix}`;
     const body = '{"expected_account_revision":3,"mode":"mock"}';
     const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
@@ -41,7 +42,8 @@ test("research allows only bounded reads and explicit search; implicit HEAD neve
   const methods = autoImplementMethods(route.exports);
   for (const [method, suffix] of [["GET", `/accounts/${id}/search`], ["HEAD", `/accounts/${id}/search`],
     ["POST", `/accounts/${id}/runs`], ["POST", `/accounts/${id}/readiness`], ["GET", "/accounts/invalid/runs"],
-    ["GET", `/runs/${id}/extra`], ["POST", ""]]) {
+    ["GET", `/runs/${id}/extra`], ["POST", ""], ["GET", `/runs/${id}/recover`], ["HEAD", `/runs/${id}/recover`],
+    ["POST", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover/extra`], ["POST", "/runs/invalid/recover"]]) {
     const name = `integrations/research${suffix}`;
     const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },

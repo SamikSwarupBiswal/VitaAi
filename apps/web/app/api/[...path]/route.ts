@@ -28,8 +28,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     ? new RegExp(`^integrations/microsoft(?:/missions/${uuid}/execution-readiness)?$`).test(joined)
     : request.method === "POST" && /^integrations\/microsoft\/(?:connect|signout)$/.test(joined);
   const researchPath = request.method === "GET"
-    ? new RegExp(`^integrations/research(?:/runs/${uuid}|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
-    : request.method === "POST" && new RegExp(`^integrations/research/accounts/${uuid}/search$`).test(joined);
+    ? new RegExp(`^integrations/research(?:/runs/${uuid}(?:/recovery-readiness)?|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
+    : request.method === "POST" && new RegExp(`^integrations/research/(?:accounts/${uuid}/search|runs/${uuid}/recover)$`).test(joined);
   const comparisonPath = request.method === "GET"
     ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}(?:/recovery-readiness)?|accounts/${uuid}/(?:runs|readiness))$`).test(joined)
     : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/discover|accounts/${uuid}/compare|runs/${uuid}/recover)$`).test(joined);

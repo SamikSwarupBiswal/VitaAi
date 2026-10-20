@@ -30,8 +30,8 @@ function walk(node, predicate) {
   if (!node || typeof node !== "object") return [];
   return [...(predicate(node) ? [node] : []), ...walk(node.props?.children, predicate)];
 }
-function harness(role = "admin") {
-  const slots = [], requests = [], listeners = new Map(), timers = [], events = [];
+function harness(role = "admin", transport) {
+  const slots = [], requests = transport?.requests ?? [], listeners = new Map(), timers = [], events = [];
   let cursor = 0, effects = [], cleanups = [];
   globalThis.window = { setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {},
     addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); },
@@ -46,7 +46,7 @@ function harness(role = "admin") {
     } },
   };
   const api = (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject }));
-  const helper = load("../lib/research.ts", { "./api": { api } });
+  const helper = transport?.helper ?? load("../lib/research.ts", { "./api": { api } });
   const panel = load("../components/research-panel.tsx", { react: hooks, "@/lib/research": helper,
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) } });
   let key;
@@ -144,4 +144,91 @@ test("history retains original dates/target and escapes text and unsafe links", 
     assert.equal(app.helper.researchSourceLink(url, "example.test"), false);
   }
   app.unmount();
+});
+
+const pendingRun = { ...run, status: "pending", revision: 1, account_revision: 1,
+  worker_deadline_at: "2026-10-18T00:02:00Z", finished_at: null, expires_at: null };
+const recoveryReady = { organization_id: "org", account_id: "a", account_revision: 3,
+  run_id: run.id, run_revision: 1, can_recover: true, reason: "eligible", recover_after: pendingRun.worker_deadline_at };
+const interruptedRun = { ...pendingRun, status: "interrupted", revision: 2, error_code: "research_interrupted",
+  finished_at: "2026-10-20T00:00:00Z", recovery: { actor_id: "recovering-actor", recovered_at: "2026-10-20T00:00:00Z",
+    previous_revision: 1, reason: "worker_deadline_elapsed" } };
+async function inspectPending(app, record = pendingRun, recovery = recoveryReady) {
+  const action = app.button("Inspect pending research run").props.onClick();
+  const request = app.requests.shift(); assert.match(request.url, /runs\/run-1$/); request.resolve(record); await flush();
+  const check = app.requests.shift(); assert.match(check.url, /runs\/run-1\/recovery-readiness$/);
+  assert.equal(check.init.method, undefined); check.resolve(recovery); await action;
+}
+
+test("explicit interrupted finalization binds inspected run and current account, preserves historical context", async () => {
+  const app = harness(); await mount(app, { ...ready, pending_run_id: run.id, can_start: false }, []);
+  // A pending ID outside the latest twenty remains explicitly inspectable.
+  await inspectPending(app);
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /Original account revision 1/); assert.match(html, /provider cancellation/);
+  const action = app.button("Finalize interrupted research").props.onClick;
+  const first = action(); await action(); assert.equal(app.requests.length, 1);
+  const request = app.requests.shift(); assert.match(request.url, /runs\/run-1\/recover$/);
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", expected_revision: 1, expected_account_revision: 3 });
+  request.resolve(interruptedRun); await flush(); assert.ok(app.requests.every(r => !r.init.method));
+  await app.settle(ready, [interruptedRun]); await first;
+  const inspect = app.inspect().props.onClick(); app.requests.shift().resolve(interruptedRun); await inspect;
+  const saved = renderToStaticMarkup(app.render());
+  assert.match(saved, /recovering-actor/); assert.match(saved, /previous run revision 1/);
+  assert.match(saved, /2026-10-18T00:00:00Z/); assert.match(saved, /No context window/);
+  assert.match(saved, /No sources from this run/); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("active, legacy and viewer recovery are read only and require fresh explicit inspection", async () => {
+  for (const [role, reason] of [["admin", "worker_active"], ["admin", "legacy_worker"], ["viewer", "role_denied"]]) {
+    const app = harness(role); await mount(app, { ...ready, can_start: false, pending_run_id: run.id }, []);
+    const legacy = reason === "legacy_worker";
+    await inspectPending(app, legacy ? { ...pendingRun, worker_deadline_at: null } : pendingRun,
+      { ...recoveryReady, can_recover: false, reason, ...(legacy ? { recover_after: null } : {}) });
+    assert.equal(app.button("Finalize interrupted research").props.disabled, true);
+    await app.button("Finalize interrupted research").props.onClick(); assert.equal(app.requests.length, 0);
+    if (legacy) assert.match(renderToStaticMarkup(app.render()), /operator investigation/);
+    app.tick(); assert.equal(app.requests.length, 0); app.unmount();
+  }
+});
+
+test("crossed recovery identity, revisions or deadline cannot enable finalization", async () => {
+  for (const delta of [{ run_id: "foreign" }, { run_revision: 2 }, { account_id: "foreign" },
+    { organization_id: "foreign" }, { account_revision: 2 }, { recover_after: null }]) {
+    const app = harness(); await mount(app, { ...ready, can_start: false, pending_run_id: run.id }, []);
+    await inspectPending(app, pendingRun, { ...recoveryReady, ...delta });
+    assert.equal(app.button("Finalize interrupted research").props.disabled, true);
+    await app.button("Finalize interrupted research").props.onClick(); assert.equal(app.requests.length, 0); app.unmount();
+  }
+});
+
+test("focus invalidates inspected recovery synchronously and obsolete recovery reads stay discarded", async () => {
+  const app = harness(); await mount(app, { ...ready, can_start: false, pending_run_id: run.id }, []);
+  await inspectPending(app); const staleAction = app.button("Finalize interrupted research").props.onClick;
+  app.focus(); await staleAction(); assert.equal(app.requests.length, 2);
+  assert.ok(app.requests.every(r => !r.init.method)); await app.settle({ ...ready, can_start: false, pending_run_id: run.id }, []);
+  const inspect = app.button("Inspect pending research run").props.onClick(); app.requests.shift().resolve(pendingRun); await flush();
+  const obsolete = app.requests.shift(); app.focus(); await app.settle(ready, []);
+  obsolete.resolve(recoveryReady); await inspect;
+  assert.doesNotMatch(renderToStaticMarkup(app.render()), /Recovery: eligible/); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("uncertain finalization makes only saved reads and failed refresh blocks further action", async () => {
+  const app = harness(); await mount(app, { ...ready, can_start: false, pending_run_id: run.id }, []); await inspectPending(app);
+  const pending = app.button("Finalize interrupted research").props.onClick(); app.requests.shift().reject(new Error("lost response"));
+  await flush(); assert.ok(app.requests.every(r => !r.init.method));
+  app.requests.shift().reject(new Error("unavailable")); app.requests.shift().resolve([]); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /may have persisted/);
+  assert.equal(app.button("Record mock research").props.disabled, true); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("recovery transport lock survives remount and completion revalidates the new panel without retry", async () => {
+  const old = harness(); await mount(old, { ...ready, can_start: false, pending_run_id: run.id }, []); await inspectPending(old);
+  const pending = old.button("Finalize interrupted research").props.onClick(); const request = old.requests.shift(); old.unmount();
+  const app = harness("admin", old); await mount(app);
+  assert.equal(app.button("Record mock research").props.disabled, true);
+  await app.button("Record mock research").props.onClick(); assert.equal(app.requests.length, 0);
+  request.resolve(interruptedRun); await pending; await flush(); assert.equal(request.init.signal.aborted, true);
+  assert.deepEqual(app.events, ["vitaai-research-changed"]); assert.ok(app.requests.every(r => !r.init.method));
+  await app.settle(ready, [interruptedRun]); assert.equal(app.button("Record mock research").props.disabled, false); app.unmount();
 });

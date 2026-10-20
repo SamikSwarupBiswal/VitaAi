@@ -4,8 +4,11 @@ import type { components } from "./api.generated";
 export type ResearchRun = components["schemas"]["ResearchRun"];
 export type ResearchReadiness = components["schemas"]["ResearchReadiness"];
 export type ResearchRequest = components["schemas"]["ResearchRequest"];
+export type ResearchRecoveryReadiness = components["schemas"]["ResearchRecoveryReadiness"];
 const prefix = "integrations/research";
 export const researchAccountPath = (id: string) => `${prefix}/accounts/${encodeURIComponent(id)}`;
+// Retain the transport lock across panel remounts until the request settles.
+export const researchPending = new Set<string>();
 
 export function checkResearchRun(view: AccountView, run: ResearchRun) {
   if (run.account_id !== view.account.id || run.organization_id !== view.account.organization_id) {
@@ -36,6 +39,25 @@ export function startResearch(view: AccountView, mode: "mock" | "live", signal: 
   return api<ResearchRun>(`${researchAccountPath(view.account.id)}/search`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
   });
+}
+
+export async function readResearchRecovery(view: AccountView, run: ResearchRun, signal: AbortSignal) {
+  const ready = await api<ResearchRecoveryReadiness>(`${prefix}/runs/${encodeURIComponent(run.id)}/recovery-readiness`, { signal });
+  if (ready.run_id !== run.id || ready.run_revision !== run.revision || ready.account_id !== view.account.id
+    || ready.organization_id !== view.account.organization_id || ready.account_revision !== view.account.revision
+    || ready.recover_after !== (run.worker_deadline_at ?? null)) throw new Error("Recovery state changed. Inspect the saved run again.");
+  return ready;
+}
+
+export async function recoverResearch(view: AccountView, run: ResearchRun, ready: ResearchRecoveryReadiness, signal: AbortSignal) {
+  const body: components["schemas"]["ResearchRecoveryRequest"] = { schema_version: "1",
+    expected_revision: ready.run_revision, expected_account_revision: view.account.revision };
+  const saved = checkResearchRun(view, await api<ResearchRun>(`${prefix}/runs/${encodeURIComponent(run.id)}/recover`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  }));
+  if (saved.id !== run.id || saved.status !== "interrupted" || saved.revision !== ready.run_revision + 1
+    || saved.recovery?.previous_revision !== ready.run_revision) throw new Error("Recovery response could not be confirmed.");
+  return saved;
 }
 
 export function researchSourceLink(value: string, domain: string) {
