@@ -5,6 +5,7 @@ export type ResearchRun = components["schemas"]["ResearchRun"];
 export type ResearchReadiness = components["schemas"]["ResearchReadiness"];
 export type ResearchRequest = components["schemas"]["ResearchRequest"];
 export type ResearchRecoveryReadiness = components["schemas"]["ResearchRecoveryReadiness"];
+export type ResearchContextView = components["schemas"]["ResearchContext"];
 const prefix = "integrations/research";
 export const researchAccountPath = (id: string) => `${prefix}/accounts/${encodeURIComponent(id)}`;
 // Retain the transport lock across panel remounts until the request settles.
@@ -32,6 +33,26 @@ export async function readResearchRun(view: AccountView, id: string, signal: Abo
   const run = await api<ResearchRun>(`${prefix}/runs/${encodeURIComponent(id)}`, { signal });
   if (run.id !== id) throw new Error("Research run identity changed. Refresh history.");
   return checkResearchRun(view, run);
+}
+
+export async function readResearchContext(view: AccountView, run: ResearchRun, signal: AbortSignal) {
+  const value = await api<ResearchContextView>(`${prefix}/runs/${encodeURIComponent(run.id)}/context`, { signal });
+  checkResearchRun(view, value.retained_run);
+  const current = value.internal;
+  if (value.retained_run.id !== run.id || value.retained_run.revision !== run.revision
+    || current.account.id !== view.account.id || current.account.organization_id !== view.account.organization_id
+    || current.account.revision !== view.account.revision || current.assessment.snapshot_hash !== view.assessment.snapshot_hash
+    || (current.source?.id ?? null) !== (view.source?.id ?? null)) throw new Error("Research context changed. Refresh the account and inspect again.");
+  return value;
+}
+
+export function researchContextUsable(value: ResearchContextView, now: number | null) {
+  const run = value.retained_run;
+  return now !== null && value.status === "usable" && run.mode === "live" && run.status === "succeeded"
+    && !!run.expires_at && now < Date.parse(run.expires_at) && now >= Date.parse(value.evaluated_at)
+    && !!value.usable_sources?.length && value.usable_sources.every(source => source.published_at
+      && Number.isFinite(Date.parse(source.published_at)) && Date.parse(source.published_at) <= now
+      && now - Date.parse(source.published_at) <= 30 * 86400000 && researchSourceLink(source.url, run.target.domain));
 }
 
 export function startResearch(view: AccountView, mode: "mock" | "live", signal: AbortSignal) {

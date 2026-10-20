@@ -8,11 +8,12 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
-const view = { account: { id: "a", organization_id: "org", revision: 3, name: "Account A" } };
+const view = { account: { id: "a", organization_id: "org", revision: 3, name: "Account A" },
+  assessment: { snapshot_hash: "current-snapshot" } };
 const target = { company_name: "Example Company", domain: "example.test" };
 const ready = { organization_id: "org", account_id: "a", account_revision: 3, target, enabled: true,
   can_start: true, live_status: "configured_unverified", pending_run_id: null, next_start_at: null };
-const run = { id: "run-1", organization_id: "org", account_id: "a", account_revision: 3, target,
+const run = { id: "run-1", revision: 1, organization_id: "org", account_id: "a", account_revision: 3, target,
   requested_mode: "mock", mode: "mock", status: "succeeded", started_at: "2026-10-18T00:00:00Z",
   finished_at: "2026-10-18T00:00:01Z", expires_at: "2026-10-18T00:15:01Z", sources: [], caveat: "Untrusted advisory context" };
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
@@ -144,6 +145,98 @@ test("history retains original dates/target and escapes text and unsafe links", 
     assert.equal(app.helper.researchSourceLink(url, "example.test"), false);
   }
   app.unmount();
+});
+
+function contextFixture(now = Date.now()) {
+  const source = { url: "https://example.test/news", title: "<script>Public title</script>",
+    text: "<img src=x onerror=alert(1)> Untrusted public text", provider_relevance: 0.8,
+    published_at: new Date(now - 86400000).toISOString(), fetched_at: new Date(now - 1000).toISOString(),
+    freshness_at_fetch: "fresh", factual_confidence: "unverified" };
+  const saved = { ...run, mode: "live", requested_mode: "live", sources: [source],
+    started_at: new Date(now - 2000).toISOString(), finished_at: source.fetched_at,
+    expires_at: new Date(now + 60000).toISOString() };
+  return { internal: { ...view, account: { ...view.account, annual_value: null, renewal_date: null },
+    assessment: { ...view.assessment, as_of: new Date(now).toISOString().slice(0, 10), health: 50, risk: 50,
+      opportunity: 20, confidence: 75, requires_review: true },
+    evidence: [{ id: "evidence-1", fact: "Internal observation", source: "Synthetic CRM",
+      observed_at: source.fetched_at, ingested_at: source.fetched_at }] },
+    retained_run: saved, status: "usable", evaluated_at: new Date(now).toISOString(),
+    usable_sources: [source], exclusions: [{ source_index: 1, url: "javascript:excluded", reason: "unsafe_url" }],
+    factual_confidence: "unverified", caveat: "Untrusted supporting context; no score or authority changes.",
+    review_question: { question: "Verify the cited sources before planning.", evidence_ids: ["evidence-1"], source_urls: [source.url] } };
+}
+async function inspectSaved(app, record) {
+  const pending = app.inspect().props.onClick(); app.requests.shift().resolve(record); await pending;
+}
+
+test("explicit context GET pairs separate evidence, preserves unknowns and escapes public text for viewers", async () => {
+  const app = harness("viewer"); const value = contextFixture(); await mount(app, ready, [value.retained_run]);
+  await inspectSaved(app, value.retained_run); assert.equal(app.requests.length, 0);
+  const action = app.button("Inspect current research context").props.onClick;
+  const pending = action(); await action(); assert.equal(app.requests.length, 1);
+  const request = app.requests.shift(); assert.match(request.url, /runs\/run-1\/context$/);
+  assert.equal(request.init.method, undefined); request.resolve(value); await pending;
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /Internal account observations/); assert.match(html, /Annual value Unknown/);
+  assert.match(html, /review Required/); assert.match(html, /current-snapshot/); assert.match(html, /evidence-1/);
+  assert.match(html, /Server eligibility: usable/); assert.match(html, /Excluded sources/); assert.match(html, /unsafe_url/);
+  assert.match(html, /&lt;script&gt;Public title/); assert.doesNotMatch(html, /<script>|<img |href="javascript/);
+  assert.match(html, /Provider relevance 0.8/); assert.match(html, /factual confidence unverified/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("context loader rejects crossed account, snapshot, source or inspected-run bindings", async () => {
+  const fixture = contextFixture();
+  for (const change of [value => { value.retained_run.id = "other"; }, value => { value.retained_run.revision++; },
+    value => { value.retained_run.organization_id = "other"; }, value => { value.internal.account.id = "other"; },
+    value => { value.internal.account.organization_id = "other"; }, value => { value.internal.account.revision++; },
+    value => { value.internal.assessment.snapshot_hash = "other"; }, value => { value.internal.source = { id: "other" }; }]) {
+    const app = harness(); await mount(app, ready, [fixture.retained_run]); await inspectSaved(app, fixture.retained_run);
+    const value = structuredClone(fixture); change(value);
+    const pending = app.button("Inspect current research context").props.onClick(); app.requests.shift().resolve(value); await pending;
+    const html = renderToStaticMarkup(app.render()); assert.match(html, /Research context unavailable/);
+    assert.doesNotMatch(html, /Internal account observations/); app.unmount();
+  }
+});
+
+test("refresh and new selection discard late context; captured old handlers cannot start a read", async () => {
+  const app = harness(); const value = contextFixture(); await mount(app, ready, [value.retained_run]);
+  await inspectSaved(app, value.retained_run);
+  const stale = app.button("Inspect current research context").props.onClick;
+  const pending = stale(); const request = app.requests.shift();
+  app.focus(); await flush(); await stale(); assert.equal(app.requests.length, 2);
+  await app.settle(ready, [value.retained_run]); request.resolve(value); await pending;
+  assert.doesNotMatch(renderToStaticMarkup(app.render()), /Internal account observations/);
+  await inspectSaved(app, value.retained_run);
+  const reading = app.button("Inspect current research context").props.onClick(); const old = app.requests.shift();
+  await inspectSaved(app, { ...value.retained_run, caveat: "Latest retained run" });
+  old.resolve(value); await reading;
+  assert.match(renderToStaticMarkup(app.render()), /Latest retained run/);
+  assert.doesNotMatch(renderToStaticMarkup(app.render()), /Internal account observations/); app.unmount();
+});
+
+test("expiry hides usable public context without retrying or refreshing its dates", async t => {
+  const instant = Date.now(); const value = contextFixture(instant);
+  const clock = t.mock.method(Date, "now", () => instant);
+  const app = harness(); await mount(app, ready, [value.retained_run]); await inspectSaved(app, value.retained_run);
+  const pending = app.button("Inspect current research context").props.onClick(); app.requests.shift().resolve(value); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /Verify the cited sources before planning/);
+  clock.mock.mockImplementation(() => instant + 60000); app.tick();
+  const html = renderToStaticMarkup(app.render()); assert.match(html, /No currently usable public context/);
+  assert.doesNotMatch(html, /Verify the cited sources before planning/); assert.equal(app.requests.length, 0);
+  for (const status of ["expired", "account_changed", "target_changed", "disabled", "mock", "fallback", "run_unavailable", "invalid_window", "no_usable_sources"]) {
+    assert.equal(app.helper.researchContextUsable({ ...value, status }, instant), false);
+  }
+  assert.equal(app.helper.researchContextUsable(value, null), false); app.unmount();
+});
+
+test("failed context GET stays explicit; unmounted requests cannot publish private context", async () => {
+  const app = harness(); const value = contextFixture(); await mount(app, ready, [value.retained_run]); await inspectSaved(app, value.retained_run);
+  const failed = app.button("Inspect current research context").props.onClick(); app.requests.shift().reject(new Error("offline")); await failed;
+  assert.match(renderToStaticMarkup(app.render()), /Research context unavailable/); assert.equal(app.requests.length, 0);
+  const pending = app.button("Inspect current research context").props.onClick(); const request = app.requests.shift();
+  app.unmount(); assert.equal(request.init.signal.aborted, true); request.resolve(value); await pending;
+  assert.doesNotMatch(renderToStaticMarkup(app.render()), /Internal account observations/); assert.equal(app.requests.length, 0);
 });
 
 const pendingRun = { ...run, status: "pending", revision: 1, account_revision: 1,

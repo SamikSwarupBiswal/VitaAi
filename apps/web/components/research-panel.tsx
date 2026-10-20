@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountView } from "@/lib/api";
 import { checkResearchRun, readResearch, readResearchRun, readResearchRecovery, recoverResearch, researchPending,
-  researchContext, researchSourceLink, startResearch, type ResearchReadiness, type ResearchRecoveryReadiness, type ResearchRun } from "@/lib/research";
+  readResearchContext, researchContextUsable, researchContext, researchSourceLink, startResearch,
+  type ResearchContextView, type ResearchReadiness, type ResearchRecoveryReadiness, type ResearchRun } from "@/lib/research";
 import { useSession } from "./session-gate";
 
 export function ResearchPanel({ view }: { view: AccountView }) {
@@ -20,6 +21,8 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
   const [runs, setRuns] = useState<ResearchRun[]>([]);
   const [selected, setSelected] = useState<ResearchRun | null>(null);
   const [recovery, setRecovery] = useState<ResearchRecoveryReadiness | null>(null);
+  const [context, setContext] = useState<ResearchContextView | null>(null);
+  const [contextReading, setContextReading] = useState(false);
   const [live, setLive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(true);
@@ -30,6 +33,8 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
   const locked = useRef(false);
   const sequence = useRef(0);
   const recoverySequence = useRef<number | null>(null);
+  const selectedBinding = useRef<ResearchRun | null>(null);
+  const contextLocked = useRef(false);
   const scope = view.account.organization_id;
 
   const refresh = useCallback(async () => {
@@ -37,6 +42,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
     if (!signal || signal.aborted) return;
     const current = ++sequence.current;
     recoverySequence.current = null;
+    selectedBinding.current = null; contextLocked.current = false; setContext(null); setContextReading(false);
     setReading(true); setReadiness(null); setSelected(null); setRecovery(null); setRuns([]); setError(null);
     try {
       const value = await readResearch(view, signal);
@@ -65,6 +71,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
     if (!signal || signal.aborted || locked.current || researchPending.has(scope) || reading || !writer || !readiness?.can_start
       || (live && readiness.live_status !== "configured_unverified")) return;
     locked.current = true; researchPending.add(scope); ++sequence.current; recoverySequence.current = null;
+    selectedBinding.current = null; contextLocked.current = false; setContext(null); setContextReading(false);
     setBusy(true); setReadiness(null); setSelected(null); setRecovery(null); setError(null);
     setNotice(null);
     const mode = live ? "live" : "mock";
@@ -86,11 +93,13 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
     if (!signal || signal.aborted || locked.current || reading) return;
     const current = ++sequence.current;
     recoverySequence.current = null;
+    selectedBinding.current = null; contextLocked.current = false; setContext(null); setContextReading(false);
     setSelected(null); setRecovery(null); setError(null);
     try {
       const run = await readResearchRun(view, id, signal);
       if (signal.aborted || current !== sequence.current) return;
       setSelected(run);
+      selectedBinding.current = run;
       if (run.status === "pending") {
         const value = await readResearchRecovery(view, run, signal);
         if (!signal.aborted && current === sequence.current) {
@@ -100,6 +109,23 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
     } catch { if (!signal.aborted && current === sequence.current) setError("Saved research run unavailable for this account."); }
   }
 
+  async function inspectContext() {
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted || locked.current || contextLocked.current || reading || !selected
+      || selectedBinding.current !== selected) return;
+    const current = ++sequence.current;
+    recoverySequence.current = null; setRecovery(null);
+    contextLocked.current = true; setContextReading(true); setContext(null); setError(null);
+    try {
+      const value = await readResearchContext(view, selected, signal);
+      if (!signal.aborted && current === sequence.current) { setContext(value); setNow(Date.now()); }
+    } catch {
+      if (!signal.aborted && current === sequence.current) setError("Research context unavailable or account changed. Refresh the account and inspect again.");
+    } finally {
+      if (!signal.aborted && current === sequence.current) { contextLocked.current = false; setContextReading(false); }
+    }
+  }
+
   async function finalizeInterrupted() {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted || locked.current || researchPending.has(scope) || reading || !writer || !readiness
@@ -107,6 +133,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
       || recovery.run_id !== selected.id || recovery.run_revision !== selected.revision
       || recoverySequence.current !== sequence.current) return;
     locked.current = true; researchPending.add(scope); ++sequence.current; recoverySequence.current = null;
+    selectedBinding.current = null; contextLocked.current = false; setContext(null); setContextReading(false);
     setBusy(true); setReadiness(null); setRecovery(null); setError(null); setNotice(null);
     try {
       const saved = await recoverResearch(view, selected, recovery, signal);
@@ -143,6 +170,9 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
       <ul>{runs.map(run => <li key={run.id}><button disabled={disabled} onClick={() => inspect(run.id)}>Inspect {run.id}</button>
         <span> · {run.mode} / {run.status} · revision {run.account_revision} · {run.started_at}</span></li>)}</ul>
       {selected && <ResearchRecord run={selected} readiness={readiness} now={now} />}
+      {selected && <button disabled={disabled || contextReading} onClick={() => inspectContext()}>Inspect current research context</button>}
+      {contextReading && <p role="status">Reading saved context...</p>}
+      {context && <ResearchContextRecord context={context} now={now} />}
       {selected?.status === "pending" && <section aria-label="Interrupted research recovery"><h3>Interrupted research recovery</h3>
         <p>Finalization retains the original target, revision, modes and dates. It adds no sources or context window and never searches or retries. An already-authorized search may still begin or finish; finalization does not prove provider cancellation.</p>
         <p>{recovery ? `Recovery: ${recovery.reason}. Run revision ${recovery.run_revision}.` : "Recovery readiness unavailable. Inspect this run again before finalizing."}</p>
@@ -153,6 +183,36 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
       </section>}
     </section>
   </details>;
+}
+
+function ResearchContextRecord({ context, now }: { context: ResearchContextView; now: number | null }) {
+  const usable = researchContextUsable(context, now);
+  const view = context.internal;
+  return <section aria-label="Research context"><h3>Research context</h3>
+    <p>Saved run {context.retained_run.id}; evaluated {context.evaluated_at}. Server eligibility: {context.status}.</p>
+    <p>{context.caveat}</p>
+    <h4>Internal account observations</h4>
+    <p>Account revision {view.account.revision}; snapshot {view.assessment.snapshot_hash}; assessment date {view.assessment.as_of}.
+      {view.source ? ` Selected source ${view.source.id} (${view.source.kind}).` : " Synthetic sample source."}</p>
+    <p>Annual value {view.account.annual_value ?? "Unknown"}; renewal {view.account.renewal_date ?? "Unknown"}.
+      Health {view.assessment.health}; risk {view.assessment.risk}; opportunity {view.assessment.opportunity}.
+      Baseline confidence {view.assessment.confidence}%; review {view.assessment.requires_review ? "Required" : "Not required by baseline"}. Research does not change these values.</p>
+    {!view.evidence.length && <p>No internal evidence is available. Public sources do not fill missing CRM facts.</p>}
+    <ul>{view.evidence.map(item => <li key={item.id}>{item.fact} · evidence {item.id} · {item.source} · observed {item.observed_at} · ingested {item.ingested_at}</li>)}</ul>
+    <h4>Public context</h4>
+    <p>Factual confidence {context.factual_confidence}; provider relevance is not factual confidence.</p>
+    {!usable && <p>No currently usable public context is shown. This evaluation is unavailable, expired or excluded; inspect again to recheck saved records. Reading never searches or renews freshness.</p>}
+    {usable && <>
+      {context.review_question && <p>{context.review_question.question} Internal evidence: {context.review_question.evidence_ids.join(", ") || "None"}.</p>}
+      <ul>{context.usable_sources?.map(source => <li key={source.url}>
+        <a href={source.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{source.title}</a>
+        <p>{source.text}</p><p>Source {source.url}; published {source.published_at}; fetched {source.fetched_at}.
+          Provider relevance {source.provider_relevance} (0–1); factual confidence unverified.</p>
+      </li>)}</ul>
+    </>}
+    {!!context.exclusions?.length && <><h4>Excluded sources</h4><ul>{context.exclusions.map(item =>
+      <li key={item.source_index}>Source {item.source_index + 1}: {item.url} · {item.reason}</li>)}</ul></>}
+  </section>;
 }
 
 function ResearchRecord({ run, readiness, now }: { run: ResearchRun; readiness: ResearchReadiness | null; now: number | null }) {
