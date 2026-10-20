@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountView } from "@/lib/api";
 import { checkResearchRun, readResearch, readResearchRun, readResearchRecovery, recoverResearch, researchPending,
-  readResearchContext, researchContextUsable, researchContext, researchSourceLink, startResearch,
+  readResearchContext, researchContextUsable, researchContext, researchSourceMatchedLink, startResearch,
   type ResearchContextView, type ResearchReadiness, type ResearchRecoveryReadiness, type ResearchRun } from "@/lib/research";
 import { useSession } from "./session-gate";
 
@@ -230,6 +230,7 @@ function ResearchRecord({ run, readiness, now }: { run: ResearchRun; readiness: 
   return <section aria-label="Saved research run"><h3>Saved research run</h3>
     <p>Run {run.id} · {run.provider} · requested {run.requested_mode} · returned {run.mode} / {run.status}.</p>
     <p>Original account revision {run.account_revision}; target {run.target.company_name} / {run.target.domain}.</p>
+    <p>Declared publisher domains: {run.target.publisher_domains?.join(", ") || "None"}. Company mentions remain unverified.</p>
     <p>Started {run.started_at}; finished {run.finished_at || "Pending"}; context expires {run.expires_at || "No context window"}.</p>
     <p>Run revision {run.revision}; worker deadline {run.worker_deadline_at || "Unavailable (legacy record)"}.</p>
     {run.recovery && <p>Finalized as interrupted by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous run revision {run.recovery.previous_revision}; reason {run.recovery.reason}. This records finalization, not provider completion.</p>}
@@ -240,11 +241,12 @@ function ResearchRecord({ run, readiness, now }: { run: ResearchRun; readiness: 
     {run.status === "discarded" && <p>Context or authority changed. Retrieved text was discarded.</p>}
     {!run.sources?.length && <p>No sources from this run. Disabled, mock, empty live results and fallback do not establish external facts.</p>}
     <ul>{run.sources?.map(source => <li key={source.url}>
-      <h4>{researchSourceLink(source.url, run.target.domain) ? <a href={source.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{source.title}</a> : source.title}</h4>
+      <h4>{researchSourceMatchedLink(source, run.target) ? <a href={source.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{source.title}</a> : source.title}</h4>
       <p>{source.text}</p><p>Source: {source.url}</p>
       <p>Published {source.published_at || "Unknown"}; fetched {source.fetched_at}. Freshness at fetch: {source.freshness_at_fetch} (30-day horizon).</p>
       <p>Publication age now: {now === null || !source.published_at ? "Unknown" : now - Date.parse(source.published_at) > 30 * 86400000 ? "Older than 30 days" : "Within 30 days"}.</p>
-      <p>Provider relevance {source.provider_relevance} (0–1); factual confidence {source.factual_confidence}. Match: configured domain; operator-declared, not verified.</p>
+      <p>Provider relevance {source.provider_relevance} (0–1); factual confidence {source.factual_confidence}.
+        Match: {source.match === "configured_publisher_company_mention" ? "configured publisher and company mention" : "configured domain"}; operator-declared, not verified.</p>
     </li>)}</ul>
   </section>;
 }

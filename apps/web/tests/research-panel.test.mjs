@@ -165,6 +165,26 @@ function contextFixture(now = Date.now()) {
     factual_confidence: "unverified", caveat: "Untrusted supporting context; no score or authority changes.",
     review_question: { question: "Verify the cited sources before planning.", evidence_ids: ["evidence-1"], source_urls: [source.url] } };
 }
+
+test("declared publisher links retain unverified match labels and target changes invalidate context", async () => {
+  const value = contextFixture();
+  const publisher = { ...target, publisher_domains: ["publisher.test"] };
+  const source = { ...value.usable_sources[0], url: "https://publisher.test/article",
+    title: "Example Company update", match: "configured_publisher_company_mention" };
+  value.retained_run = { ...value.retained_run, target: publisher, sources: [source] };
+  value.usable_sources = [source];
+  const app = harness(); const status = { ...ready, target: publisher };
+  await mount(app, status, [value.retained_run]); await inspectSaved(app, value.retained_run);
+  const pending = app.button("Inspect current research context").props.onClick(); app.requests.shift().resolve(value); await pending;
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /configured publisher and company mention/); assert.match(html, /href="https:\/\/publisher.test\/article"/);
+  assert.match(html, /factual confidence unverified/);
+  assert.equal(app.helper.researchSourceMatchedLink({ ...source, url: "https://publisher.test.evil.test/" }, publisher), false);
+  assert.equal(app.helper.researchSourceMatchedLink({ ...source, match: "configured_domain" }, publisher), false);
+  assert.equal(app.helper.researchSourceMatchedLink(source, target), false);
+  assert.match(app.helper.researchContext(value.retained_run, ready, Date.now()), /Historical revision or target/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
 async function inspectSaved(app, record) {
   const pending = app.inspect().props.onClick(); app.requests.shift().resolve(record); await pending;
 }

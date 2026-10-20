@@ -3308,7 +3308,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "unsafe_url" | "duplicate" | "unknown_publication" | "stale_publication" | "invalid_time";
+            reason: "unsafe_url" | "account_match" | "duplicate" | "unknown_publication" | "stale_publication" | "invalid_time";
         };
         /** ResearchReadiness */
         ResearchReadiness: {
@@ -3543,9 +3543,9 @@ export interface components {
             /**
              * Match
              * @default configured_domain
-             * @constant
+             * @enum {string}
              */
-            match: "configured_domain";
+            match: "configured_domain" | "configured_publisher_company_mention";
             /** Published At */
             published_at: string | null;
             /**
@@ -3593,6 +3593,8 @@ export interface components {
             company_name: string;
             /** Domain */
             domain: string;
+            /** Publisher Domains */
+            publisher_domains?: string[];
         };
         /** ReviewDecision */
         ReviewDecision: {

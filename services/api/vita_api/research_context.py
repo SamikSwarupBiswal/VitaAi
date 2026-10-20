@@ -6,13 +6,19 @@ from pydantic import AwareDatetime, Field
 
 from .config import ResearchTarget
 from .contracts import AccountView
-from .research import ResearchContract, ResearchRun, ResearchSource, source_url
+from .research import (
+    ResearchContract,
+    ResearchRun,
+    ResearchSource,
+    source_match,
+    source_url,
+)
 
 
 class ResearchExclusion(ResearchContract):
     source_index: int = Field(ge=0, le=4)
     url: str
-    reason: Literal["unsafe_url", "duplicate", "unknown_publication", "stale_publication", "invalid_time"]
+    reason: Literal["unsafe_url", "account_match", "duplicate", "unknown_publication", "stale_publication", "invalid_time"]
 
 
 class ResearchReviewQuestion(ResearchContract):
@@ -104,8 +110,10 @@ def build_context(view: AccountView, run: ResearchRun, target: ResearchTarget | 
         seen = set()
         for index, source in enumerate(run.sources):
             reason = None
-            if not source_url(source.url, target.domain):
+            if not any(source_url(source.url, domain) for domain in [target.domain, *target.publisher_domains]):
                 reason = "unsafe_url"
+            elif source_match(source.url, source.title, source.text, target) != source.match:
+                reason = "account_match"
             elif source.url in seen:
                 reason = "duplicate"
             elif source.published_at is None:

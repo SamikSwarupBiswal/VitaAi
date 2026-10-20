@@ -52,7 +52,7 @@ export function researchContextUsable(value: ResearchContextView, now: number | 
     && !!run.expires_at && now < Date.parse(run.expires_at) && now >= Date.parse(value.evaluated_at)
     && !!value.usable_sources?.length && value.usable_sources.every(source => source.published_at
       && Number.isFinite(Date.parse(source.published_at)) && Date.parse(source.published_at) <= now
-      && now - Date.parse(source.published_at) <= 30 * 86400000 && researchSourceLink(source.url, run.target.domain));
+      && now - Date.parse(source.published_at) <= 30 * 86400000 && researchSourceMatchedLink(source, run.target));
 }
 
 export function startResearch(view: AccountView, mode: "mock" | "live", signal: AbortSignal) {
@@ -91,7 +91,8 @@ export function researchSourceLink(value: string, domain: string) {
 
 export function researchContext(run: ResearchRun, readiness: ResearchReadiness | null, now: number | null) {
   if (!readiness || run.account_revision !== readiness.account_revision || !readiness.target
-    || run.target.company_name !== readiness.target.company_name || run.target.domain !== readiness.target.domain) {
+    || run.target.company_name !== readiness.target.company_name || run.target.domain !== readiness.target.domain
+    || JSON.stringify(run.target.publisher_domains ?? []) !== JSON.stringify(readiness.target.publisher_domains ?? [])) {
     return "Historical revision or target; current context is not established.";
   }
   if (now === null || !run.expires_at || !Number.isFinite(Date.parse(run.expires_at)) || now >= Date.parse(run.expires_at)) {
@@ -99,4 +100,10 @@ export function researchContext(run: ResearchRun, readiness: ResearchReadiness |
   }
   if (run.mode !== "live" || run.status !== "succeeded" || !run.sources?.length) return "No live research context from this run.";
   return "Matching revision and target; context window open. Sources remain unverified.";
+}
+
+export function researchSourceMatchedLink(source: components["schemas"]["ResearchSource"], target: components["schemas"]["ResearchTarget"]) {
+  if ((source.match ?? "configured_domain") === "configured_domain") return researchSourceLink(source.url, target.domain);
+  return source.match === "configured_publisher_company_mention"
+    && !!target.publisher_domains?.some(domain => researchSourceLink(source.url, domain));
 }

@@ -1,6 +1,7 @@
 """Bounded search context. Retrieved text is untrusted advisory data."""
 import ipaddress
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Literal
@@ -47,7 +48,7 @@ class ResearchSource(ResearchContract):
     title: str = Field(min_length=1, max_length=500)
     text: str = Field(max_length=4000)
     provider_relevance: float = Field(ge=0, le=1, allow_inf_nan=False)
-    match: Literal["configured_domain"] = "configured_domain"
+    match: Literal["configured_domain", "configured_publisher_company_mention"] = "configured_domain"
     published_at: AwareDatetime | None
     fetched_at: AwareDatetime
     freshness_at_fetch: Literal["fresh", "stale", "unknown"]
@@ -137,6 +138,19 @@ def publication(value, fetched):
         raise ResearchFailure("invalid_source_time") from None
 
 
+def source_match(url: str, title: str, text: str, target: ResearchTarget):
+    if source_url(url, target.domain):
+        return "configured_domain"
+    name = " ".join(target.company_name.casefold().split())
+    if not any(char.isalnum() for char in name):
+        return None
+    if any(source_url(url, domain) for domain in target.publisher_domains):
+        pattern = r"(?<!\w)" + re.escape(name) + r"(?!\w)"
+        if any(re.search(pattern, " ".join(value.casefold().split())) for value in (title, text)):
+            return "configured_publisher_company_mention"
+    return None
+
+
 class Research:
     def __init__(self, settings: Settings, transport: httpx.BaseTransport | None = None):
         self.settings = settings.model_copy(deep=True)
@@ -166,7 +180,8 @@ class Research:
                     "query": target.company_name + " company news", "topic": "general",
                     "search_depth": "basic", "max_results": 5, "auto_parameters": False,
                     "include_answer": False, "include_raw_content": False, "include_images": False,
-                    "include_published_date": True, "include_domains": [target.domain],
+                    "include_published_date": True,
+                    "include_domains": list(dict.fromkeys([target.domain, *target.publisher_domains])),
                     "include_domains_mode": "restrict",
                 }) as response):
                 if response.status_code != 200:
@@ -185,14 +200,18 @@ class Research:
                 if not isinstance(item, dict) or not isinstance(item.get("url"), str):
                     raise ResearchFailure("invalid_response")
                 url = item["url"]
-                if not source_url(url, target.domain) or url in seen:
+                if (not any(source_url(url, domain) for domain in [target.domain, *target.publisher_domains])
+                        or url in seen):
                     continue
                 seen.add(url)
                 published = publication(item.get("published_date"), fetched)
                 if (not isinstance(item.get("title"), str) or not isinstance(item.get("content"), str)
                         or type(item.get("score")) not in (float, int)):
                     raise ResearchFailure("invalid_response")
-                sources.append(ResearchSource(url=url, title=item["title"], text=item["content"],
+                match = source_match(url, item["title"], item["content"], target)
+                if match is None:
+                    continue
+                sources.append(ResearchSource(url=url, title=item["title"], text=item["content"], match=match,
                     provider_relevance=item["score"], published_at=published, fetched_at=fetched,
                     freshness_at_fetch="unknown" if published is None else
                         "stale" if published < fetched - timedelta(days=30) else "fresh"))

@@ -51,6 +51,28 @@ def settings(**changes):
 
 
 class ResearchTransportTests(unittest.TestCase):
+    def test_declared_publishers_require_a_full_company_mention_and_keep_provenance(self):
+        target = ResearchTarget(**TARGET, publisher_domains=["publisher.test", "publisher.test"])
+        calls = []
+        article = {**ITEM, "url": "https://news.publisher.test/article", "title": "EXAMPLE  Company update"}
+        def respond(request):
+            calls.append(request)
+            self.assertEqual(json.loads(request.content)["include_domains"], ["example.test", "publisher.test"])
+            return httpx.Response(200, json={"results": [article,
+                {**article, "url": "https://publisher.test/unrelated", "title": "Other Example Companywide"},
+                {**article, "url": "https://publisher.test.evil.test/forged"},
+                {**article, "url": "https://undeclared.test/other"}, ITEM]})
+        result = Research(settings(), httpx.MockTransport(respond)).search(target)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([source.url for source in result], [article["url"], ITEM["url"]])
+        self.assertEqual([source.match for source in result], ["configured_publisher_company_mention", "configured_domain"])
+        self.assertEqual(result[0].published_at.isoformat(), ITEM["published_date"].replace("Z", "+00:00"))
+        self.assertEqual(result[0].factual_confidence, "unverified")
+        self.assertEqual(target.publisher_domains, ["publisher.test"])
+        for domains in [["*"], ["https://publisher.test"], ["publisher.test/path"], [f"p{i}.test" for i in range(6)]]:
+            with self.subTest(domains=domains), self.assertRaises(ValidationError):
+                ResearchTarget(**TARGET, publisher_domains=domains)
+
     def test_fixed_bounded_contract_and_provenance(self):
         calls = []
         def respond(request):
@@ -169,7 +191,7 @@ class ResearchApiTests(unittest.TestCase):
         before = self.client.get("/api/portfolio").json()
         ready = self.client.get(path)
         self.assertEqual(ready.status_code, 200)
-        self.assertEqual(ready.json()["target"], TARGET)
+        self.assertEqual(ready.json()["target"], {**TARGET, "publisher_domains": []})
         self.assertEqual(ready.json()["account_revision"], 1)
         self.assertTrue(ready.json()["can_start"])
         self.assertEqual(ready.json()["live_status"], "configured_unverified")
@@ -318,6 +340,27 @@ class ResearchContextTests(unittest.TestCase):
     tearDown = ResearchApiTests.tearDown
     login = ResearchApiTests.login
     search = ResearchApiTests.search
+
+    def test_publisher_context_rechecks_saved_match_and_current_configuration(self):
+        target = ResearchTarget(**TARGET, publisher_domains=["publisher.test"])
+        config = self.settings.model_copy(update={"research_account_map": {ACCOUNT: target}})
+        article = {**ITEM, "url": "https://publisher.test/article", "title": "Example Company update",
+                   "published_date": (datetime.now(UTC) - timedelta(days=1)).isoformat()}
+        connector = Research(config, httpx.MockTransport(lambda _: httpx.Response(200, json={"results": [article]})))
+        service = ResearchService(self.app.state.store, connector, self.client.cookies.get("vitaai_session"))
+        run = service.start(ACCOUNT, ResearchRequest(expected_account_revision=1, mode="live"))
+        context = service.context(run.id)
+        self.assertEqual(context.status, "usable")
+        self.assertEqual(context.usable_sources[0].match, "configured_publisher_company_mention")
+        self.assertEqual(service.get(run.id), run)
+        tampered = run.model_copy(deep=True)
+        tampered.sources[0].title = "Other company"
+        excluded = build_context(context.internal, tampered, target, enabled=True, now=context.evaluated_at)
+        self.assertEqual(excluded.status, "no_usable_sources")
+        self.assertEqual(excluded.exclusions[0].reason, "account_match")
+        connector.settings.research_account_map[ACCOUNT] = ResearchTarget(**TARGET)
+        self.assertEqual(service.context(run.id).status, "target_changed")
+        self.assertEqual(service.get(run.id), run)
 
     def respond(self, request):
         self.calls.append(request)

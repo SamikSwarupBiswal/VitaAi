@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -34,10 +34,19 @@ class HubSpotProperty(BaseModel):
     observed_at_property: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,99}$")
 
 
+ResearchDomain = Annotated[str, Field(max_length=253, pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")]
+
+
 class ResearchTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
     company_name: str = Field(min_length=1, max_length=160, pattern=r"^[\w .,&'()-]+$")
-    domain: str = Field(max_length=253, pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+    domain: ResearchDomain
+    publisher_domains: list[ResearchDomain] = Field(default_factory=list, max_length=5)
+
+    @field_validator("publisher_domains")
+    @classmethod
+    def canonical_publishers(cls, value):
+        return sorted(set(value))
 
 
 class ComparisonProviderConfig(BaseModel):
