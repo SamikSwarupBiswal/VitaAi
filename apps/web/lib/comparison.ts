@@ -4,6 +4,7 @@ import type { components } from "./api.generated";
 export type CatalogEntry = components["schemas"]["CatalogEntry"];
 export type ComparisonRun = components["schemas"]["ComparisonRun"];
 export type ComparisonReadiness = components["schemas"]["ComparisonReadiness"];
+export type ComparisonRecoveryReadiness = components["schemas"]["ComparisonRecoveryReadiness"];
 export type ComparisonChoice = components["schemas"]["ComparisonChoice"];
 export type DiscoveryResult = components["schemas"]["DiscoveryResult"];
 const prefix = "provider-comparison";
@@ -38,6 +39,26 @@ export async function readComparisonRun(view: AccountView, id: string, signal: A
   const run = await api<ComparisonRun>(`${prefix}/runs/${encodeURIComponent(id)}`, { signal });
   if (run.id !== id) throw new Error("Comparison identity changed. Refresh records.");
   return checkComparisonRun(view, run);
+}
+
+export async function readComparisonRecovery(view: AccountView, run: ComparisonRun, signal: AbortSignal) {
+  const ready = await api<ComparisonRecoveryReadiness>(`${prefix}/runs/${run.id}/recovery-readiness`, { signal });
+  if (ready.run_id !== run.id || ready.run_revision !== run.revision || ready.account_id !== view.account.id
+    || ready.organization_id !== view.account.organization_id || ready.account_revision !== view.account.revision
+    || ready.snapshot_hash !== view.assessment.snapshot_hash) throw new Error("Recovery state changed. Inspect the saved run again.");
+  return ready;
+}
+
+export async function recoverComparison(view: AccountView, run: ComparisonRun, ready: ComparisonRecoveryReadiness, signal: AbortSignal) {
+  const body: components["schemas"]["ComparisonRecoveryRequest"] = { schema_version: "1",
+    expected_revision: ready.run_revision, expected_account_revision: view.account.revision,
+    expected_snapshot_hash: view.assessment.snapshot_hash };
+  const saved = checkComparisonRun(view, await api<ComparisonRun>(`${prefix}/runs/${run.id}/recover`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  }));
+  if (saved.id !== run.id || saved.status !== "interrupted" || saved.revision !== ready.run_revision + 1
+    || saved.recovery?.previous_revision !== ready.run_revision) throw new Error("Recovery response could not be confirmed.");
+  return saved;
 }
 
 export function startComparison(view: AccountView, providers: ComparisonChoice[], signal: AbortSignal) {

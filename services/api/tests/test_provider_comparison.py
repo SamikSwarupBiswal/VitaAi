@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 from uuid import uuid4
 
 import httpx
@@ -20,6 +21,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from vita_api.app import create_app
 from vita_api.config import ComparisonProviderConfig, Settings
+from vita_api.governance import PolicyDenied
 from vita_api.identity import Identity, users
 from vita_api.provider_catalog import (
     ENDPOINTS,
@@ -28,6 +30,8 @@ from vita_api.provider_catalog import (
     ProviderCatalog,
 )
 from vita_api.provider_comparison import (
+    WORKER_BUDGET,
+    ComparisonRecoveryRequest,
     ComparisonRequest,
     ComparisonService,
     comparisons,
@@ -657,3 +661,225 @@ class FoundryComparisonTests(unittest.TestCase):
         self.assertEqual(saved["status"], "discarded")
         self.assertTrue(all(row["analysis"] is None for row in saved["results"]))
         self.assertEqual(len(self.calls), 1)
+
+
+class ComparisonRecoveryTests(unittest.TestCase):
+    login = ComparisonApiTests.login
+    tearDown = ComparisonApiTests.tearDown
+    body = ComparisonApiTests.body
+    compare = ComparisonApiTests.compare
+    valid_response = ComparisonApiTests.valid_response
+    transport_call = ComparisonApiTests.transport_call
+    setUp = ComparisonApiTests.setUp
+
+    def interrupted(self):
+        def response(request):
+            if len(self.calls) == 2:
+                raise SystemExit("controlled-worker-loss")
+            return self.valid_response(request)
+        self.inference = response
+        operation = ComparisonService(self.app.state.store,
+            ProviderCatalog(self.settings, httpx.MockTransport(self.transport_call)),
+            self.client.cookies.get("vitaai_session"))
+        with self.assertRaises(SystemExit):
+            operation.start(self.admin.id, self.account_id, ComparisonRequest(**self.body()))
+        return self.client.get(self.path + "/runs").json()[0]
+
+    def recovery_body(self, run, **changes):
+        return {"expected_revision": run["revision"],
+            "expected_account_revision": self.view["account"]["revision"],
+            "expected_snapshot_hash": self.view["assessment"]["snapshot_hash"], **changes}
+
+    def test_explicit_recovery_preserves_progress_and_original_snapshot_across_restart(self):
+        before = self.client.get("/api/portfolio").json()
+        run = self.interrupted()
+        path = PREFIX + "/runs/" + run["id"]
+        self.assertEqual(run["revision"], 4)
+        ready = self.client.get(path + "/recovery-readiness").json()
+        self.assertEqual((ready["reason"], ready["can_recover"]), ("worker_active", False))
+        self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+            json=self.recovery_body(run)).status_code, 409)
+        deadline = datetime.fromisoformat(run["worker_deadline_at"])
+        self.assertEqual(deadline - datetime.fromisoformat(run["started_at"]), WORKER_BUDGET)
+        with TestClient(create_app(self.settings)) as restarted, patch(
+                "vita_api.provider_comparison.datetime", wraps=datetime) as clock:
+            restarted.cookies.update(self.client.cookies)
+            clock.now.return_value = deadline
+            ready = restarted.get(path + "/recovery-readiness").json()
+            self.assertTrue(ready["can_recover"])
+            self.settings.comparison_organization_id = "disabled-after-run"
+            result = restarted.post(path + "/recover", headers=HEADERS, json=self.recovery_body(run))
+            self.assertEqual(result.status_code, 200, result.text)
+            saved = result.json()
+            self.assertEqual((saved["status"], saved["revision"]), ("interrupted", 5))
+            for field in ["id", "actor_id", "started_at", "worker_deadline_at", "snapshot", "snapshot_hash", "account_revision"]:
+                self.assertEqual(saved[field], run[field])
+            self.assertEqual(saved["results"][0], run["results"][0])
+            self.assertTrue(all(item["analysis"] is None and item["status"] == "discarded"
+                and item["error_code"] == "comparison_interrupted" for item in saved["results"][1:]))
+            self.assertEqual(saved["recovery"]["actor_id"], self.admin.id)
+            self.assertEqual(saved["recovery"]["previous_revision"], 4)
+            self.assertEqual(restarted.get(path).json(), saved)
+            self.assertEqual(restarted.post(path + "/recover", headers=HEADERS,
+                json=self.recovery_body(run)).status_code, 409)
+            self.assertEqual(restarted.get(path).json(), saved)
+            self.assertEqual(restarted.get(path + "/recovery-readiness").json()["reason"], "terminal")
+        self.settings.comparison_organization_id = SAMPLE_ORG
+        with patch("vita_api.provider_comparison.datetime", wraps=datetime) as clock:
+            clock.now.return_value = deadline
+            self.assertTrue(self.client.get(self.path + "/readiness").json()["can_start"])
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        self.assertEqual(self.client.get("/api/missions").json(), [])
+
+    def test_expected_state_scope_schema_and_current_authority_are_required(self):
+        run = self.interrupted()
+        path = PREFIX + "/runs/" + run["id"]
+        deadline = datetime.fromisoformat(run["worker_deadline_at"])
+        with patch("vita_api.provider_comparison.datetime", wraps=datetime) as clock:
+            clock.now.return_value = deadline
+            for changes in [{"expected_revision": 1}, {"expected_account_revision": 999},
+                            {"expected_snapshot_hash": "0" * 64}]:
+                self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+                    json=self.recovery_body(run, **changes)).status_code, 409)
+            invalid = self.client.post(path + "/recover", headers=HEADERS,
+                json={**self.recovery_body(run), "api_key": "must-never-echo"})
+            self.assertEqual(invalid.status_code, 422)
+            self.assertNotIn("must-never-echo", invalid.text)
+            self.assertEqual(self.client.head(path + "/recover").status_code, 405)
+            self.assertEqual(self.client.get(PREFIX + f"/runs/{uuid4()}/recovery-readiness").status_code, 404)
+            with self.app.state.store.engine.begin() as connection:
+                connection.execute(update(users).where(users.c.id == self.admin.id).values(role="viewer"))
+            self.assertEqual(self.client.get(path + "/recovery-readiness").json()["reason"], "role_denied")
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+                json=self.recovery_body(run)).status_code, 403)
+            with self.app.state.store.engine.begin() as connection:
+                connection.execute(update(users).where(users.c.id == self.admin.id).values(role="admin", organization_id="foreign"))
+            self.assertEqual(self.client.get(path + "/recovery-readiness").status_code, 404)
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+                json=self.recovery_body(run)).status_code, 404)
+            self.identity.logout(self.client.cookies.get("vitaai_session"))
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+                json=self.recovery_body(run)).status_code, 401)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_source_change_recovery_requires_current_binding_but_keeps_original(self):
+        run = self.interrupted()
+        with self.app.state.store.engine.begin() as connection:
+            payload = connection.execute(select(accounts.c.payload).where(accounts.c.id == self.account_id)).scalar_one()
+            payload["revision"] += 1
+            connection.execute(update(accounts).where(accounts.c.id == self.account_id).values(payload=payload))
+        path = PREFIX + "/runs/" + run["id"]
+        with patch("vita_api.provider_comparison.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+            ready = self.client.get(path + "/recovery-readiness").json()
+            self.assertTrue(ready["can_recover"])
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+                json=self.recovery_body(run)).status_code, 409)
+            saved = self.client.post(path + "/recover", headers=HEADERS, json=self.recovery_body(run,
+                expected_account_revision=ready["account_revision"], expected_snapshot_hash=ready["snapshot_hash"])).json()
+        self.assertEqual(saved["snapshot"], run["snapshot"])
+        self.assertEqual(saved["account_revision"], run["account_revision"])
+        self.assertEqual(saved["status"], "interrupted")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_legacy_pending_does_not_claim_worker_fencing(self):
+        run = self.interrupted()
+        run.pop("worker_deadline_at")
+        run.pop("revision")
+        run.pop("recovery")
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(comparisons).values(payload=run))
+        path = PREFIX + "/runs/" + run["id"]
+        self.assertEqual(self.client.get(path + "/recovery-readiness").json()["reason"], "legacy_worker")
+        self.assertEqual(self.client.post(path + "/recover", headers=HEADERS,
+            json=self.recovery_body({**run, "revision": 1})).status_code, 409)
+        self.assertFalse(self.client.get(self.path + "/readiness").json()["can_start"])
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(comparisons.c.payload)).scalar_one(), run)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_recovery_fences_delayed_worker_and_competing_recovery_across_engines(self):
+        entered, release = Event(), Event()
+        def wait():
+            if len(self.calls) == 2:
+                entered.set()
+                self.assertTrue(release.wait(20))
+        self.callback = wait
+        with TestClient(create_app(self.settings)) as other, ThreadPoolExecutor(max_workers=2) as pool:
+            other.cookies.update(self.client.cookies)
+            pending = pool.submit(self.compare)
+            try:
+                self.assertTrue(entered.wait(20))
+                run = other.get(self.path + "/runs").json()[0]
+                path = PREFIX + "/runs/" + run["id"]
+                with patch("vita_api.provider_comparison.datetime", wraps=datetime) as clock:
+                    clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+                    request = self.recovery_body(run)
+                    contender = pool.submit(other.post, path + "/recover", headers=HEADERS, json=request)
+                    response = self.client.post(path + "/recover", headers=HEADERS, json=request)
+                    self.assertEqual(sorted([response.status_code, contender.result(20).status_code]), [200, 409])
+                    recovered = other.get(path).json()
+                    release.set()
+                    self.assertEqual(pending.result(20).status_code, 409)
+                    self.assertEqual(other.get(path).json(), recovered)
+            finally:
+                release.set()
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(recovered["results"][0], run["results"][0])
+        self.assertEqual(recovered["results"][1]["status"], "discarded")
+
+    def test_expired_worker_cannot_publish_or_call_later_provider_without_recovery(self):
+        entered, release = Event(), Event()
+        self.callback = lambda: (entered.set(), self.assertTrue(release.wait(20)))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.compare)
+            try:
+                self.assertTrue(entered.wait(20))
+                run = self.client.get(self.path + "/runs").json()[0]
+                with patch("vita_api.provider_comparison.datetime", wraps=datetime) as clock:
+                    clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+                    release.set()
+                    self.assertEqual(pending.result(20).status_code, 409)
+                saved = self.client.get(PREFIX + "/runs/" + run["id"]).json()
+                self.assertEqual(saved, run)
+                self.assertEqual(saved["status"], "pending")
+            finally:
+                release.set()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_saved_revision_fences_stale_private_finalizer(self):
+        run = self.interrupted()
+        operation = ComparisonService(self.app.state.store, ProviderCatalog(self.settings),
+            self.client.cookies.get("vitaai_session"), clock=lambda: datetime.fromisoformat(
+                run["worker_deadline_at"]))
+        stale = operation.get(self.admin.id, run["id"])
+        saved = operation.recover(self.admin.id, run["id"], ComparisonRecoveryRequest(**self.recovery_body(run)))
+        with self.assertRaises(PolicyDenied), self.app.state.store.engine.begin() as connection:
+            stale.status = "discarded"
+            operation.save(connection, stale)
+        self.assertEqual(operation.get(self.admin.id, run["id"]), saved)
+
+    def test_recovery_between_reservation_and_request_prevents_dispatch(self):
+        from vita_api.provider_comparison import analyze
+        entered, release = Event(), Event()
+        def pause(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(20))
+            return analyze(*args, **kwargs)
+        with patch("vita_api.provider_comparison.analyze", side_effect=pause), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.compare)
+            try:
+                self.assertTrue(entered.wait(20))
+                run = self.client.get(self.path + "/runs").json()[0]
+                self.assertIsNotNone(run["results"][0]["started_at"])
+                operation = ComparisonService(self.app.state.store, ProviderCatalog(self.settings),
+                    self.client.cookies.get("vitaai_session"), clock=lambda: datetime.fromisoformat(run["worker_deadline_at"]))
+                saved = operation.recover(self.admin.id, run["id"], ComparisonRecoveryRequest(**self.recovery_body(run)))
+                release.set()
+                self.assertEqual(pending.result(20).status_code, 409)
+                self.assertEqual(self.client.get(PREFIX + "/runs/" + run["id"]).json(), saved.model_dump(mode="json"))
+                self.assertEqual(saved.results[0].started_at, datetime.fromisoformat(run["results"][0]["started_at"]))
+            finally:
+                release.set()
+        self.assertEqual(self.calls, [])

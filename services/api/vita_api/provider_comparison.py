@@ -41,6 +41,9 @@ comparisons = Table("provider_comparison_runs", metadata,
     Column("status", String(20), nullable=False), Column("payload", JSON, nullable=False),
     ForeignKeyConstraint(["organization_id", "account_id"], ["accounts.organization_id", "accounts.id"]))
 
+# Fixed run budget; this does not assert that a remote request was cancelled.
+WORKER_BUDGET = timedelta(minutes=5)
+
 
 class ComparisonChoice(Contract):
     provider: ProviderId
@@ -69,6 +72,31 @@ class ComparisonReadiness(Contract):
     can_start: bool
     pending_run_id: UUID | None
     next_start_at: datetime | None
+
+
+class ComparisonRecoveryRequest(Contract):
+    expected_revision: int = Field(ge=1)
+    expected_account_revision: int = Field(ge=1)
+    expected_snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ComparisonRecoveryReadiness(Contract):
+    organization_id: str
+    account_id: UUID
+    account_revision: int
+    snapshot_hash: str
+    run_id: UUID
+    run_revision: int
+    can_recover: bool
+    reason: Literal["eligible", "role_denied", "terminal", "legacy_worker", "worker_active"]
+    recover_after: datetime | None
+
+
+class ComparisonRecovery(Contract):
+    actor_id: str
+    recovered_at: datetime
+    previous_revision: int
+    reason: Literal["worker_deadline_elapsed"] = "worker_deadline_elapsed"
 
 
 class ComparisonResult(Contract):
@@ -101,7 +129,10 @@ class ComparisonRun(Contract):
     account_revision: int
     snapshot_hash: str
     policy_version: Literal["comparison-1"] = "comparison-1"
-    status: Literal["pending", "completed", "discarded"] = "pending"
+    status: Literal["pending", "completed", "discarded", "interrupted"] = "pending"
+    revision: int = Field(default=1, ge=1)
+    worker_deadline_at: datetime | None = None
+    recovery: ComparisonRecovery | None = None
     started_at: datetime
     finished_at: datetime | None = None
     snapshot: AccountView
@@ -124,10 +155,10 @@ def metadata_from_response(payload, result, provider):
                 setattr(result, field, tokens)
 
 
-def analyze(catalog, provider, config, view, result):
+def analyze(catalog, provider, config, view, result, *, before_request):
     """One provider POST, without discovery/retry or primary ModelRun persistence."""
     start = perf_counter()
-    result.started_at = datetime.now(UTC)
+    result.started_at = result.started_at or datetime.now(UTC)
     try:
         if view.assessment.confidence < 100:
             raise CatalogFailure("evidence_requires_review")
@@ -144,6 +175,7 @@ def analyze(catalog, provider, config, view, result):
         body = {"model": config.model, "messages": [{"role": "user", "content": user}]}
         if provider == "anthropic":
             body.update(system=system, max_tokens=1600)
+            before_request()
             payload = catalog.request(provider, config, "POST", "/messages", body)
             metadata_from_response(payload, result, provider)
             if payload.get("stop_reason") != "end_turn":
@@ -156,6 +188,7 @@ def analyze(catalog, provider, config, view, result):
             body["messages"].insert(0, {"role": "system", "content": system})
             body["max_completion_tokens" if provider in {"openai", "foundry"} else "max_tokens"] = 1600
             body["response_format"] = {"type": "json_object"}
+            before_request()
             payload = catalog.request(provider, config, "POST", "/chat/completions", body)
             metadata_from_response(payload, result, provider)
             choice = payload["choices"][0]
@@ -180,9 +213,25 @@ def analyze(catalog, provider, config, view, result):
 
 
 class ComparisonService:
-    def __init__(self, store, catalog, token):
+    def __init__(self, store, catalog, token, *, clock=None):
         self.store, self.catalog = store, catalog
+        self.clock = clock or (lambda: datetime.now(UTC))
         self.workflow = Workflow(store, session_token=token, session_required=True)
+
+    @staticmethod
+    def load(connection, organization_id, run_id):
+        payload = connection.execute(select(comparisons.c.payload).where(
+            comparisons.c.organization_id == organization_id, comparisons.c.id == str(run_id))).scalar()
+        if payload is None:
+            raise PolicyDenied("record_not_found", 404)
+        return ComparisonRun.model_validate(payload)
+
+    def worker_check(self, connection, run):
+        saved = self.load(connection, run.organization_id, run.id)
+        if saved.status != "pending" or saved.revision != run.revision:
+            raise PolicyDenied("comparison_worker_fenced", 409)
+        if run.worker_deadline_at is None or self.clock() >= run.worker_deadline_at:
+            raise PolicyDenied("comparison_worker_expired", 409)
 
     def check(self, connection, actor, run):
         if actor.organization_id != run.organization_id or actor.role == "viewer":
@@ -212,10 +261,45 @@ class ComparisonService:
     @staticmethod
     def save(connection, run):
         result = connection.execute(update(comparisons).where(comparisons.c.id == str(run.id),
-            comparisons.c.organization_id == run.organization_id, comparisons.c.status == "pending")
-            .values(status=run.status, payload=run.model_dump(mode="json")))
+            comparisons.c.organization_id == run.organization_id, comparisons.c.status == "pending",
+            comparisons.c.payload["revision"].as_integer() == run.revision)
+            .values(status=run.status, payload=run.model_copy(update={"revision": run.revision + 1}).model_dump(mode="json")))
         if result.rowcount != 1:
             raise PolicyDenied("comparison_already_finished", 409)
+        run.revision += 1
+
+    def recovery_readiness(self, actor_id, run_id):
+        with self.workflow._transaction(actor_id, write=False) as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            view = self.workflow._view(connection, actor, run.account_id)
+            reason = ("role_denied" if actor.role == "viewer" else "terminal" if run.status != "pending"
+                else "legacy_worker" if run.worker_deadline_at is None
+                else "worker_active" if self.clock() < run.worker_deadline_at else "eligible")
+            return ComparisonRecoveryReadiness(organization_id=actor.organization_id, account_id=run.account_id,
+                account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash,
+                run_id=run.id, run_revision=run.revision, can_recover=reason == "eligible", reason=reason,
+                recover_after=run.worker_deadline_at)
+
+    def recover(self, actor_id, run_id, body):
+        with self.workflow._transaction(actor_id) as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            view = self.workflow._view(connection, actor, run.account_id)
+            if (view.account.revision != body.expected_account_revision
+                    or view.assessment.snapshot_hash != body.expected_snapshot_hash):
+                raise PolicyDenied("comparison_snapshot_changed", 409)
+            if run.status != "pending" or run.revision != body.expected_revision:
+                raise PolicyDenied("comparison_recovery_state_changed", 409)
+            now = self.clock()
+            if run.worker_deadline_at is None or now < run.worker_deadline_at:
+                raise PolicyDenied("comparison_worker_not_recoverable", 409)
+            run.recovery = ComparisonRecovery(actor_id=actor.id, recovered_at=now, previous_revision=run.revision)
+            for result in run.results:
+                if result.status == "pending":
+                    result.status, result.error_code = "discarded", "comparison_interrupted"
+                    result.finished_at = now
+            run.status, run.finished_at = "interrupted", now
+            self.save(connection, run)
+            return run
 
     def start(self, actor_id, account_id, body):
         with self.workflow._transaction(actor_id) as (connection, actor):
@@ -230,7 +314,7 @@ class ComparisonService:
                 raise PolicyDenied("comparison_in_progress", 409)
             latest = connection.execute(select(comparisons.c.started_at).where(*scope)
                 .order_by(comparisons.c.started_at.desc()).limit(1)).scalar()
-            now = datetime.now(UTC)
+            now = self.clock()
             if latest is not None and int(now.timestamp()) - latest < 60:
                 raise PolicyDenied("comparison_rate_limited", 429)
             configs = [self.catalog.config(actor.organization_id, choice.provider) for choice in body.providers]
@@ -240,7 +324,8 @@ class ComparisonService:
             view.latest_run = None
             run = ComparisonRun(id=uuid4(), organization_id=actor.organization_id, account_id=account_id,
                 actor_id=actor.id, account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash,
-                started_at=now, snapshot=view.model_copy(deep=True), results=[ComparisonResult(
+                started_at=now, worker_deadline_at=now + WORKER_BUDGET,
+                snapshot=view.model_copy(deep=True), results=[ComparisonResult(
                     provider=choice.provider, requested_mode=choice.mode,
                     mode="disabled" if not config.enabled else choice.mode,
                     configuration_revision=config.revision, model=config.model or None,
@@ -251,10 +336,21 @@ class ComparisonService:
         # One durable intent commits before any provider call. A lost worker retains pending; reads never retry it.
         try:
             for index, config in enumerate(configs):
+                def before_request(index=index, config=config):
+                    with self.workflow._transaction(actor_id) as (connection, fresh):
+                        self.worker_check(connection, run)
+                        self.check(connection, fresh, run)
+                        if self.catalog.config(run.organization_id, run.results[index].provider) != config:
+                            raise PolicyDenied("comparison_configuration_changed", 409)
+
+                before_request()
+                # Reserve processing durably before dispatch. A paused reservation may have dispatched;
+                # recovery never claims cancellation, and terminal/revision checks fence all later work.
                 with self.workflow._transaction(actor_id) as (connection, fresh):
+                    self.worker_check(connection, run)
                     self.check(connection, fresh, run)
-                    if self.catalog.config(run.organization_id, run.results[index].provider) != config:
-                        raise PolicyDenied("comparison_configuration_changed", 409)
+                    run.results[index].started_at = self.clock()
+                    self.save(connection, run)
                 result = run.results[index].model_copy(deep=True)
                 if result.mode == "disabled":
                     result.status, result.error_code = "unavailable", "provider_disabled"
@@ -264,9 +360,11 @@ class ComparisonService:
                           and (result.provider != "foundry" or config.resource_name)):
                     result.mode, result.status, result.error_code = "fallback", "unavailable", "provider_unconfigured"
                 else:
-                    result = analyze(self.catalog, result.provider, config, run.snapshot.model_copy(deep=True), result)
+                    result = analyze(self.catalog, result.provider, config, run.snapshot.model_copy(deep=True), result,
+                        before_request=before_request)
                 result.finished_at = result.finished_at or datetime.now(UTC)
                 with self.workflow._transaction(actor_id) as (connection, fresh):
+                    self.worker_check(connection, run)
                     self.check(connection, fresh, run)
                     if self.catalog.config(run.organization_id, result.provider) != config:
                         raise PolicyDenied("comparison_configuration_changed", 409)
@@ -275,24 +373,22 @@ class ComparisonService:
                         run.status, run.finished_at = "completed", datetime.now(UTC)
                     self.save(connection, run)
             return run
-        except PolicyDenied:
-            for result in run.results:
-                if result.status == "pending":
-                    result.status, result.error_code = "discarded", "comparison_context_changed"
-                    result.finished_at = datetime.now(UTC)
-            run.status, run.finished_at = "discarded", datetime.now(UTC)
-            # Only finalize this existing intent after authority loss; no output from the failed publication is retained.
+        except PolicyDenied as error:
+            # Read retained progress, never stale local output. CAS also fences this private finalizer.
             with self.store.engine.begin() as connection:
-                self.save(connection, run)
+                saved = self.load(connection, run.organization_id, run.id)
+                if saved.status == "pending" and saved.revision == run.revision and error.code != "comparison_worker_expired":
+                    for result in saved.results:
+                        if result.status == "pending":
+                            result.status, result.error_code = "discarded", "comparison_context_changed"
+                            result.finished_at = self.clock()
+                    saved.status, saved.finished_at = "discarded", self.clock()
+                    self.save(connection, saved)
             raise
 
     def get(self, actor_id, run_id):
         with self.workflow._transaction(actor_id, write=False) as (connection, actor):
-            payload = connection.execute(select(comparisons.c.payload).where(comparisons.c.organization_id == actor.organization_id,
-                comparisons.c.id == str(run_id))).scalar()
-            if payload is None:
-                raise PolicyDenied("record_not_found", 404)
-            run = ComparisonRun.model_validate(payload)
+            run = self.load(connection, actor.organization_id, run_id)
             self.workflow._view(connection, actor, run.account_id)
             return run
 
@@ -333,6 +429,14 @@ def install_comparison_routes(app, store, identity, settings, transport=None):
     @router.get("/runs/{run_id}", response_model=ComparisonRun)
     def get(run_id: UUID, actor: Current, operation: Service):
         return operation.get(actor.id, run_id)
+
+    @router.get("/runs/{run_id}/recovery-readiness", response_model=ComparisonRecoveryReadiness)
+    def recovery_readiness(run_id: UUID, actor: Current, operation: Service):
+        return operation.recovery_readiness(actor.id, run_id)
+
+    @router.post("/runs/{run_id}/recover", response_model=ComparisonRun)
+    def recover(run_id: UUID, body: ComparisonRecoveryRequest, actor: Current, operation: Service):
+        return operation.recover(actor.id, run_id, body)
 
     @router.get("/accounts/{account_id}/runs", response_model=list[ComparisonRun])
     def history(account_id: UUID, actor: Current, operation: Service):

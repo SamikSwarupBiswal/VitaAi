@@ -15,13 +15,93 @@ const catalog = ["openai", "anthropic"].map(provider => ({ provider, configurati
 const ready = { organization_id: "org", account_id: "a", account_revision: 3, snapshot_hash: view.assessment.snapshot_hash,
   configured: true, can_start: true, pending_run_id: null, next_start_at: null };
 const run = { id: "run-1", organization_id: "org", account_id: "a", actor_id: "actor", account_revision: 3,
+  revision: 4,
   snapshot_hash: view.assessment.snapshot_hash, snapshot: view, policy_version: "comparison-1", status: "completed",
   started_at: "2026-10-18T00:00:00Z", finished_at: "2026-10-18T00:00:01Z", results: [
     { id: "result-1", provider: "openai", requested_mode: "mock", mode: "mock", configuration_revision: 7,
       model: "requested-alias", expected_response_model: "canonical", response_model: null, status: "unavailable",
       validation: "not_run", factual_confidence: "unverified", analysis: null },
   ] };
+const recoveryReady = { organization_id: "org", account_id: "a", account_revision: 3,
+  snapshot_hash: view.assessment.snapshot_hash, run_id: run.id, run_revision: run.revision,
+  can_recover: true, reason: "eligible", recover_after: "2026-10-18T00:05:00Z" };
+const interruptedRun = { ...run, status: "interrupted", revision: 5,
+  recovery: { actor_id: "recovering-actor", recovered_at: "2026-10-18T00:06:00Z", previous_revision: 4, reason: "worker_deadline_elapsed" } };
+
+async function inspectPending(app, eligibility = recoveryReady) {
+  const pending = app.inspect().props.onClick();
+  app.requests.shift().resolve({ ...run, status: "pending" }); await flush();
+  const read = app.requests.shift(); assert.match(read.url, /recovery-readiness$/);
+  assert.equal(read.init.method, undefined); read.resolve(eligibility); await pending;
+}
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
+
+test("interrupted finalization is explicit, revision bound and duplicate guarded; history retains attribution", async () => {
+  const app = harness(); await mount(app, { ...ready, can_start: false, pending_run_id: run.id }, [{ ...run, status: "pending" }]);
+  await inspectPending(app);
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /already-authorized dispatch may still begin or finish/);
+  const action = app.button("Finalize interrupted comparison").props.onClick;
+  assert.equal(app.button("Finalize interrupted comparison").props.disabled, false);
+  const pending = action(); action();
+  const request = app.requests.shift(); assert.equal(app.requests.length, 0);
+  assert.match(request.url, /runs\/run-1\/recover$/);
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", expected_revision: 4,
+    expected_account_revision: 3, expected_snapshot_hash: view.assessment.snapshot_hash });
+  request.resolve(interruptedRun); await flush(); assert.ok(app.requests.every(item => !item.init.method));
+  await app.settle(ready, [interruptedRun]); await pending;
+  const inspection = app.inspect().props.onClick(); app.requests.shift().resolve(interruptedRun); await inspection;
+  assert.match(renderToStaticMarkup(app.render()), /recovering-actor/);
+  assert.match(renderToStaticMarkup(app.render()), /2026-10-18T00:06:00Z/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("recovery rejects crossed readiness and role, active-worker or legacy state cannot finalize", async () => {
+  for (const change of [{ run_id: "other" }, { run_revision: 99 }, { account_id: "other" },
+    { organization_id: "other" }, { account_revision: 99 }, { snapshot_hash: "other" }]) {
+    const app = harness(); await mount(app, ready, [run]); await inspectPending(app, { ...recoveryReady, ...change });
+    assert.equal(app.button("Finalize interrupted comparison").props.disabled, true);
+    await app.button("Finalize interrupted comparison").props.onClick(); assert.equal(app.requests.length, 0); app.unmount();
+  }
+  for (const [role, reason] of [["viewer", "eligible"], ["admin", "worker_active"], ["seller", "legacy_worker"]]) {
+    const app = harness(role); await mount(app, ready, [run]);
+    await inspectPending(app, { ...recoveryReady, reason, can_recover: reason === "eligible" });
+    assert.equal(app.button("Finalize interrupted comparison").props.disabled, true);
+    await app.button("Finalize interrupted comparison").props.onClick(); assert.equal(app.requests.length, 0); app.unmount();
+  }
+});
+
+test("uncertain recovery only refreshes; failed refresh keeps all mutations blocked", async () => {
+  const app = harness(); await mount(app, ready, [run]); await inspectPending(app);
+  const pending = app.button("Finalize interrupted comparison").props.onClick(); app.requests.shift().reject(new Error("lost"));
+  await flush(); const reads = app.requests.splice(0); assert.ok(reads.every(item => !item.init.method));
+  reads[0].reject(new Error("offline")); reads[1].resolve(catalog); reads[2].resolve([interruptedRun]); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /Recovery response could not be confirmed and may have persisted/);
+  assert.equal(app.button("Compare selected providers").props.disabled, true);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("recovery lock survives navigation and aborted completion triggers reads only", async () => {
+  const lock = new Set(), first = harness("admin", lock); await mount(first, ready, [run]); await inspectPending(first);
+  const pending = first.button("Finalize interrupted comparison").props.onClick(), request = first.requests.shift(); first.unmount();
+  assert.equal(request.init.signal.aborted, true);
+  const next = harness("admin", lock); await mount(next, ready, [run]); await inspectPending(next);
+  await next.button("Finalize interrupted comparison").props.onClick(); assert.equal(next.requests.length, 0);
+  request.resolve(interruptedRun); await pending;
+  assert.deepEqual(next.events, ["vitaai-comparison-changed"]); assert.equal(lock.size, 0);
+  assert.ok(next.requests.every(item => !item.init.method)); await next.settle(ready, [interruptedRun]); next.unmount();
+});
+
+test("late recovery readiness cannot restore eligibility after refresh or another inspection", async () => {
+  const app = harness(); await mount(app, ready, [run]);
+  const pending = app.inspect().props.onClick(); app.requests.shift().resolve({ ...run, status: "pending" }); await flush();
+  const obsolete = app.requests.shift();
+  const current = app.inspect().props.onClick(); app.requests.shift().resolve(interruptedRun); await current;
+  obsolete.resolve(recoveryReady); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /recovering-actor/);
+  assert.equal(app.button("Finalize interrupted comparison"), undefined);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
 function load(relative, mocks) {
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const output = ts.transpileModule(readFileSync(filename, "utf8"), {

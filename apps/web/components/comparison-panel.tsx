@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountView } from "@/lib/api";
 import { checkComparisonRun, comparisonPending, discoverComparisonProvider, readComparisons, readComparisonRun,
-  startComparison, type CatalogEntry, type ComparisonReadiness, type ComparisonRun, type DiscoveryResult } from "@/lib/comparison";
+  readComparisonRecovery, recoverComparison, startComparison, type CatalogEntry, type ComparisonReadiness,
+  type ComparisonRecoveryReadiness, type ComparisonRun, type DiscoveryResult } from "@/lib/comparison";
 import { useSession } from "./session-gate";
 
 export function ComparisonPanel({ view }: { view: AccountView }) {
@@ -19,6 +20,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [runs, setRuns] = useState<ComparisonRun[]>([]);
   const [selected, setSelected] = useState<ComparisonRun | null>(null);
+  const [recovery, setRecovery] = useState<ComparisonRecoveryReadiness | null>(null);
   const [choices, setChoices] = useState<Record<string, boolean>>({});
   const [live, setLive] = useState<Record<string, boolean>>({});
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
@@ -34,7 +36,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted) return;
     const current = ++sequence.current;
-    setReading(true); setReady(null); setCatalog([]); setRuns([]); setSelected(null); setDiscovery(null);
+    setReading(true); setReady(null); setCatalog([]); setRuns([]); setSelected(null); setRecovery(null); setDiscovery(null);
     setChoices({}); setLive({}); setError(null);
     try {
       const value = await readComparisons(view, signal);
@@ -65,7 +67,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
       || (entry ? live[entry.provider] && !entry.live_configured
         : providers.some(choice => choice.mode === "live" && !catalog.find(item => item.provider === choice.provider)?.live_configured))) return;
     locked.current = true; comparisonPending.add(scope); ++sequence.current;
-    setBusy(true); setReady(null); setSelected(null); setDiscovery(null); setError(null); setNotice(null);
+    setBusy(true); setReady(null); setSelected(null); setRecovery(null); setDiscovery(null); setError(null); setNotice(null);
     let found: DiscoveryResult | null = null;
     try {
       if (entry) found = await discoverComparisonProvider(entry, live[entry.provider] ? "live" : "mock", signal);
@@ -95,11 +97,35 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
   async function inspect(id: string) {
     const signal = lifetime.current?.signal;
     if (!id || !signal || signal.aborted || locked.current || reading) return;
-    const current = ++sequence.current; setSelected(null); setError(null);
+    const current = ++sequence.current; setSelected(null); setRecovery(null); setError(null);
     try {
       const run = await readComparisonRun(view, id, signal);
-      if (!signal.aborted && current === sequence.current) setSelected(run);
+      if (signal.aborted || current !== sequence.current) return;
+      setSelected(run);
+      if (run.status === "pending") {
+        const value = await readComparisonRecovery(view, run, signal);
+        if (!signal.aborted && current === sequence.current) setRecovery(value);
+      }
     } catch { if (!signal.aborted && current === sequence.current) setError("Saved comparison unavailable for this account."); }
+  }
+
+  async function finalizeInterrupted() {
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted || locked.current || comparisonPending.has(scope) || reading || !ready
+      || role === "viewer" || !selected || selected.status !== "pending" || !recovery?.can_recover
+      || recovery.run_id !== selected.id || recovery.run_revision !== selected.revision) return;
+    locked.current = true; comparisonPending.add(scope); ++sequence.current;
+    setBusy(true); setReady(null); setRecovery(null); setError(null); setNotice(null);
+    try {
+      const saved = await recoverComparison(view, selected, recovery, signal);
+      if (!signal.aborted) setNotice(`Run ${saved.id} finalized as interrupted. No inference or retry was requested. Inspect saved records.`);
+    } catch {
+      if (!signal.aborted) setNotice("Recovery response could not be confirmed and may have persisted. Refresh saved records before another explicit action; recovery is never retried automatically.");
+    } finally {
+      locked.current = false; comparisonPending.delete(scope);
+      if (!signal.aborted) { setBusy(false); await refresh(); }
+      else window.dispatchEvent(new Event("vitaai-comparison-changed"));
+    }
   }
 
   const disabled = busy || reading || comparisonPending.has(scope);
@@ -108,7 +134,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     <p>Compare independent advisory results against one retained deterministic snapshot. Facts, primary analysis, ranks and workflow authority stay unchanged.</p>
     <p role="status">{reading ? "Loading comparison records..." : ready?.configured ? "Comparison configured; provider success and live authorization remain unverified." : "Comparison unavailable or unconfigured."}</p>
     <p>Current revision {view.account.revision}; snapshot {view.assessment.snapshot_hash}.</p>
-    {ready?.pending_run_id && <p>Pending run {ready.pending_run_id} blocks new starts, including after worker loss. No recovery or retry operation is available.</p>}
+    {ready?.pending_run_id && <p>Pending run {ready.pending_run_id} blocks new starts, including after worker loss. Inspect that run to check explicit finalization eligibility; reading never retries it.</p>}
     {ready?.next_start_at && <p>60-second account cooldown ends {ready.next_start_at}. Refresh records to check eligibility.</p>}
     {role === "viewer" && <p>Read only. Your current role cannot compare or discover providers.</p>}
     <p>Choose up to four providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Models and credentials are managed on the server.</p>
@@ -138,6 +164,14 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
       <label>Older comparison run ID<input value={lookup} onChange={event => setLookup(event.target.value)} /></label>
       <button disabled={disabled || !lookup.trim()} onClick={() => inspect(lookup.trim())}>Inspect saved comparison ID</button>
       {selected && <ComparisonRecord run={selected} view={view} />}
+      {selected?.status === "pending" && <section aria-label="Interrupted comparison recovery"><h3>Interrupted comparison recovery</h3>
+        <p>Finalization preserves the original snapshot and completed results, and marks unresolved results interrupted. It never requests inference or retries. An already-authorized dispatch may still begin or finish; finalization does not prove provider cancellation.</p>
+        <p>{recovery ? `Recovery: ${recovery.reason}. Run revision ${recovery.run_revision}.` : "Recovery readiness unavailable. Inspect this run again before finalizing."}</p>
+        {recovery?.recover_after && <p>Worker deadline {recovery.recover_after}. Inspect again after this time to check current eligibility.</p>}
+        {recovery?.reason === "legacy_worker" && <p>This older run has no worker fencing protocol and requires operator investigation.</p>}
+        <button disabled={disabled || role === "viewer" || !ready || !recovery?.can_recover}
+          onClick={() => finalizeInterrupted()}>Finalize interrupted comparison</button>
+      </section>}
     </section>
   </details>;
 }
@@ -151,6 +185,8 @@ function ComparisonRecord({ run, view }: { run: ComparisonRun; view: AccountView
     <p>Started {run.started_at}; finished {run.finished_at || "Pending"}. Completed means processing finished; inspect every independent result.</p>
     {run.status === "pending" && <p>Pending is unresolved and blocks new starts. Viewing cannot recover or retry this run.</p>}
     {run.status === "discarded" && <p>Context or authority changed. Unpublished output was discarded.</p>}
+    {run.status === "interrupted" && <p>Explicitly finalized after the worker deadline. Completed results remain historical; unresolved results do not establish a provider outcome.</p>}
+    {run.recovery && <p>Finalized by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous run revision {run.recovery.previous_revision}; reason {run.recovery.reason}.</p>}
     <h4>Retained deterministic baseline</h4>
     <p>{run.snapshot.account.name} · assessment as of {baseline.as_of} · health {baseline.health} · risk {baseline.risk} · opportunity {baseline.opportunity} · confidence {baseline.confidence}%.</p>
     <ul>{baseline.caveats.map((text, index) => <li key={index}>{text}</li>)}</ul>
