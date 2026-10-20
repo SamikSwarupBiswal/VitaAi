@@ -54,6 +54,29 @@ class ResearchSource(ResearchContract):
     factual_confidence: Literal["unverified"] = "unverified"
 
 
+class ResearchRecovery(ResearchContract):
+    actor_id: str
+    recovered_at: AwareDatetime
+    previous_revision: int
+    reason: Literal["worker_deadline_elapsed"] = "worker_deadline_elapsed"
+
+
+class ResearchRecoveryRequest(ResearchContract):
+    expected_revision: int = Field(ge=1)
+    expected_account_revision: int = Field(ge=1)
+
+
+class ResearchRecoveryReadiness(ResearchContract):
+    organization_id: str
+    account_id: UUID
+    account_revision: int
+    run_id: UUID
+    run_revision: int
+    can_recover: bool
+    reason: Literal["eligible", "role_denied", "terminal", "legacy_worker", "worker_active"]
+    recover_after: AwareDatetime | None
+
+
 class ResearchRun(ResearchContract):
     id: UUID
     organization_id: str
@@ -63,7 +86,10 @@ class ResearchRun(ResearchContract):
     provider: Literal["tavily"] = "tavily"
     requested_mode: Literal["mock", "live"]
     mode: Literal["disabled", "mock", "live", "fallback"]
-    status: Literal["pending", "succeeded", "unavailable", "discarded"]
+    status: Literal["pending", "succeeded", "unavailable", "discarded", "interrupted"]
+    revision: int = Field(default=1, ge=1)
+    worker_deadline_at: AwareDatetime | None = None
+    recovery: ResearchRecovery | None = None
     target: ResearchTarget
     started_at: AwareDatetime
     finished_at: AwareDatetime | None = None
@@ -127,11 +153,13 @@ class Research:
         return ResearchStatus(enabled=allowed and self.settings.research_enabled,
             live_status="configured_unverified" if allowed and self.configured else "unconfigured")
 
-    def search(self, target: ResearchTarget) -> list[ResearchSource]:
+    def search(self, target: ResearchTarget, *, before_request=None) -> list[ResearchSource]:
         if not self.configured:
             raise ResearchFailure("research_unconfigured")
         try:
             # Fixed endpoint, no redirects/retries or subsequent fetch of returned URLs.
+            if before_request:
+                before_request()
             with (httpx.Client(timeout=15, follow_redirects=False, transport=self.transport,
                     headers={"Authorization": "Bearer " + self.settings.research_api_key.get_secret_value()}) as client,
                 client.stream("POST", "https://api.tavily.com/search", json={

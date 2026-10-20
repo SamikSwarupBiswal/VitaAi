@@ -27,6 +27,9 @@ from .research import (
     Research,
     ResearchFailure,
     ResearchReadiness,
+    ResearchRecovery,
+    ResearchRecoveryReadiness,
+    ResearchRecoveryRequest,
     ResearchRequest,
     ResearchRun,
     ResearchStatus,
@@ -41,10 +44,28 @@ research_runs = Table("research_runs", metadata,
     Column("status", String(20), nullable=False), Column("payload", JSON, nullable=False),
     ForeignKeyConstraint(["organization_id", "account_id"], ["accounts.organization_id", "accounts.id"]))
 
+WORKER_BUDGET = timedelta(minutes=2)
+
 
 class ResearchService:
-    def __init__(self, store, connector, token):
+    def __init__(self, store, connector, token, *, clock=None):
         self.engine, self.connector, self.token = store.engine, connector, token
+        self.clock = clock or (lambda: datetime.now(UTC))
+
+    @staticmethod
+    def load(connection, organization_id, run_id):
+        payload = connection.execute(select(research_runs.c.payload).where(
+            research_runs.c.organization_id == organization_id, research_runs.c.id == str(run_id))).scalar()
+        if payload is None:
+            raise PolicyDenied("record_not_found", 404)
+        return ResearchRun.model_validate(payload)
+
+    def worker_check(self, connection, run):
+        saved = self.load(connection, run.organization_id, run.id)
+        if saved.status != "pending" or saved.revision != run.revision:
+            raise PolicyDenied("research_worker_fenced", 409)
+        if run.worker_deadline_at is None or self.clock() >= run.worker_deadline_at:
+            raise PolicyDenied("research_worker_expired", 409)
 
     @contextmanager
     def transaction(self, *, authenticate=True):
@@ -85,11 +106,7 @@ class ResearchService:
 
     def get(self, run_id):
         with self.transaction() as (connection, actor):
-            payload = connection.execute(select(research_runs.c.payload).where(
-                research_runs.c.organization_id == actor.organization_id, research_runs.c.id == str(run_id))).scalar()
-            if payload is None:
-                raise PolicyDenied("record_not_found", 404)
-            run = ResearchRun.model_validate(payload)
+            run = self.load(connection, actor.organization_id, run_id)
             self.account(connection, actor, run.account_id)
             return run
 
@@ -116,7 +133,7 @@ class ResearchService:
                 *scope, research_runs.c.status == "pending").limit(1)).first()
             latest = connection.execute(select(research_runs.c.started_at).where(*scope)
                 .order_by(research_runs.c.started_at.desc()).limit(1)).scalar()
-            now = datetime.now(UTC)
+            now = self.clock()
             if pending:
                 raise PolicyDenied("research_in_progress", 409)
             if latest is not None and int(now.timestamp()) - latest < 60:
@@ -126,23 +143,32 @@ class ResearchService:
                 mode = "fallback"
             run = ResearchRun(id=uuid4(), organization_id=actor.organization_id, account_id=account_id,
                 account_revision=account.revision, actor_id=actor.id, requested_mode=body.mode,
-                mode=mode, status="pending", target=target, started_at=now)
+                mode=mode, status="pending", target=target, started_at=now, worker_deadline_at=now + WORKER_BUDGET)
             connection.execute(research_runs.insert().values(id=str(run.id), organization_id=actor.organization_id,
                 account_id=str(account_id), started_at=int(now.timestamp()), status="pending",
                 payload=run.model_dump(mode="json")))
-        # Pending intent is durable before the sole network call. Reads never dispatch.
+        # The sole search reservation is durable. A reserved request may still begin/finish after recovery.
         sources, error = [], None
-        if mode == "live":
-            try:
-                sources = self.connector.search(target)
-            except ResearchFailure as failure:
-                mode, error = "fallback", str(failure)
-        elif mode == "fallback":
-            error = "research_unconfigured"
-        elif mode == "disabled":
-            error = "research_disabled"
         try:
+            def before_request():
+                with self.transaction() as (connection, current):
+                    self.worker_check(connection, run)
+                    if current.id != actor.id or current.organization_id != actor.organization_id or current.role == "viewer":
+                        raise PolicyDenied("research_authority_changed", 403)
+                    self.account(connection, current, account_id, account.revision)
+
+            before_request()
+            if mode == "live":
+                try:
+                    sources = self.connector.search(target, before_request=before_request)
+                except ResearchFailure as failure:
+                    mode, error = "fallback", str(failure)
+            elif mode == "fallback":
+                error = "research_unconfigured"
+            elif mode == "disabled":
+                error = "research_disabled"
             with self.transaction() as (connection, current):
+                self.worker_check(connection, run)
                 if current.id != actor.id or current.organization_id != actor.organization_id or current.role == "viewer":
                     raise PolicyDenied("research_authority_changed", 403)
                 self.account(connection, current, account_id, account.revision)
@@ -152,13 +178,42 @@ class ResearchService:
                 run.expires_at = run.finished_at + timedelta(minutes=15)
                 self.finish(connection, run)
                 return run
-        except PolicyDenied:
+        except PolicyDenied as failure:
             # Persist only this existing run's discard, never text after authority loss.
-            run.status, run.sources, run.error_code = "discarded", [], "research_context_changed"
-            run.finished_at = datetime.now(UTC)
             with self.transaction(authenticate=False) as (connection, _):
-                self.finish(connection, run)
+                saved = self.load(connection, run.organization_id, run.id)
+                if saved.status == "pending" and saved.revision == run.revision and failure.code != "research_worker_expired":
+                    saved.status, saved.sources, saved.error_code = "discarded", [], "research_context_changed"
+                    saved.finished_at = self.clock()
+                    self.finish(connection, saved)
             raise
+
+    def recovery_readiness(self, run_id):
+        with self.transaction() as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            account = self.account(connection, actor, run.account_id)
+            reason = ("role_denied" if actor.role == "viewer" else "terminal" if run.status != "pending"
+                else "legacy_worker" if run.worker_deadline_at is None
+                else "worker_active" if self.clock() < run.worker_deadline_at else "eligible")
+            return ResearchRecoveryReadiness(organization_id=actor.organization_id, account_id=run.account_id,
+                account_revision=account.revision, run_id=run.id, run_revision=run.revision,
+                can_recover=reason == "eligible", reason=reason, recover_after=run.worker_deadline_at)
+
+    def recover(self, run_id, body):
+        with self.transaction() as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            self.account(connection, actor, run.account_id, body.expected_account_revision)
+            if actor.role == "viewer":
+                raise PolicyDenied("research_writer_required", 403)
+            if run.status != "pending" or run.revision != body.expected_revision:
+                raise PolicyDenied("research_recovery_state_changed", 409)
+            now = self.clock()
+            if run.worker_deadline_at is None or now < run.worker_deadline_at:
+                raise PolicyDenied("research_worker_not_recoverable", 409)
+            run.recovery = ResearchRecovery(actor_id=actor.id, recovered_at=now, previous_revision=run.revision)
+            run.status, run.error_code, run.finished_at = "interrupted", "research_interrupted", now
+            self.finish(connection, run)
+            return run
 
     def readiness(self, account_id):
         with self.transaction() as (connection, actor):
@@ -181,9 +236,13 @@ class ResearchService:
 
     @staticmethod
     def finish(connection, run):
-        connection.execute(update(research_runs).where(research_runs.c.id == str(run.id),
-            research_runs.c.organization_id == run.organization_id, research_runs.c.status == "pending")
-            .values(status=run.status, payload=run.model_dump(mode="json")))
+        result = connection.execute(update(research_runs).where(research_runs.c.id == str(run.id),
+            research_runs.c.organization_id == run.organization_id, research_runs.c.status == "pending",
+            research_runs.c.payload["revision"].as_integer() == run.revision)
+            .values(status=run.status, payload=run.model_copy(update={"revision": run.revision + 1}).model_dump(mode="json")))
+        if result.rowcount != 1:
+            raise PolicyDenied("research_already_finished", 409)
+        run.revision += 1
 
 
 def install_research_routes(app, store, identity, settings, transport=None):
@@ -215,6 +274,14 @@ def install_research_routes(app, store, identity, settings, transport=None):
     @router.get("/runs/{run_id}", response_model=ResearchRun)
     def get_run(run_id: UUID, actor: Current, operation: Service):
         return operation.get(run_id)
+
+    @router.get("/runs/{run_id}/recovery-readiness", response_model=ResearchRecoveryReadiness)
+    def recovery_readiness(run_id: UUID, actor: Current, operation: Service):
+        return operation.recovery_readiness(run_id)
+
+    @router.post("/runs/{run_id}/recover", response_model=ResearchRun)
+    def recover(run_id: UUID, body: ResearchRecoveryRequest, actor: Current, operation: Service):
+        return operation.recover(run_id, body)
 
     @router.get("/accounts/{account_id}/readiness", response_model=ResearchReadiness)
     def readiness(account_id: UUID, actor: Current, operation: Service):

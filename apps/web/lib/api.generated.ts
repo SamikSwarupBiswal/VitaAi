@@ -937,6 +937,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/runs/{run_id}/recovery-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recovery Readiness */
+        get: operations["recovery_readiness_api_integrations_research_runs__run_id__recovery_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/research/runs/{run_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover */
+        post: operations["recover_api_integrations_research_runs__run_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/research/accounts/{account_id}/readiness": {
         parameters: {
             query?: never;
@@ -3213,6 +3247,77 @@ export interface components {
             /** Next Start At */
             next_start_at: string | null;
         };
+        /** ResearchRecovery */
+        ResearchRecovery: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Recovered At
+             * Format: date-time
+             */
+            recovered_at: string;
+            /** Previous Revision */
+            previous_revision: number;
+            /**
+             * Reason
+             * @default worker_deadline_elapsed
+             * @constant
+             */
+            reason: "worker_deadline_elapsed";
+        };
+        /** ResearchRecoveryReadiness */
+        ResearchRecoveryReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Revision */
+            run_revision: number;
+            /** Can Recover */
+            can_recover: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "eligible" | "role_denied" | "terminal" | "legacy_worker" | "worker_active";
+            /** Recover After */
+            recover_after: string | null;
+        };
+        /** ResearchRecoveryRequest */
+        ResearchRecoveryRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+        };
         /** ResearchRequest */
         ResearchRequest: {
             /**
@@ -3274,7 +3379,15 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "succeeded" | "unavailable" | "discarded";
+            status: "pending" | "succeeded" | "unavailable" | "discarded" | "interrupted";
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /** Worker Deadline At */
+            worker_deadline_at?: string | null;
+            recovery?: components["schemas"]["ResearchRecovery"] | null;
             target: components["schemas"]["ResearchTarget"];
             /**
              * Started At
@@ -5578,6 +5691,72 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_readiness_api_integrations_research_runs__run_id__recovery_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRecoveryReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recover_api_integrations_research_runs__run_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchRecoveryRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
