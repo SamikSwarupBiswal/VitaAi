@@ -937,6 +937,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/runs/{run_id}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Context */
+        get: operations["context_api_integrations_research_runs__run_id__context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/research/runs/{run_id}/recovery-readiness": {
         parameters: {
             query?: never;
@@ -3209,6 +3226,61 @@ export interface components {
             action: components["schemas"]["ActionProposal"];
             communication: components["schemas"]["CommunicationResult"];
         };
+        /** ResearchContext */
+        ResearchContext: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            internal: components["schemas"]["AccountView"];
+            retained_run: components["schemas"]["ResearchRun"];
+            /**
+             * Evaluated At
+             * Format: date-time
+             */
+            evaluated_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "usable" | "disabled" | "mock" | "fallback" | "run_unavailable" | "account_changed" | "target_changed" | "invalid_window" | "expired" | "no_usable_sources";
+            /** Usable Sources */
+            usable_sources?: components["schemas"]["ResearchSource"][];
+            /** Exclusions */
+            exclusions?: components["schemas"]["ResearchExclusion"][];
+            review_question?: components["schemas"]["ResearchReviewQuestion"] | null;
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+            /**
+             * Caveat
+             * @default Research remains untrusted supporting context. Domain membership is operator-declared, not company identity or factual verification. No causal relationship, confidence uplift, score, recommendation, plan, approval or execution change is established.
+             */
+            caveat: string;
+        };
+        /** ResearchExclusion */
+        ResearchExclusion: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Source Index */
+            source_index: number;
+            /** Url */
+            url: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "unsafe_url" | "duplicate" | "unknown_publication" | "stale_publication" | "invalid_time";
+        };
         /** ResearchReadiness */
         ResearchReadiness: {
             /**
@@ -3334,6 +3406,21 @@ export interface components {
              * @enum {string}
              */
             mode: "mock" | "live";
+        };
+        /** ResearchReviewQuestion */
+        ResearchReviewQuestion: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Question */
+            question: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Source Urls */
+            source_urls: string[];
         };
         /** ResearchRun */
         ResearchRun: {
@@ -5699,6 +5786,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    context_api_integrations_research_runs__run_id__context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchContext"];
                 };
             };
             /** @description Validation Error */

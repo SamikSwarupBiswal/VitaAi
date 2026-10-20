@@ -19,7 +19,7 @@ from sqlalchemy import (
     update,
 )
 
-from .contracts import Account
+from .contracts import Account, AccountSource, AccountView
 from .governance import PolicyDenied
 from .identity import Actor, sessions, token_digest, users
 from .research import (
@@ -34,7 +34,9 @@ from .research import (
     ResearchRun,
     ResearchStatus,
 )
-from .storage import accounts
+from .research_context import ResearchContext, build_context
+from .scoring import assess
+from .storage import accounts, selected_evidence, selected_source
 
 metadata = MetaData()
 accounts.to_metadata(metadata)
@@ -117,6 +119,21 @@ class ResearchService:
                 select(research_runs.c.payload).where(research_runs.c.organization_id == actor.organization_id,
                     research_runs.c.account_id == str(account_id))
                 .order_by(research_runs.c.started_at.desc(), research_runs.c.id.desc()).limit(20)).scalars()]
+
+    def context(self, run_id):
+        with self.transaction() as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            account = self.account(connection, actor, run.account_id)
+            facts = selected_evidence(connection, actor.organization_id, account.id)
+            source = selected_source(connection, actor.organization_id, account.id)
+            now = self.clock()
+            view = AccountView(account=account, evidence=facts, assessment=assess(account, facts, now.date()),
+                renewal_days=(account.renewal_date - now.date()).days if account.renewal_date else None,
+                source=AccountSource.model_validate(source["selection"]) if source else None)
+            settings = self.connector.settings
+            target = settings.research_account_map.get(account.id) if (
+                actor.organization_id == settings.research_organization_id) else None
+            return build_context(view, run, target, enabled=self.connector.status(actor.organization_id).enabled, now=now)
 
     def start(self, account_id, body):
         settings = self.connector.settings
@@ -274,6 +291,10 @@ def install_research_routes(app, store, identity, settings, transport=None):
     @router.get("/runs/{run_id}", response_model=ResearchRun)
     def get_run(run_id: UUID, actor: Current, operation: Service):
         return operation.get(run_id)
+
+    @router.get("/runs/{run_id}/context", response_model=ResearchContext)
+    def context(run_id: UUID, actor: Current, operation: Service):
+        return operation.context(run_id)
 
     @router.get("/runs/{run_id}/recovery-readiness", response_model=ResearchRecoveryReadiness)
     def recovery_readiness(run_id: UUID, actor: Current, operation: Service):

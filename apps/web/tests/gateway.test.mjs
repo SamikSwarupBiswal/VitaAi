@@ -26,7 +26,7 @@ test("research allows bounded reads, explicit search/finalization; implicit HEAD
   });
   for (const [method, suffix] of [["GET", ""], ["GET", `/accounts/${id}/readiness`], ["GET", `/accounts/${id}/runs`],
     ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/search`],
-    ["GET", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover`]]) {
+    ["GET", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover`], ["GET", `/runs/${id}/context`]]) {
     const name = `integrations/research${suffix}`;
     const body = '{"expected_account_revision":3,"mode":"mock"}';
     const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
@@ -43,7 +43,8 @@ test("research allows bounded reads, explicit search/finalization; implicit HEAD
   for (const [method, suffix] of [["GET", `/accounts/${id}/search`], ["HEAD", `/accounts/${id}/search`],
     ["POST", `/accounts/${id}/runs`], ["POST", `/accounts/${id}/readiness`], ["GET", "/accounts/invalid/runs"],
     ["GET", `/runs/${id}/extra`], ["POST", ""], ["GET", `/runs/${id}/recover`], ["HEAD", `/runs/${id}/recover`],
-    ["POST", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover/extra`], ["POST", "/runs/invalid/recover"]]) {
+    ["POST", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover/extra`], ["POST", "/runs/invalid/recover"],
+    ["POST", `/runs/${id}/context`], ["GET", `/runs/${id}/context/extra`], ["GET", "/runs/invalid/context"]]) {
     const name = `integrations/research${suffix}`;
     const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },
