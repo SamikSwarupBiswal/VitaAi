@@ -239,6 +239,33 @@ test("failed context GET stays explicit; unmounted requests cannot publish priva
   assert.doesNotMatch(renderToStaticMarkup(app.render()), /Internal account observations/); assert.equal(app.requests.length, 0);
 });
 
+test("advisory brief is escaped and cited; expiry removes public verification questions", async t => {
+  const instant = Date.now(); const clock = t.mock.method(Date, "now", () => instant);
+  const value = contextFixture(instant);
+  value.brief = { policy_version: "research-brief-1", basis: "supporting_context",
+    internal_summary: "<script>Internal summary</script>", internal_evidence_ids: ["evidence-1"],
+    caveats: ["Internal review remains required."], verification_questions: [{ question: "Check public relevance to saved support observations.",
+      evidence_ids: ["evidence-1"], source_urls: ["https://example.test/news"] }] };
+  const app = harness(); await mount(app, ready, [value.retained_run]); await inspectSaved(app, value.retained_run);
+  const pending = app.button("Inspect current research context").props.onClick(); app.requests.shift().resolve(value); await pending;
+  let html = renderToStaticMarkup(app.render()); assert.match(html, /Advisory research brief/);
+  assert.match(html, /research-brief-1/); assert.match(html, /&lt;script&gt;Internal summary/);
+  assert.match(html, /Check public relevance to saved support/); assert.match(html, /Internal review remains required/);
+  assert.doesNotMatch(html, /<script>/);
+  clock.mock.mockImplementation(() => instant + 60000); app.tick(); html = renderToStaticMarkup(app.render());
+  assert.match(html, /Public context is no longer usable/); assert.doesNotMatch(html, /Check public relevance to saved support/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("briefs tolerate omitted optional verification questions", async () => {
+  const value = contextFixture(); value.brief = { policy_version: "research-brief-1", basis: "supporting_context",
+    internal_summary: "Retained internal summary", internal_evidence_ids: [], caveats: [] };
+  const app = harness(); await mount(app, ready, [value.retained_run]); await inspectSaved(app, value.retained_run);
+  const pending = app.button("Inspect current research context").props.onClick(); app.requests.shift().resolve(value); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /Retained internal summary/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
 const pendingRun = { ...run, status: "pending", revision: 1, account_revision: 1,
   worker_deadline_at: "2026-10-18T00:02:00Z", finished_at: null, expires_at: null };
 const recoveryReady = { organization_id: "org", account_id: "a", account_revision: 3,

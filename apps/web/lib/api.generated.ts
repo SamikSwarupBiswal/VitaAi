@@ -3226,6 +3226,34 @@ export interface components {
             action: components["schemas"]["ActionProposal"];
             communication: components["schemas"]["CommunicationResult"];
         };
+        /** ResearchBrief */
+        ResearchBrief: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy Version
+             * @default research-brief-1
+             * @constant
+             */
+            policy_version: "research-brief-1";
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "internal_only" | "supporting_context";
+            /** Internal Summary */
+            internal_summary: string;
+            /** Internal Evidence Ids */
+            internal_evidence_ids: string[];
+            /** Verification Questions */
+            verification_questions?: components["schemas"]["ResearchReviewQuestion"][];
+            /** Caveats */
+            caveats: string[];
+        };
         /** ResearchContext */
         ResearchContext: {
             /**
@@ -3251,6 +3279,7 @@ export interface components {
             /** Exclusions */
             exclusions?: components["schemas"]["ResearchExclusion"][];
             review_question?: components["schemas"]["ResearchReviewQuestion"] | null;
+            brief?: components["schemas"]["ResearchBrief"] | null;
             /**
              * Factual Confidence
              * @default unverified

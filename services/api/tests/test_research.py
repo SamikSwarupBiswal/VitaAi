@@ -372,6 +372,49 @@ class ResearchContextTests(unittest.TestCase):
         self.assertEqual(self.evaluate(run), self.evaluate(run))
         self.assertEqual(len(self.calls), 1)
 
+    def test_brief_is_deterministic_cited_and_does_not_interpret_untrusted_text(self):
+        run = ResearchRun.model_validate(self.search().json())
+        context = self.evaluate(run)
+        brief = context.brief
+        self.assertEqual(brief, self.evaluate(run).brief)
+        self.assertEqual(brief.basis, "supporting_context")
+        self.assertEqual(brief.policy_version, "research-brief-1")
+        self.assertNotIn("approve a write", brief.model_dump_json())
+        self.assertIn(f"risk {context.internal.assessment.risk}/100", brief.internal_summary)
+        self.assertIn(f"confidence is {context.internal.assessment.confidence}%", brief.internal_summary)
+        self.assertEqual(set(brief.internal_evidence_ids), {item.id for item in context.internal.evidence})
+        self.assertEqual(len(brief.verification_questions), 4)
+        cited = set()
+        for question in brief.verification_questions:
+            self.assertEqual(question.source_urls, [ITEM["url"]])
+            self.assertTrue(set(question.evidence_ids) <= set(brief.internal_evidence_ids))
+            cited.update(question.evidence_ids)
+            self.assertIn("Confirm dates and contradictory evidence", question.question)
+        self.assertEqual(cited, set(brief.internal_evidence_ids))
+        shuffled = context.internal.model_copy(update={"evidence": list(reversed(context.internal.evidence))})
+        self.assertEqual(brief, self.evaluate(run, view=shuffled).brief)
+
+    def test_unusable_briefs_have_no_public_questions_and_keep_original_caveats(self):
+        run = ResearchRun.model_validate(self.search().json())
+        view = AccountView.model_validate(self.client.get(f"/api/accounts/{ACCOUNT}").json())
+        view.assessment.caveats = ["Contradictory internal evidence remains unresolved."]
+        for changes in [{"enabled": False}, {"target": None}, {"now": run.expires_at}]:
+            context = self.evaluate(run, view=view, **changes)
+            self.assertEqual(context.brief.basis, "internal_only")
+            self.assertEqual(context.brief.verification_questions, [])
+            self.assertIn(view.assessment.caveats[0], context.brief.caveats)
+            self.assertEqual(context.retained_run, run)
+        view.account.annual_value, view.account.renewal_date = None, None
+        view.assessment.requires_review = True
+        view.evidence = []
+        context = self.evaluate(run, view=view)
+        self.assertEqual(context.brief.basis, "supporting_context")
+        self.assertEqual(context.brief.internal_evidence_ids, [])
+        self.assertEqual(context.brief.verification_questions[0].evidence_ids, [])
+        self.assertTrue(any("Commercial account data is missing" in item for item in context.brief.caveats))
+        self.assertTrue(any("requires review" in item for item in context.brief.caveats))
+        self.assertTrue(context.internal.assessment.requires_review)
+
     def test_persisted_selected_source_excludes_old_sample_evidence_and_preserves_unknowns(self):
         before = AccountView.model_validate(self.client.get(f"/api/accounts/{ACCOUNT}").json())
         current = before.account.model_copy(update={"revision": 2, "synthetic": False,

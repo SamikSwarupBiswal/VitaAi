@@ -191,6 +191,17 @@ function ResearchContextRecord({ context, now }: { context: ResearchContextView;
   return <section aria-label="Research context"><h3>Research context</h3>
     <p>Saved run {context.retained_run.id}; evaluated {context.evaluated_at}. Server eligibility: {context.status}.</p>
     <p>{context.caveat}</p>
+    {context.brief && <section aria-label="Advisory research brief"><h4>Advisory research brief</h4>
+      <p>Deterministic policy {context.brief.policy_version}; evaluated basis {context.brief.basis}.
+        {context.brief.basis === "supporting_context" && !usable && " Public context is no longer usable; the internal summary remains dated."}</p>
+      <p>{context.brief.internal_summary}</p>
+      <p>Internal evidence: {context.brief.internal_evidence_ids.join(", ") || "None"}.</p>
+      <ul>{context.brief.caveats.map((caveat, index) => <li key={index}>{caveat}</li>)}</ul>
+      {usable && <ol>{context.brief.verification_questions?.map((question, index) => <li key={index}>
+        <p>{question.question}</p><p>Internal evidence: {question.evidence_ids.join(", ") || "None"}.
+          Public sources: {question.source_urls.join(", ")}.</p>
+      </li>)}</ol>}
+    </section>}
     <h4>Internal account observations</h4>
     <p>Account revision {view.account.revision}; snapshot {view.assessment.snapshot_hash}; assessment date {view.assessment.as_of}.
       {view.source ? ` Selected source ${view.source.id} (${view.source.kind}).` : " Synthetic sample source."}</p>
