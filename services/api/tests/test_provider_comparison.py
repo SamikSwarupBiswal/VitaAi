@@ -521,3 +521,139 @@ class ComparisonApiTests(unittest.TestCase):
         original = self.client.get(PREFIX + "/runs/" + result.json()["id"]).json()
         self.assertEqual(original, result.json())
         self.assertEqual(self.calls, [])
+
+
+class FoundryComparisonTests(unittest.TestCase):
+    login = CatalogApiTests.login
+    tearDown = CatalogApiTests.tearDown
+    body = ComparisonApiTests.body
+    compare = ComparisonApiTests.compare
+    valid_response = ComparisonApiTests.valid_response
+
+    def setUp(self):
+        ComparisonApiTests.setUp(self)
+        self.settings.comparison_providers["foundry"] = ComparisonProviderConfig(enabled=True,
+            live_enabled=True, api_key="synthetic-foundry", model="deployment-test",
+            response_model="canonical-test", resource_name="test-resource")
+        self.inference = self.response
+
+    def response(self, request):
+        if request.url.host == "api.openai.com":
+            return ComparisonApiTests.valid_response(self, request)
+        self.assertEqual(str(request.url), "https://test-resource.services.ai.azure.com/openai/v1/chat/completions")
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(request.headers["api-key"], "synthetic-foundry")
+        self.assertNotIn("authorization", request.headers)
+        body = json.loads(request.content)
+        self.assertEqual(body["model"], "deployment-test")
+        self.assertEqual(body["max_completion_tokens"], 1600)
+        self.assertNotIn("max_tokens", body)
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+        context = body["messages"][-1]["content"]
+        self.contexts.append(context)
+        evidence = json.loads(context)["evidence"][0]["id"]
+        output = json.dumps({"findings": [{"text": "Advisory finding", "evidence_ids": [evidence]}],
+            "next_steps": [{"text": "Review only", "evidence_ids": [evidence]}], "caveats": ["Unverified"]})
+        return httpx.Response(200, json={"id": "foundry-request", "model": "canonical-test",
+            "choices": [{"finish_reason": "stop", "message": {"content": output}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 12}})
+
+    @staticmethod
+    def choices(*names, mode="live"):
+        return [{"provider": name, "mode": mode, "expected_configuration_revision": 1} for name in names]
+
+    def expire_cooldown(self):
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(comparisons).values(started_at=1))
+
+    def test_same_snapshot_bound_deployment_and_retained_provenance(self):
+        before = self.client.get("/api/portfolio").json()
+        response = self.compare(providers=self.choices("foundry", "openai"))
+        self.assertEqual(response.status_code, 200, response.text)
+        run = response.json()
+        row = run["results"][0]
+        self.assertEqual((row["mode"], row["status"], row["model"], row["expected_response_model"], row["response_model"]),
+                         ("live", "succeeded", "deployment-test", "canonical-test", "canonical-test"))
+        self.assertEqual((row["input_tokens"], row["output_tokens"], row["request_id"]), (20, 12, "foundry-request"))
+        self.assertEqual(row["factual_confidence"], "unverified")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.contexts), 2)
+        self.assertEqual(self.contexts[0], self.contexts[1])
+        self.assertEqual(run["snapshot"]["assessment"], self.view["assessment"])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        self.assertEqual(self.client.get("/api/missions").json(), [])
+        self.assertNotIn("synthetic-foundry", response.text)
+        with TestClient(create_app(self.settings)) as restarted:
+            restarted.cookies.update(self.client.cookies)
+            self.assertEqual(restarted.get(PREFIX + "/runs/" + run["id"]).json(), run)
+
+    def test_failures_remain_independent_safe_and_never_retry(self):
+        for fault in ["model", "length", "evidence", "refusal", "status", "oversized", "timeout"]:
+            with self.subTest(fault=fault):
+                def fail(request, fault=fault):
+                    if request.url.host == "api.openai.com":
+                        return self.response(request)
+                    if fault == "timeout":
+                        raise httpx.ReadTimeout("synthetic-foundry")
+                    if fault == "status":
+                        return httpx.Response(400, json={"error": "synthetic-foundry"})
+                    if fault == "oversized":
+                        return httpx.Response(200, content=b"x" * 131073)
+                    payload = self.response(request).json()
+                    if fault == "model":
+                        payload["model"] = "unrelated-model"
+                    elif fault == "length":
+                        payload["choices"][0]["finish_reason"] = "length"
+                    elif fault == "evidence":
+                        output = json.loads(payload["choices"][0]["message"]["content"])
+                        output["findings"][0]["evidence_ids"] = [str(uuid4())]
+                        payload["choices"][0]["message"]["content"] = json.dumps(output)
+                    elif fault == "refusal":
+                        payload["choices"][0]["message"] = {"content": None, "refusal": "Untrusted refusal"}
+                    return httpx.Response(200, json=payload)
+                self.inference = fail
+                before = len(self.calls)
+                response = self.compare(providers=self.choices("foundry", "openai"))
+                self.assertEqual(response.status_code, 200, response.text)
+                rows = response.json()["results"]
+                self.assertEqual((rows[0]["mode"], rows[0]["analysis"], rows[1]["status"]),
+                                 ("fallback", None, "succeeded"))
+                self.assertIn(rows[0]["status"], ["failed", "invalid_output"])
+                if fault in ["model", "length", "evidence", "refusal"]:
+                    self.assertEqual((rows[0]["request_id"], rows[0]["input_tokens"]), ("foundry-request", 20))
+                self.assertEqual(len(self.calls) - before, 2)
+                self.assertNotIn("synthetic-foundry", response.text)
+                self.expire_cooldown()
+
+    def test_mock_disabled_and_incomplete_config_never_call(self):
+        config = self.settings.comparison_providers["foundry"]
+        for mode, field, value, expected in [("mock", "enabled", True, "mock"),
+                ("live", "enabled", False, "disabled"), ("live", "resource_name", "", "fallback"),
+                ("live", "live_enabled", False, "fallback")]:
+            original = getattr(config, field)
+            setattr(config, field, value)
+            response = self.compare(providers=self.choices("foundry", mode=mode))
+            self.assertEqual(response.status_code, 200)
+            row = response.json()["results"][0]
+            self.assertEqual((row["mode"], row["analysis"]), (expected, None))
+            setattr(config, field, original)
+            self.expire_cooldown()
+        self.assertEqual(self.calls, [])
+
+    def test_resource_rebinding_discards_unpublished_output_and_stops_next_call(self):
+        self.callback = lambda: setattr(self.settings.comparison_providers["foundry"], "resource_name", "new-resource")
+        self.assertEqual(self.compare(providers=self.choices("foundry", "openai")).status_code, 409)
+        saved = self.client.get(self.path + "/runs").json()[0]
+        self.assertEqual(saved["status"], "discarded")
+        self.assertTrue(all(row["analysis"] is None and row["status"] == "discarded" for row in saved["results"]))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_session_loss_discards_unpublished_foundry_output(self):
+        self.callback = lambda: self.identity.logout(self.client.cookies.get("vitaai_session"))
+        self.assertEqual(self.compare(providers=self.choices("foundry", "openai")).status_code, 401)
+        self.callback = None
+        self.login()
+        saved = self.client.get(self.path + "/runs").json()[0]
+        self.assertEqual(saved["status"], "discarded")
+        self.assertTrue(all(row["analysis"] is None for row in saved["results"]))
+        self.assertEqual(len(self.calls), 1)

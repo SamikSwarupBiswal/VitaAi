@@ -154,7 +154,7 @@ def analyze(catalog, provider, config, view, result):
             content = blocks[0]["text"]
         else:
             body["messages"].insert(0, {"role": "system", "content": system})
-            body["max_completion_tokens" if provider == "openai" else "max_tokens"] = 1600
+            body["max_completion_tokens" if provider in {"openai", "foundry"} else "max_tokens"] = 1600
             body["response_format"] = {"type": "json_object"}
             payload = catalog.request(provider, config, "POST", "/chat/completions", body)
             metadata_from_response(payload, result, provider)
@@ -260,9 +260,8 @@ class ComparisonService:
                     result.status, result.error_code = "unavailable", "provider_disabled"
                 elif result.mode == "mock":
                     result.status = "unavailable"  # No fabricated advisory inference; baseline is saved separately.
-                elif result.provider == "foundry":
-                    result.mode, result.status, result.error_code = "fallback", "unavailable", "provider_operation_not_supported"
-                elif not (config.live_enabled and config.api_key.get_secret_value() and config.model):
+                elif not (config.live_enabled and config.api_key.get_secret_value() and config.model
+                          and (result.provider != "foundry" or config.resource_name)):
                     result.mode, result.status, result.error_code = "fallback", "unavailable", "provider_unconfigured"
                 else:
                     result = analyze(self.catalog, result.provider, config, run.snapshot.model_copy(deep=True), result)

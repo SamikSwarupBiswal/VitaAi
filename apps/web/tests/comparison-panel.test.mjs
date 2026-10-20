@@ -36,7 +36,7 @@ function walk(node, predicate) {
   if (!node || typeof node !== "object") return [];
   return [...(predicate(node) ? [node] : []), ...walk(node.props?.children, predicate)];
 }
-function harness(role = "admin", sharedPending = new Set()) {
+function harness(role = "admin", sharedPending = new Set(), available = catalog) {
   const slots = [], requests = [], listeners = new Map(), timers = [], events = [];
   let cursor = 0, effects = [], cleanups = [];
   globalThis.window = { setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {},
@@ -65,7 +65,7 @@ function harness(role = "admin", sharedPending = new Set()) {
   const button = text => walk(render(), n => n.type === "button" && [n.props.children].flat(Infinity).join("") === text)[0];
   const inspect = () => walk(render(), n => n.type === "button" && Array.isArray(n.props.children) && n.props.children[0] === "Inspect ")[0];
   async function settle(status = ready, history = []) {
-    requests.shift().resolve(status); requests.shift().resolve(catalog); requests.shift().resolve(history); await flush();
+    requests.shift().resolve(status); requests.shift().resolve(available); requests.shift().resolve(history); await flush();
   }
   return { requests, helper, render, button, inspect, settle, events, key: () => key,
     input: index => walk(render(), n => n.type === "input")[index], unmount() { cleanups.forEach(fn => fn?.()); },
@@ -190,4 +190,22 @@ test("crossed discovery configuration or requested mode is rejected without repe
   await flush(); assert.ok(app.requests.every(request => !request.init.method)); await app.settle(); await pending;
   assert.match(renderToStaticMarkup(app.render()), /could not be confirmed/);
   assert.doesNotMatch(renderToStaticMarkup(app.render()), /Crossed private model/); app.unmount();
+});
+
+test("five-provider catalog keeps four-choice bound and explicit Foundry deployment semantics", async () => {
+  const available = ["foundry", "openai", "anthropic", "nebius", "nvidia"].map(provider => ({ ...catalog[0], provider }));
+  const app = harness("admin", new Set(), available); await mount(app);
+  assert.match(renderToStaticMarkup(app.render()), /Foundry requests use the configured deployment name/);
+  assert.match(renderToStaticMarkup(app.render()), /up to four providers/);
+  for (const index of [0, 2, 4, 6]) app.input(index).props.onChange({ target: { checked: true } });
+  assert.equal(app.input(8).props.disabled, true);
+  app.input(8).props.onChange({ target: { checked: true } });
+  assert.equal(app.input(8).props.checked, false);
+  assert.equal(app.input(6).props.disabled, false); // selected entries can be removed
+  const pending = app.button("Compare selected providers").props.onClick(), request = app.requests.shift();
+  const choices = JSON.parse(request.init.body).providers;
+  assert.deepEqual(choices.map(item => item.provider), ["foundry", "openai", "anthropic", "nebius"]);
+  assert.ok(choices.every(item => item.mode === "mock"));
+  request.reject(new Error("lost")); await flush(); await app.settle(); await pending;
+  assert.equal(app.requests.length, 0); app.unmount();
 });

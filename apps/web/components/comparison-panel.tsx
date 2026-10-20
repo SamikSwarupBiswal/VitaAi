@@ -61,7 +61,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
       provider: item.provider, mode: live[item.provider] ? "live" as const : "mock" as const,
       expected_configuration_revision: item.configuration_revision }));
     if (!signal || signal.aborted || locked.current || comparisonPending.has(scope) || reading || !ready
-      || (entry ? role !== "admin" : role === "viewer" || !ready.can_start || !providers.length)
+      || (entry ? role !== "admin" : role === "viewer" || !ready.can_start || !providers.length || providers.length > 4)
       || (entry ? live[entry.provider] && !entry.live_configured
         : providers.some(choice => choice.mode === "live" && !catalog.find(item => item.provider === choice.provider)?.live_configured))) return;
     locked.current = true; comparisonPending.add(scope); ++sequence.current;
@@ -103,6 +103,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
   }
 
   const disabled = busy || reading || comparisonPending.has(scope);
+  const chosenCount = Object.values(choices).filter(Boolean).length;
   return <details className="pipeline-panel comparison-panel"><summary>Provider comparison · {view.account.name}</summary>
     <p>Compare independent advisory results against one retained deterministic snapshot. Facts, primary analysis, ranks and workflow authority stay unchanged.</p>
     <p role="status">{reading ? "Loading comparison records..." : ready?.configured ? "Comparison configured; provider success and live authorization remain unverified." : "Comparison unavailable or unconfigured."}</p>
@@ -110,11 +111,13 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     {ready?.pending_run_id && <p>Pending run {ready.pending_run_id} blocks new starts, including after worker loss. No recovery or retry operation is available.</p>}
     {ready?.next_start_at && <p>60-second account cooldown ends {ready.next_start_at}. Refresh records to check eligibility.</p>}
     {role === "viewer" && <p>Read only. Your current role cannot compare or discover providers.</p>}
-    <p>Choose providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Models and credentials are managed on the server.</p>
+    <p>Choose up to four providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Models and credentials are managed on the server.</p>
     {catalog.map(entry => <fieldset key={entry.provider} disabled={disabled}><legend>{entry.provider}</legend>
       <p>{entry.status} · configuration revision {entry.configuration_revision} · requested model {entry.model || "Unconfigured"} · expected response model {entry.expected_response_model || "Unconfigured"}.</p>
-      <label><input type="checkbox" checked={!!choices[entry.provider]} disabled={disabled || role === "viewer"}
-        onChange={event => setChoices({ ...choices, [entry.provider]: event.target.checked })} />Include {entry.provider} in comparison</label>
+      {entry.provider === "foundry" && <p>Foundry requests use the configured deployment name. Discovered model IDs do not select deployments or prove inference compatibility.</p>}
+      <label><input type="checkbox" checked={!!choices[entry.provider]} disabled={disabled || role === "viewer" || (!choices[entry.provider] && chosenCount >= 4)}
+        onChange={event => { if (event.target.checked && !choices[entry.provider] && chosenCount >= 4) return;
+          setChoices({ ...choices, [entry.provider]: event.target.checked }); }} />Include {entry.provider} in comparison</label>
       <label><input type="checkbox" checked={!!live[entry.provider]} disabled={disabled || role === "viewer" || !entry.live_configured}
         onChange={event => setLive({ ...live, [entry.provider]: event.target.checked })} />Use live {entry.provider} for the next explicit request</label>
       <button disabled={disabled || role !== "admin"} onClick={() => mutate(entry)}>Discover {entry.provider} models</button>

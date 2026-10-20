@@ -78,7 +78,7 @@ class ProviderCatalog:
                 configuration_revision=config.revision, model=config.model or None,
                 expected_response_model=config.response_model or config.model or None,
                 status="disabled" if not config.enabled else "configured_unverified" if configured else "unconfigured",
-                capabilities=["model_discovery"] if provider == "foundry" else ["model_discovery", "account_analysis"]))
+                capabilities=["model_discovery", "account_analysis"]))
         return result
 
     def request(self, provider, config, method, path, body=None):
