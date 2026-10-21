@@ -122,18 +122,21 @@ class ResearchService:
 
     def context(self, run_id):
         with self.transaction() as (connection, actor):
-            run = self.load(connection, actor.organization_id, run_id)
-            account = self.account(connection, actor, run.account_id)
-            facts = selected_evidence(connection, actor.organization_id, account.id)
-            source = selected_source(connection, actor.organization_id, account.id)
-            now = self.clock()
-            view = AccountView(account=account, evidence=facts, assessment=assess(account, facts, now.date()),
-                renewal_days=(account.renewal_date - now.date()).days if account.renewal_date else None,
-                source=AccountSource.model_validate(source["selection"]) if source else None)
-            settings = self.connector.settings
-            target = settings.research_account_map.get(account.id) if (
-                actor.organization_id == settings.research_organization_id) else None
-            return build_context(view, run, target, enabled=self.connector.status(actor.organization_id).enabled, now=now)
+            return self.context_in_transaction(connection, actor, run_id)
+
+    def context_in_transaction(self, connection, actor, run_id):
+        run = self.load(connection, actor.organization_id, run_id)
+        account = self.account(connection, actor, run.account_id)
+        facts = selected_evidence(connection, actor.organization_id, account.id)
+        source = selected_source(connection, actor.organization_id, account.id)
+        now = self.clock()
+        view = AccountView(account=account, evidence=facts, assessment=assess(account, facts, now.date()),
+            renewal_days=(account.renewal_date - now.date()).days if account.renewal_date else None,
+            source=AccountSource.model_validate(source["selection"]) if source else None)
+        settings = self.connector.settings
+        target = settings.research_account_map.get(account.id) if (
+            actor.organization_id == settings.research_organization_id) else None
+        return build_context(view, run, target, enabled=self.connector.status(actor.organization_id).enabled, now=now)
 
     def start(self, account_id, body):
         settings = self.connector.settings

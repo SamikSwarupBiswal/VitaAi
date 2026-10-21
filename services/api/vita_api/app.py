@@ -24,6 +24,7 @@ from .provider_catalog import PREFIX as COMPARISON_PREFIX
 from .provider_catalog import install_catalog_routes
 from .provider_comparison import install_comparison_routes
 from .research import PREFIX as RESEARCH_PREFIX
+from .research_narrative import install_narrative_routes
 from .research_service import install_research_routes
 from .sample import SAMPLE_ORG, sample_records
 from .scoring import assess
@@ -35,6 +36,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
                *, hubspot_transport: httpx.BaseTransport | None = None,
                microsoft_transport: httpx.BaseTransport | None = None, microsoft_client_factory=None,
                research_transport: httpx.BaseTransport | None = None,
+               narrative_transport: httpx.BaseTransport | None = None,
                comparison_transport: httpx.BaseTransport | None = None) -> FastAPI:
     settings = settings or Settings()
     store = Store(settings.database_url)
@@ -210,6 +212,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_workflow_routes(app, store, identity, settings, provider, hubspot_transport, microsoft)
     install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     install_research_routes(app, store, identity, settings, research_transport)
+    install_narrative_routes(app, store, identity, settings, narrative_transport)
     install_catalog_routes(app, store, identity, settings, comparison_transport)
     install_comparison_routes(app, store, identity, settings, comparison_transport)
     return app

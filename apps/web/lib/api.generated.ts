@@ -1039,6 +1039,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/runs/{run_id}/narrative-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness */
+        get: operations["readiness_api_integrations_research_runs__run_id__narrative_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/research/runs/{run_id}/narratives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_integrations_research_runs__run_id__narratives_get"];
+        put?: never;
+        /** Start */
+        post: operations["start_api_integrations_research_runs__run_id__narratives_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/research/narratives/{narrative_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_integrations_research_narratives__narrative_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-comparison/catalog": {
         parameters: {
             query?: never;
@@ -2710,6 +2762,212 @@ export interface components {
             analysis?: components["schemas"]["Analysis"] | null;
             drafts?: components["schemas"]["CommunicationDrafts"] | null;
             planning?: components["schemas"]["PlanningOutput"] | null;
+        };
+        /** NarrativeHypothesis */
+        NarrativeHypothesis: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Interpretation */
+            interpretation: string;
+            /** Verification Question */
+            verification_question: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Source Urls */
+            source_urls: string[];
+        };
+        /** NarrativeOutput */
+        NarrativeOutput: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Hypotheses */
+            hypotheses: components["schemas"]["NarrativeHypothesis"][];
+            /** Caveats */
+            caveats: string[];
+        };
+        /** NarrativeReadiness */
+        NarrativeReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Research Run Id
+             * Format: uuid
+             */
+            research_run_id: string;
+            /** Research Run Revision */
+            research_run_revision: number;
+            /** Context Status */
+            context_status: string;
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Live Configured */
+            live_configured: boolean;
+            /** Model */
+            model: string | null;
+            /** Can Start */
+            can_start: boolean;
+            /** Pending Run Id */
+            pending_run_id: string | null;
+            /** Next Start At */
+            next_start_at: string | null;
+        };
+        /** NarrativeRequest */
+        NarrativeRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /** Expected Run Revision */
+            expected_run_revision: number;
+            /** Expected Configuration Revision */
+            expected_configuration_revision: number;
+            /**
+             * Mode
+             * @default mock
+             * @enum {string}
+             */
+            mode: "mock" | "live";
+        };
+        /** NarrativeRun */
+        NarrativeRun: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Research Run Id
+             * Format: uuid
+             */
+            research_run_id: string;
+            /**
+             * Policy Version
+             * @default research-narrative-1
+             * @constant
+             */
+            policy_version: "research-narrative-1";
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            context: components["schemas"]["ResearchContext"];
+            /**
+             * Provider
+             * @default nebius
+             * @constant
+             */
+            provider: "nebius";
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Model */
+            model: string | null;
+            /** Expected Response Model */
+            expected_response_model: string | null;
+            /** Response Model */
+            response_model?: string | null;
+            /**
+             * Requested Mode
+             * @enum {string}
+             */
+            requested_mode: "mock" | "live";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "disabled" | "mock" | "live" | "fallback";
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded";
+            /**
+             * Validation
+             * @default not_run
+             * @enum {string}
+             */
+            validation: "not_run" | "rejected" | "schema_and_references_valid";
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Worker Deadline At
+             * Format: date-time
+             */
+            worker_deadline_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Request Id */
+            request_id?: string | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            output?: components["schemas"]["NarrativeOutput"] | null;
+            /**
+             * Caveat
+             * @default Generated interpretations are unverified hypotheses for human review. Schema and citation validation does not establish truth, account identity, causality, approval or business outcomes. The retained internal baseline and caveats remain authoritative; research changes no facts or authority.
+             */
+            caveat: string;
         };
         /** NotePayload */
         NotePayload: {
@@ -6052,6 +6310,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchRun"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readiness_api_integrations_research_runs__run_id__narrative_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NarrativeReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_integrations_research_runs__run_id__narratives_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NarrativeRun"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_api_integrations_research_runs__run_id__narratives_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NarrativeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NarrativeRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_integrations_research_narratives__narrative_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                narrative_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NarrativeRun"];
                 };
             };
             /** @description Validation Error */

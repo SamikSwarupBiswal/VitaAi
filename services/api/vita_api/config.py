@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     research_api_key: SecretStr = SecretStr("")
     research_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
     research_account_map: dict[str, ResearchTarget] = Field(default_factory=dict, max_length=50)
+    research_narrative_provider: ComparisonProviderConfig = Field(default_factory=ComparisonProviderConfig)
     hubspot_enabled: bool = False
     hubspot_write_enabled: bool = False
     hubspot_configuration_revision: int = Field(default=1, ge=1)

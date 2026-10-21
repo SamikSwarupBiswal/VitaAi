@@ -272,7 +272,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(before, self.store.list_accounts(SAMPLE_ORG))
         self.assertIn("alembic_version", inspect(self.store.engine).get_table_names())
         with self.store.engine.connect() as connection:
-            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0011")
+            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0012")
             self.assertEqual(connection.execute(select(users.c.id)).scalar(), self.user.id)
 
     def test_closed_pooled_connection_recovers_before_first_query(self):

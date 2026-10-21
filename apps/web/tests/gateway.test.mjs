@@ -26,7 +26,9 @@ test("research allows bounded reads, explicit search/finalization; implicit HEAD
   });
   for (const [method, suffix] of [["GET", ""], ["GET", `/accounts/${id}/readiness`], ["GET", `/accounts/${id}/runs`],
     ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/search`],
-    ["GET", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover`], ["GET", `/runs/${id}/context`]]) {
+    ["GET", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover`], ["GET", `/runs/${id}/context`],
+    ["GET", `/runs/${id}/narrative-readiness`], ["GET", `/runs/${id}/narratives`],
+    ["POST", `/runs/${id}/narratives`], ["GET", `/narratives/${id}`]]) {
     const name = `integrations/research${suffix}`;
     const body = '{"expected_account_revision":3,"mode":"mock"}';
     const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
@@ -44,7 +46,9 @@ test("research allows bounded reads, explicit search/finalization; implicit HEAD
     ["POST", `/accounts/${id}/runs`], ["POST", `/accounts/${id}/readiness`], ["GET", "/accounts/invalid/runs"],
     ["GET", `/runs/${id}/extra`], ["POST", ""], ["GET", `/runs/${id}/recover`], ["HEAD", `/runs/${id}/recover`],
     ["POST", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover/extra`], ["POST", "/runs/invalid/recover"],
-    ["POST", `/runs/${id}/context`], ["GET", `/runs/${id}/context/extra`], ["GET", "/runs/invalid/context"]]) {
+    ["POST", `/runs/${id}/context`], ["GET", `/runs/${id}/context/extra`], ["GET", "/runs/invalid/context"],
+    ["POST", `/runs/${id}/narrative-readiness`], ["HEAD", `/runs/${id}/narratives`], ["POST", `/narratives/${id}`],
+    ["GET", `/runs/${id}/narratives/extra`], ["POST", "/runs/invalid/narratives"]]) {
     const name = `integrations/research${suffix}`;
     const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },
