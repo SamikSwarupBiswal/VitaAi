@@ -6,16 +6,17 @@ import { checkComparisonRun, comparisonPending, discoverComparisonProvider, read
   readComparisonRecovery, recoverComparison, startComparison, type CatalogEntry, type ComparisonReadiness,
   type ComparisonRecoveryReadiness, type ComparisonRun, type DiscoveryResult } from "@/lib/comparison";
 import { useSession } from "./session-gate";
+import { ProviderTestPanel } from "./provider-test-panel";
 
 export function ComparisonPanel({ view }: { view: AccountView }) {
   const session = useSession(), actor = session?.actor;
   if (session?.mode !== "session" || !actor) return <details className="pipeline-panel"><summary>Provider comparison</summary>
     <p>Comparison controls require session identity.</p></details>;
-  return <ComparisonAccount view={view} role={actor.role}
+  return <ComparisonAccount view={view} role={actor.role} actor={actor.id} organization={actor.organization_id}
     key={`${actor.id}:${actor.organization_id}:${actor.role}:${view.account.id}:${view.account.revision}:${view.assessment.snapshot_hash}`} />;
 }
 
-function ComparisonAccount({ view, role }: { view: AccountView; role: string }) {
+function ComparisonAccount({ view, role, actor, organization }: { view: AccountView; role: string; actor: string; organization: string }) {
   const [ready, setReady] = useState<ComparisonReadiness | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [runs, setRuns] = useState<ComparisonRun[]>([]);
@@ -137,7 +138,8 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
 
   const disabled = busy || reading || comparisonPending.has(scope);
   const chosenCount = Object.values(choices).filter(Boolean).length;
-  return <details className="pipeline-panel comparison-panel"><summary>Provider comparison · {view.account.name}</summary>
+  return <><ProviderTestPanel organization={organization} actor={actor} role={role} />
+    <details className="pipeline-panel comparison-panel"><summary>Provider comparison · {view.account.name}</summary>
     <p>Compare independent advisory results against one retained deterministic snapshot. Facts, primary analysis, ranks and workflow authority stay unchanged.</p>
     <p role="status">{reading ? "Loading comparison records..." : ready?.configured ? "Comparison configured; provider success and live authorization remain unverified." : "Comparison unavailable or unconfigured."}</p>
     <p>Current revision {view.account.revision}; snapshot {view.assessment.snapshot_hash}.</p>
@@ -188,7 +190,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
           onClick={() => finalizeInterrupted()}>Finalize interrupted comparison</button>
       </section>}
     </section>
-  </details>;
+  </details></>;
 }
 
 function ComparisonRecord({ run, view }: { run: ComparisonRun; view: AccountView }) {

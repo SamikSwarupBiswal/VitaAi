@@ -17,6 +17,47 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("provider tests forward only explicit bounded methods without credential headers or retries", async t => {
+  const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
+  const body = JSON.stringify({ mode: "live", expected_configuration_revision: 7, api_key: "synthetic-one-use-key" });
+  const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.match(url, /^http:\/\/127\.0\.0\.1:8000\/api\/provider-comparison\//);
+    assert.equal(init.headers.Cookie, "vitaai_session=opaque-session");
+    assert.equal(init.headers.Authorization, undefined); assert.equal(init.headers["X-Byok-Api-Key"], undefined);
+    assert.equal(init.cache, "no-store");
+    if (init.method === "POST") assert.equal(init.body, body);
+    return Response.json({ status: "pending" });
+  });
+  for (const provider of ["nebius", "openai", "anthropic", "nvidia", "foundry"]) {
+    for (const [method, suffix] of [["GET", "test-readiness"], ["GET", "tests"], ["POST", "test"]]) {
+      const name = `provider-comparison/providers/${provider}/${suffix}`;
+      const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
+        method, headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", "X-VitaAi-Request": "1",
+          cookie: "vitaai_session=opaque-session; other=private", authorization: "private", "X-Byok-Api-Key": "never-forward" },
+        ...(method === "POST" ? { body } : {}),
+      }), { params: Promise.resolve({ path: name.split("/") }) });
+      assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
+    }
+  }
+  const detail = `provider-comparison/tests/${id}`;
+  assert.equal((await route.exports.GET(new NextRequest(`http://localhost:3000/api/${detail}`, {
+    headers: { host: "127.0.0.1:3000", cookie: "vitaai_session=opaque-session" },
+  }), { params: Promise.resolve({ path: detail.split("/") }) })).status, 200);
+  assert.equal(upstream.mock.callCount(), 16); upstream.mock.resetCalls();
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  for (const [method, suffix] of [["GET", "providers/openai/test"], ["HEAD", "providers/openai/test"],
+    ["POST", "providers/openai/tests"], ["POST", "providers/openai/test-readiness"], ["POST", `tests/${id}`],
+    ["POST", "providers/unknown/test"], ["POST", "providers/foundry/test/extra"], ["GET", "tests/invalid"],
+    ["GET", `tests/${id}/extra`], ["HEAD", "providers/openai/tests"], ["POST", `tests/${id}/recover`]]) {
+    const name = `provider-comparison/${suffix}`;
+    assert.equal((await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
+      method, headers: { host: "127.0.0.1:3000" },
+    }), { params: Promise.resolve({ path: name.split("/") }) })).status, 404);
+  }
+  assert.equal(upstream.mock.callCount(), 0);
+});
+
 test("research allows bounded reads, explicit search/finalization; implicit HEAD cannot mutate", async t => {
   const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
   const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {

@@ -138,6 +138,7 @@ function harness(role = "admin", sharedPending = new Set(), available = catalog)
   helper.comparisonPending.has = sharedPending.has.bind(sharedPending);
   helper.comparisonPending.delete = sharedPending.delete.bind(sharedPending);
   const panel = load("../components/comparison-panel.tsx", { react: hooks, "@/lib/comparison": helper,
+    "./provider-test-panel": { ProviderTestPanel: () => null },
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) } });
   let key;
   const render = () => { cursor = 0; const outer = panel.ComparisonPanel({ view }); key = outer.key;
