@@ -1091,6 +1091,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/narratives/{narrative_id}/recovery-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recovery Readiness */
+        get: operations["recovery_readiness_api_integrations_research_narratives__narrative_id__recovery_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/research/narratives/{narrative_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover */
+        post: operations["recover_api_integrations_research_narratives__narrative_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-comparison/catalog": {
         parameters: {
             query?: never;
@@ -2940,7 +2974,8 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded";
+            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded" | "interrupted";
+            recovery?: components["schemas"]["ResearchRecovery"] | null;
             /**
              * Validation
              * @default not_run
@@ -6443,6 +6478,72 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NarrativeRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_readiness_api_integrations_research_narratives__narrative_id__recovery_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                narrative_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRecoveryReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recover_api_integrations_research_narratives__narrative_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                narrative_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResearchRecoveryRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

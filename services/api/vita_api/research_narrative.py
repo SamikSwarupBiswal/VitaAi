@@ -23,7 +23,14 @@ from .governance import PolicyDenied
 from .identity import Actor
 from .provider_catalog import CatalogFailure, ProviderCatalog
 from .provider_comparison import metadata_from_response
-from .research import PREFIX, Research, ResearchContract
+from .research import (
+    PREFIX,
+    Research,
+    ResearchContract,
+    ResearchRecovery,
+    ResearchRecoveryReadiness,
+    ResearchRecoveryRequest,
+)
 from .research_context import ResearchContext
 from .research_service import ResearchService
 from .storage import accounts
@@ -74,7 +81,8 @@ class NarrativeRun(ResearchContract):
     response_model: str | None = None
     requested_mode: Literal["mock", "live"]
     mode: Literal["disabled", "mock", "live", "fallback"]
-    status: Literal["pending", "succeeded", "unavailable", "failed", "invalid_output", "discarded"] = "pending"
+    status: Literal["pending", "succeeded", "unavailable", "failed", "invalid_output", "discarded", "interrupted"] = "pending"
+    recovery: ResearchRecovery | None = None
     validation: Literal["not_run", "rejected", "schema_and_references_valid"] = "not_run"
     factual_confidence: Literal["unverified"] = "unverified"
     started_at: AwareDatetime
@@ -227,6 +235,32 @@ class NarrativeService:
                     narratives.c.payload["research_run_id"].as_string() == str(research_id))
                 .order_by(narratives.c.started_at.desc(), narratives.c.id.desc()).limit(20)).scalars()]
 
+    def recovery_readiness(self, narrative_id):
+        with self.research.transaction() as (connection, actor):
+            run = self.load(connection, actor.organization_id, narrative_id)
+            account = self.research.account(connection, actor, run.account_id)
+            reason = ("role_denied" if actor.role == "viewer" else "terminal" if run.status != "pending"
+                else "worker_active" if self.clock() < run.worker_deadline_at else "eligible")
+            return ResearchRecoveryReadiness(organization_id=actor.organization_id, account_id=run.account_id,
+                account_revision=account.revision, run_id=run.id, run_revision=run.revision,
+                can_recover=reason == "eligible", reason=reason, recover_after=run.worker_deadline_at)
+
+    def recover(self, narrative_id, body):
+        with self.research.transaction() as (connection, actor):
+            run = self.load(connection, actor.organization_id, narrative_id)
+            self.research.account(connection, actor, run.account_id, body.expected_account_revision)
+            if actor.role == "viewer":
+                raise PolicyDenied("research_writer_required", 403)
+            if run.status != "pending" or run.revision != body.expected_revision:
+                raise PolicyDenied("narrative_recovery_state_changed", 409)
+            now = self.clock()
+            if now < run.worker_deadline_at:
+                raise PolicyDenied("narrative_worker_not_recoverable", 409)
+            run.recovery = ResearchRecovery(actor_id=actor.id, recovered_at=now, previous_revision=run.revision)
+            run.status, run.error_code, run.finished_at = "interrupted", "narrative_interrupted", now
+            self.finish(connection, run)
+            return run
+
     def check(self, connection, actor, run, config):
         if actor.id != run.actor_id or actor.organization_id != run.organization_id or actor.role == "viewer":
             raise PolicyDenied("narrative_authority_changed", 403)
@@ -338,5 +372,13 @@ def install_narrative_routes(app, store, identity, settings, transport=None):
     @router.get("/narratives/{narrative_id}", response_model=NarrativeRun)
     def get(narrative_id: UUID, actor: Current, operation: Service):
         return operation.get(narrative_id)
+
+    @router.get("/narratives/{narrative_id}/recovery-readiness", response_model=ResearchRecoveryReadiness)
+    def recovery_readiness(narrative_id: UUID, actor: Current, operation: Service):
+        return operation.recovery_readiness(narrative_id)
+
+    @router.post("/narratives/{narrative_id}/recover", response_model=NarrativeRun)
+    def recover(narrative_id: UUID, body: ResearchRecoveryRequest, actor: Current, operation: Service):
+        return operation.recover(narrative_id, body)
 
     app.include_router(router)

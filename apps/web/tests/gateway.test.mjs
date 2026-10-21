@@ -28,7 +28,8 @@ test("research allows bounded reads, explicit search/finalization; implicit HEAD
     ["GET", `/runs/${id}`], ["POST", `/accounts/${id}/search`],
     ["GET", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover`], ["GET", `/runs/${id}/context`],
     ["GET", `/runs/${id}/narrative-readiness`], ["GET", `/runs/${id}/narratives`],
-    ["POST", `/runs/${id}/narratives`], ["GET", `/narratives/${id}`]]) {
+    ["POST", `/runs/${id}/narratives`], ["GET", `/narratives/${id}`],
+    ["GET", `/narratives/${id}/recovery-readiness`], ["POST", `/narratives/${id}/recover`]]) {
     const name = `integrations/research${suffix}`;
     const body = '{"expected_account_revision":3,"mode":"mock"}';
     const response = await route.exports[method](new NextRequest(`http://localhost:3000/api/${name}`, {
@@ -48,7 +49,10 @@ test("research allows bounded reads, explicit search/finalization; implicit HEAD
     ["POST", `/runs/${id}/recovery-readiness`], ["POST", `/runs/${id}/recover/extra`], ["POST", "/runs/invalid/recover"],
     ["POST", `/runs/${id}/context`], ["GET", `/runs/${id}/context/extra`], ["GET", "/runs/invalid/context"],
     ["POST", `/runs/${id}/narrative-readiness`], ["HEAD", `/runs/${id}/narratives`], ["POST", `/narratives/${id}`],
-    ["GET", `/runs/${id}/narratives/extra`], ["POST", "/runs/invalid/narratives"]]) {
+    ["GET", `/runs/${id}/narratives/extra`], ["POST", "/runs/invalid/narratives"],
+    ["GET", `/narratives/${id}/recover`], ["HEAD", `/narratives/${id}/recover`],
+    ["POST", `/narratives/${id}/recovery-readiness`], ["POST", `/narratives/${id}/recover/extra`],
+    ["POST", "/narratives/invalid/recover"]]) {
     const name = `integrations/research${suffix}`;
     const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },

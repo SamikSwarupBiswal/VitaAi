@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountView } from "@/lib/api";
-import { checkNarrative, narrativePending, readNarrative, readNarratives, startNarrative,
-  type NarrativeReadiness, type NarrativeRun } from "@/lib/research-narrative";
+import { checkNarrative, narrativePending, readNarrative, readNarratives, readNarrativeRecovery, recoverNarrative, startNarrative,
+  type NarrativeReadiness, type NarrativeRecoveryReadiness, type NarrativeRun } from "@/lib/research-narrative";
 import { researchContextUsable, researchSourceMatchedLink, type ResearchContextView } from "@/lib/research";
 
 export function ResearchNarrativePanel({ view, context, writer }: {
@@ -12,6 +12,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
   const [ready, setReady] = useState<NarrativeReadiness | null>(null);
   const [runs, setRuns] = useState<NarrativeRun[]>([]);
   const [selected, setSelected] = useState<NarrativeRun | null>(null);
+  const [recovery, setRecovery] = useState<NarrativeRecoveryReadiness | null>(null);
   const [live, setLive] = useState(false);
   const [reading, setReading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -21,6 +22,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
   const lifetime = useRef<AbortController | null>(null);
   const locked = useRef(false);
   const readyBinding = useRef<NarrativeReadiness | null>(null);
+  const recoveryBinding = useRef<{ run: NarrativeRun; ready: NarrativeRecoveryReadiness } | null>(null);
   const sequence = useRef(0);
   const detailSequence = useRef(0);
   const scope = `${view.account.organization_id}:${view.account.id}`;
@@ -30,11 +32,13 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     if (!signal || signal.aborted) return;
     const current = ++sequence.current; ++detailSequence.current;
     readyBinding.current = null;
+    recoveryBinding.current = null; setRecovery(null);
     setReading(true); setReady(null); setRuns([]); setSelected(null); setLive(false); setError(null);
     try {
       const value = await readNarratives(view, context, signal);
       if (!signal.aborted && current === sequence.current) {
         readyBinding.current = value.ready; setReady(value.ready); setRuns(value.runs); setNow(Date.now());
+        if (!value.ready) setError("Narrative generation readiness unavailable. Saved history remains read only; generation is disabled.");
       }
     } catch {
       if (!signal.aborted && current === sequence.current) setError("Narrative records unavailable. Refresh before another request.");
@@ -48,7 +52,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     window.addEventListener("focus", reload);
     window.addEventListener("vitaai-research-narrative-changed", reload);
-    return () => { controller.abort(); readyBinding.current = null; window.clearInterval(timer);
+    return () => { controller.abort(); readyBinding.current = null; recoveryBinding.current = null; window.clearInterval(timer);
       window.removeEventListener("focus", reload); window.removeEventListener("vitaai-research-narrative-changed", reload); };
   }, [refresh]);
 
@@ -58,6 +62,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
       || !ready?.can_start || readyBinding.current !== ready || !researchContextUsable(context, Date.now())
       || (live && !ready.live_configured)) return;
     locked.current = true; narrativePending.add(scope); readyBinding.current = null;
+    recoveryBinding.current = null; setRecovery(null);
     ++sequence.current; ++detailSequence.current;
     setBusy(true); setReady(null); setSelected(null); setError(null); setNotice(null);
     const mode = live ? "live" : "mock";
@@ -77,12 +82,44 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted || locked.current || reading) return;
     const current = ++detailSequence.current;
+    recoveryBinding.current = null; setRecovery(null);
     setSelected(null); setError(null);
     try {
       const run = checkNarrative(view, context, await readNarrative(view, context, id, signal));
-      if (!signal.aborted && current === detailSequence.current) setSelected(run);
+      if (signal.aborted || current !== detailSequence.current) return;
+      setSelected(run);
+      if (run.status !== "pending") return;
+      try {
+        const value = await readNarrativeRecovery(view, run, signal);
+        if (!signal.aborted && current === detailSequence.current) {
+          recoveryBinding.current = { run, ready: value }; setRecovery(value);
+        }
+      } catch {
+        if (!signal.aborted && current === detailSequence.current) setError("Narrative recovery readiness unavailable. Inspect again before finalization.");
+      }
     } catch {
       if (!signal.aborted && current === detailSequence.current) setError("Saved narrative unavailable for this account and research run.");
+    }
+  }
+
+  async function finalize() {
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted || locked.current || narrativePending.has(scope) || reading || !writer
+      || !selected || !recovery?.can_recover || recoveryBinding.current?.run !== selected
+      || recoveryBinding.current.ready !== recovery || !recovery.recover_after
+      || !(Date.now() >= Date.parse(recovery.recover_after))) return;
+    locked.current = true; narrativePending.add(scope); readyBinding.current = null; recoveryBinding.current = null;
+    ++sequence.current; ++detailSequence.current;
+    setBusy(true); setReady(null); setRecovery(null); setSelected(null); setError(null); setNotice(null);
+    try {
+      const saved = await recoverNarrative(view, context, selected, recovery, signal);
+      if (!signal.aborted) setNotice(`Narrative ${saved.id} finalized as interrupted. No inference was retried.`);
+    } catch {
+      if (!signal.aborted) setNotice("Narrative finalization could not be confirmed and may have persisted. Refresh reads saved history without repeating finalization or inference.");
+    } finally {
+      locked.current = false; narrativePending.delete(scope);
+      if (!signal.aborted) { setBusy(false); await refresh(); }
+      else window.dispatchEvent(new Event("vitaai-research-narrative-changed"));
     }
   }
 
@@ -93,7 +130,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     <p>{reading ? "Loading narrative records..." : ready ? `Narrative model: ${ready.model || "Unconfigured"}; ${ready.live_configured ? "configured, unverified" : "live unavailable"}.` : "Readiness unavailable."}</p>
     {!usable && <p>Current public context is unavailable or expired. Historical narratives never renew it.</p>}
     {!writer && <p>Read only. Your current role cannot request a narrative.</p>}
-    {ready?.pending_run_id && <p>Pending narrative {ready.pending_run_id} blocks new starts and requires investigation after worker loss. Reading never retries it.</p>}
+    {ready?.pending_run_id && <p>Pending narrative {ready.pending_run_id} blocks new starts. Inspect its saved record for explicit finalization after the worker deadline. Reading never retries inference.</p>}
     {ready?.next_start_at && <p>Account cooldown ends {ready.next_start_at}. Refresh to recheck eligibility.</p>}
     <label><input type="checkbox" checked={live} disabled={disabled || !writer || !usable || !ready?.live_configured}
       onChange={event => setLive(event.target.checked)} />Use live Nebius for this narrative (paid call; requires authorized service access)</label>
@@ -109,6 +146,11 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     {selected && <NarrativeRecord run={selected} current={usable
       && selected.context.internal.assessment.snapshot_hash === view.assessment.snapshot_hash
       && researchContextUsable(selected.context, now)} />}
+    {selected?.status === "pending" && <section aria-label="Interrupted narrative recovery"><h4>Interrupted narrative recovery</h4>
+      <p>Finalization retains original context, dates, model and modes. It fences late publication and never retries inference or renews context. An authorized remote call may still finish; this does not prove provider cancellation.</p>
+      <p>Recovery: {recovery?.reason || "Unavailable"}; original worker deadline {selected.worker_deadline_at}.</p>
+      <button disabled={disabled || !writer || !recovery?.can_recover} onClick={finalize}>Finalize interrupted narrative</button>
+    </section>}
   </section>;
 }
 
@@ -123,6 +165,7 @@ function NarrativeRecord({ run, current }: { run: NarrativeRun; current: boolean
       Configuration revision {run.configuration_revision}; validation {run.validation}; factual confidence {run.factual_confidence}.</p>
     <p>Measured latency {run.latency_ms ?? "Unavailable"} ms; input tokens {run.input_tokens ?? "Unavailable"}; output tokens {run.output_tokens ?? "Unavailable"}; request {run.request_id || "Unavailable"}.</p>
     <p>{run.caveat}</p>{run.error_code && <p>Server result: {run.error_code}</p>}
+    {run.recovery && <p>Finalized by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous revision {run.recovery.previous_revision}. Reason {run.recovery.reason}.</p>}
     <p>Original account revision {internal.account.revision}; snapshot {internal.assessment.snapshot_hash}; selected source {internal.source?.id || "Synthetic sample"}.
       Annual value {internal.account.annual_value ?? "Unknown"}; renewal {internal.account.renewal_date ?? "Unknown"}.</p>
     <p>{run.context.brief?.internal_summary}</p>

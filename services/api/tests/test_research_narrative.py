@@ -357,6 +357,124 @@ class NarrativeTests(unittest.TestCase):
         self.assertEqual(retained, current["internal"])
         self.assertEqual(response.json()["context"]["brief"], current["brief"])
 
+    def lost_narrative(self):
+        with patch("vita_api.research_narrative.generate", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.operation().start(UUID(self.saved["id"]), NarrativeRequest(**self.body))
+        return self.client.get(self.path + "/narratives").json()[0]
+
+    def test_explicit_recovery_after_restart_retains_context_without_inference(self):
+        before = self.client.get(f"/api/accounts/{ACCOUNT}").json()
+        run = self.lost_narrative(); path = f"{PREFIX}/narratives/{run['id']}"
+        body = {"expected_revision": run["revision"], "expected_account_revision": 1}
+        self.assertEqual(self.client.get(path + "/recovery-readiness").json()["reason"], "worker_active")
+        self.assertEqual(self.client.post(path + "/recover", headers=HEADERS, json=body).status_code, 409)
+        disabled = self.settings.model_copy(update={"research_enabled": False, "research_organization_id": "other"})
+        with TestClient(create_app(disabled)) as restarted, patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+            restarted.cookies.update(self.client.cookies); clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+            self.assertTrue(restarted.get(path + "/recovery-readiness").json()["can_recover"])
+            response = restarted.post(path + "/recover", headers=HEADERS, json=body)
+            self.assertEqual(response.status_code, 200, response.text); result = response.json()
+            self.assertEqual((result["status"], result["revision"], result["error_code"]), ("interrupted", 2, "narrative_interrupted"))
+            self.assertEqual(result["recovery"]["previous_revision"], 1)
+            self.assertEqual(result["recovery"]["actor_id"], self.admin.id)
+            for field in set(run) - {"status", "revision", "error_code", "finished_at", "recovery"}:
+                self.assertEqual(result[field], run[field], field)
+            self.assertIsNone(result["output"])
+            self.assertEqual(restarted.get(path).json(), result)
+            self.assertEqual(restarted.get(path + "/recovery-readiness").json()["reason"], "terminal")
+            self.assertEqual(restarted.post(path + "/recover", headers=HEADERS, json=body).status_code, 409)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.client.get(f"/api/accounts/{ACCOUNT}").json(), before)
+        self.assertEqual(self.client.get(self.path).json(), self.saved)
+        self.assertIsNone(self.client.get(self.path + "/narrative-readiness").json()["pending_run_id"])
+
+    def test_recovery_requires_current_scope_role_session_revisions_and_strict_body(self):
+        run = self.lost_narrative(); path = f"{PREFIX}/narratives/{run['id']}"
+        body = {"expected_revision": 1, "expected_account_revision": 1}
+        with patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+            for field in body:
+                self.assertEqual(self.client.post(path + "/recover", headers=HEADERS, json={**body, field: 99}).status_code, 409)
+            response = self.client.post(path + "/recover", headers=HEADERS, json={**body, "api_key": "never-echo"})
+            self.assertEqual(response.status_code, 422); self.assertNotIn("never-echo", response.text)
+            self.assertEqual(self.client.head(path + "/recover").status_code, 405)
+            self.identity.create_user("viewer", "synthetic-password-123", SAMPLE_ORG, "viewer"); self.login("viewer")
+            self.assertEqual(self.client.get(path + "/recovery-readiness").json()["reason"], "role_denied")
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS, json=body).status_code, 403)
+            self.identity.create_user("foreign", "synthetic-password-123", "other-org", "seller"); self.login("foreign")
+            self.assertEqual(self.client.get(path + "/recovery-readiness").status_code, 404)
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS, json=body).status_code, 404)
+            self.client.post("/api/auth/logout", headers=HEADERS)
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS, json=body).status_code, 401)
+        self.assertEqual(self.calls, [])
+
+    def test_recovery_uses_current_account_revision_without_refreshing_retained_context(self):
+        run = self.lost_narrative(); path = f"{PREFIX}/narratives/{run['id']}"
+        with self.store.engine.begin() as connection:
+            payload = connection.execute(select(accounts.c.payload).where(accounts.c.id == ACCOUNT)).scalar_one()
+            connection.execute(update(accounts).where(accounts.c.id == ACCOUNT).values(revision=2, payload={**payload, "revision": 2}))
+        with patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+            self.assertEqual(self.client.get(path + "/recovery-readiness").json()["account_revision"], 2)
+            body = {"expected_revision": 1, "expected_account_revision": 1}
+            self.assertEqual(self.client.post(path + "/recover", headers=HEADERS, json=body).status_code, 409)
+            response = self.client.post(path + "/recover", headers=HEADERS, json={**body, "expected_account_revision": 2})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["context"], run["context"])
+        self.assertEqual(self.calls, [])
+
+    def test_successful_narrative_cannot_be_finalized_or_replaced(self):
+        run = self.start().json(); path = f"{PREFIX}/narratives/{run['id']}"
+        with patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+            self.assertEqual(self.client.get(path + "/recovery-readiness").json()["reason"], "terminal")
+            response = self.client.post(path + "/recover", headers=HEADERS,
+                json={"expected_revision": run["revision"], "expected_account_revision": 1})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(self.client.get(path).json(), run)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_competing_recovery_fences_late_model_output_and_terminal_history(self):
+        entered, release = Event(), Event()
+        self.on_model = lambda: (entered.set(), self.assertTrue(release.wait(20)))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            worker = pool.submit(self.start)
+            try:
+                self.assertTrue(entered.wait(20)); run = self.client.get(self.path + "/narratives").json()[0]
+                path = f"{PREFIX}/narratives/{run['id']}"; body = {"expected_revision": 1, "expected_account_revision": 1}
+                with patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+                    clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+                    contender = pool.submit(self.client.post, path + "/recover", headers=HEADERS, json=body)
+                    response = self.client.post(path + "/recover", headers=HEADERS, json=body)
+                    self.assertEqual(sorted([response.status_code, contender.result(20).status_code]), [200, 409])
+                    saved = self.client.get(path).json(); release.set()
+                    self.assertEqual(worker.result(20).status_code, 409)
+                    self.assertEqual(self.client.get(path).json(), saved)
+                    self.assertIsNone(saved["output"])
+            finally:
+                release.set()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_recovery_between_reservation_and_dispatch_prevents_model_call(self):
+        from vita_api.research_narrative import generate
+        entered, release = Event(), Event()
+        def pause(*args, **kwargs):
+            entered.set(); self.assertTrue(release.wait(20)); return generate(*args, **kwargs)
+        with patch("vita_api.research_narrative.generate", pause), ThreadPoolExecutor(max_workers=1) as pool:
+            worker = pool.submit(self.start)
+            try:
+                self.assertTrue(entered.wait(20)); run = self.client.get(self.path + "/narratives").json()[0]
+                with patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+                    clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+                    response = self.client.post(f"{PREFIX}/narratives/{run['id']}/recover", headers=HEADERS,
+                        json={"expected_revision": 1, "expected_account_revision": 1})
+                    self.assertEqual(response.status_code, 200, response.text); release.set()
+                    self.assertEqual(worker.result(20).status_code, 409)
+                    self.assertEqual(self.client.get(self.path + "/narratives").json(), [response.json()])
+            finally:
+                release.set()
+        self.assertEqual(self.calls, [])
+
 
 class NarrativeMigrationTests(unittest.TestCase):
     def test_populated_0011_upgrade_preserves_accounts_research_and_identity(self):

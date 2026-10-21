@@ -21,7 +21,7 @@ const ready = { account_id: "account", organization_id: "org", account_revision:
   research_run_id: "research", research_run_revision: 2, context_status: "usable", configuration_revision: 4,
   live_configured: true, enabled: true, can_start: true, model: "nvidia/nemotron-test", pending_run_id: null };
 function saved(ctx, mode = "mock") {
-  return { id: "narrative", organization_id: "org", account_id: "account", research_run_id: "research", context: ctx,
+  return { id: "narrative", revision: 1, organization_id: "org", account_id: "account", research_run_id: "research", context: ctx,
     configuration_revision: 4, requested_mode: mode, mode, status: "unavailable", validation: "not_run", factual_confidence: "unverified",
     started_at: ctx.evaluated_at, worker_deadline_at: ctx.retained_run.expires_at, finished_at: ctx.evaluated_at,
     caveat: "Schema and citations do not certify truth", output: null };
@@ -170,4 +170,95 @@ test("helper rejects crossed scope, source run and inspected narrative identity"
   }
   const read = app.helper.readNarrative(view, app.ctx, "narrative", new AbortController().signal);
   app.requests.shift().resolve({ ...run, id: "different" }); await assert.rejects(read);
+});
+
+function pendingRun(ctx) {
+  return { ...saved(ctx), status: "pending", finished_at: null,
+    worker_deadline_at: new Date(Date.now() - 1000).toISOString() };
+}
+function recoveryReady(run, change = {}) {
+  return { organization_id: "org", account_id: "account", account_revision: 3, run_id: run.id,
+    run_revision: run.revision, recover_after: run.worker_deadline_at, reason: "eligible", can_recover: true, ...change };
+}
+async function inspectPending(app, run, change = {}) {
+  const reading = app.inspect().props.onClick(); app.requests.shift().resolve(run); await flush();
+  assert.match(app.requests[0].url, /narratives\/narrative\/recovery-readiness$/);
+  app.requests.shift().resolve(recoveryReady(run, change)); await reading;
+}
+function interrupted(run) {
+  return { ...run, status: "interrupted", revision: run.revision + 1,
+    recovery: { actor_id: "actor", previous_revision: run.revision, recovered_at: new Date().toISOString(), reason: "worker_deadline_elapsed" } };
+}
+
+test("explicit inspected recovery sends one revision-bound finalization and only reads after uncertainty", async () => {
+  const app = harness(); const run = pendingRun(app.ctx); await mount(app, ready, [run]);
+  await inspectPending(app, run);
+  const finalize = app.button("Finalize interrupted narrative").props.onClick;
+  const pending = finalize(); finalize();
+  assert.equal(app.requests.length, 1); const post = app.requests.shift();
+  assert.match(post.url, /narratives\/narrative\/recover$/);
+  assert.deepEqual(JSON.parse(post.init.body), { schema_version: "1", expected_revision: 1, expected_account_revision: 3 });
+  post.reject(new Error("response lost")); await flush();
+  assert.equal(app.requests.length, 2); assert.ok(app.requests.every(r => !r.init.method));
+  app.requests.shift().reject(new Error("read failed")); app.requests.shift().resolve([]); await pending;
+  assert.match(app.html(), /may have persisted/); await finalize(); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("recovery rejects stale readiness, active workers, viewer and captured handlers after refresh", async () => {
+  for (const change of [{ run_revision: 99 }, { account_revision: 99 }, { recover_after: null }]) {
+    const app = harness(); const run = pendingRun(app.ctx); await mount(app, ready, [run]);
+    await inspectPending(app, run, change); assert.equal(app.button("Finalize interrupted narrative").props.disabled, true); app.unmount();
+  }
+  const viewer = harness({ writer: false }); const run = pendingRun(viewer.ctx); await mount(viewer, ready, [run]);
+  await inspectPending(viewer, run, { can_recover: false, reason: "role_denied" });
+  await viewer.button("Finalize interrupted narrative").props.onClick(); assert.equal(viewer.requests.length, 0); viewer.unmount();
+  const app = harness(); const active = { ...pendingRun(app.ctx), worker_deadline_at: new Date(Date.now() + 60000).toISOString() };
+  await mount(app, ready, [active]); await inspectPending(app, active);
+  await app.button("Finalize interrupted narrative").props.onClick(); assert.equal(app.requests.length, 0);
+  const refresh = app.button("Refresh narrative records").props.onClick(); await app.settle(ready, [run]); await refresh;
+  await inspectPending(app, run); const captured = app.button("Finalize interrupted narrative").props.onClick;
+  const reload = app.button("Refresh narrative records").props.onClick(); await captured();
+  assert.equal(app.requests.length, 2); assert.ok(app.requests.every(r => !r.init.method)); await app.settle(); await reload; app.unmount();
+});
+
+test("recovery lock survives remount and completion only reads saved interrupted history", async () => {
+  const first = harness(); const run = pendingRun(first.ctx); await mount(first, ready, [run]); await inspectPending(first, run);
+  const pending = first.button("Finalize interrupted narrative").props.onClick(); const post = first.requests.shift(); first.unmount();
+  const second = harness({ ctx: first.ctx, transport: { helper: first.helper, requests: first.requests } });
+  await mount(second, { ...ready, can_start: false }, [run]); assert.equal(second.inspect().props.disabled, true);
+  post.resolve(interrupted(run)); await pending; await flush();
+  assert.equal(second.requests.length, 2); assert.ok(second.requests.every(r => !r.init.method));
+  await second.settle(ready, [interrupted(run)]);
+  const reading = second.inspect().props.onClick(); second.requests.shift().resolve(interrupted(run)); await reading;
+  assert.match(second.html(), /Finalized by actor/); assert.match(second.html(), /previous revision 1/);
+  assert.equal(second.requests.length, 0); second.unmount();
+});
+
+test("recovery helper rejects a wrong terminal identity or revision receipt", async () => {
+  const app = harness(); const run = pendingRun(app.ctx), binding = recoveryReady(run);
+  for (const change of [{ id: "other" }, { revision: 99 }, { recovery: { previous_revision: 99 } }, { status: "succeeded" }]) {
+    const result = app.helper.recoverNarrative(view, app.ctx, run, binding, new AbortController().signal);
+    app.requests.shift().resolve({ ...interrupted(run), ...change }); await assert.rejects(result);
+  }
+});
+
+test("saved pending history remains visible when recovery readiness fails", async () => {
+  const app = harness(); const run = pendingRun(app.ctx); await mount(app, ready, [run]);
+  const inspection = app.inspect().props.onClick(); app.requests.shift().resolve(run); await flush();
+  app.requests.shift().reject(new Error("readiness unavailable")); await inspection;
+  assert.match(app.html(), /Saved unverified narrative/); assert.match(app.html(), /previous revision|worker deadline/);
+  assert.match(app.html(), /recovery readiness unavailable/); assert.equal(app.button("Finalize interrupted narrative").props.disabled, true);
+  await app.button("Finalize interrupted narrative").props.onClick(); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("generation readiness failure preserves scoped history and explicit recovery without enabling generation", async () => {
+  const app = harness(); const run = pendingRun(app.ctx); app.render(); await flush();
+  app.requests.shift().reject(new Error("research disabled or remapped")); app.requests.shift().resolve([run]); await flush();
+  assert.match(app.html(), /generation readiness unavailable/);
+  assert.equal(app.button("Record mock narrative").props.disabled, true);
+  await inspectPending(app, run);
+  const pending = app.button("Finalize interrupted narrative").props.onClick(); const request = app.requests.shift();
+  assert.match(request.url, /narratives\/narrative\/recover$/); request.resolve(interrupted(run)); await flush();
+  await app.settle({ ...ready, can_start: false }, [interrupted(run)]); await pending;
+  assert.equal(app.button("Record mock narrative").props.disabled, true); app.unmount();
 });
