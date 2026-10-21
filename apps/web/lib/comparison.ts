@@ -69,12 +69,15 @@ export function startComparison(view: AccountView, providers: ComparisonChoice[]
   });
 }
 
-export async function discoverComparisonProvider(entry: CatalogEntry, mode: "mock" | "live", signal: AbortSignal) {
-  const body: components["schemas"]["DiscoveryRequest"] = { schema_version: "1", mode };
+export async function discoverComparisonProvider(entry: CatalogEntry, mode: "mock" | "live", signal: AbortSignal, apiKey?: string) {
+  const body: components["schemas"]["DiscoveryRequest"] = { schema_version: "1", mode,
+    expected_configuration_revision: entry.configuration_revision, ...(apiKey ? { api_key: apiKey } : {}) };
   const result = await api<DiscoveryResult>(`${prefix}/providers/${entry.provider}/discover`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
   });
   if (result.provider !== entry.provider || result.configuration_revision !== entry.configuration_revision
-    || result.requested_mode !== mode) throw new Error("Provider configuration changed. Refresh records.");
+    || result.requested_mode !== mode || (result.credential_source || "server") !== (apiKey ? "request" : "server")) {
+    throw new Error("Provider configuration changed. Refresh records.");
+  }
   return result;
 }

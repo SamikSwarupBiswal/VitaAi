@@ -33,11 +33,13 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
   const scope = view.account.organization_id;
   const [keys, setKeys] = useState<Record<string, string>>({});
   const requestKeys = useRef<Record<string, string>>({});
+  const eligibilityEpoch = useRef(0), renderedEpoch = eligibilityEpoch.current;
 
   const refresh = useCallback(async () => {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted) return;
     const current = ++sequence.current;
+    ++eligibilityEpoch.current;
     setReading(true); setReady(null); setCatalog([]); setRuns([]); setSelected(null); setRecovery(null); setDiscovery(null);
     setChoices({}); setLive({}); requestKeys.current = {}; setKeys({}); setError(null);
     try {
@@ -61,20 +63,21 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
 
   async function mutate(entry?: CatalogEntry) {
     const signal = lifetime.current?.signal;
+    const discoveryKey = entry && live[entry.provider] ? requestKeys.current[entry.provider] : undefined;
     const providers = catalog.filter(item => choices[item.provider]).map(item => ({ schema_version: "1" as const,
       provider: item.provider, mode: live[item.provider] ? "live" as const : "mock" as const,
       expected_configuration_revision: item.configuration_revision,
       ...(live[item.provider] && requestKeys.current[item.provider] ? { api_key: requestKeys.current[item.provider] } : {}) }));
-    if (!signal || signal.aborted || locked.current || comparisonPending.has(scope) || reading || !ready
+    if (!signal || signal.aborted || renderedEpoch !== eligibilityEpoch.current || locked.current || comparisonPending.has(scope) || reading || !ready
       || (entry ? role !== "admin" : role === "viewer" || !ready.can_start || !providers.length || providers.length > 4)
-      || (entry ? live[entry.provider] && !entry.live_configured
+      || (entry ? !catalog.includes(entry) || live[entry.provider] && !entry.live_configured && !(entry.byok_allowed && discoveryKey)
         : providers.some(choice => choice.mode === "live" && !catalog.find(item => item.provider === choice.provider)?.live_configured
           && !(catalog.find(item => item.provider === choice.provider)?.byok_allowed && choice.api_key)))) return;
-    locked.current = true; comparisonPending.add(scope); ++sequence.current;
+    locked.current = true; comparisonPending.add(scope); ++sequence.current; ++eligibilityEpoch.current;
     setBusy(true); setReady(null); requestKeys.current = {}; setKeys({}); setSelected(null); setRecovery(null); setDiscovery(null); setError(null); setNotice(null);
     let found: DiscoveryResult | null = null;
     try {
-      if (entry) found = await discoverComparisonProvider(entry, live[entry.provider] ? "live" : "mock", signal);
+      if (entry) found = await discoverComparisonProvider(entry, live[entry.provider] ? "live" : "mock", signal, discoveryKey);
       else {
         const run = checkComparisonRun(view, await startComparison(view, providers, signal));
         if (run.account_revision !== view.account.revision || run.snapshot_hash !== view.assessment.snapshot_hash
@@ -147,15 +150,15 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
       {entry.provider === "foundry" && <p>Foundry requests use the configured deployment name. Discovered model IDs do not select deployments or prove inference compatibility.</p>}
       <label><input type="checkbox" checked={!!choices[entry.provider]} disabled={disabled || role === "viewer" || (!choices[entry.provider] && chosenCount >= 4)}
         onChange={event => { if (event.target.checked && !choices[entry.provider] && chosenCount >= 4) return;
-          setChoices({ ...choices, [entry.provider]: event.target.checked }); }} />Include {entry.provider} in comparison</label>
+          ++eligibilityEpoch.current; setChoices({ ...choices, [entry.provider]: event.target.checked }); }} />Include {entry.provider} in comparison</label>
       <label><input type="checkbox" checked={!!live[entry.provider]} disabled={disabled || role === "viewer" || (!live[entry.provider] && !(entry.live_configured || entry.byok_allowed && keys[entry.provider]))}
-        onChange={event => setLive({ ...live, [entry.provider]: event.target.checked })} />Use live {entry.provider} for the next explicit request</label>
+        onChange={event => { ++eligibilityEpoch.current; setLive({ ...live, [entry.provider]: event.target.checked }); }} />Use live {entry.provider} for the next explicit request</label>
       {entry.byok_allowed && <>
-        <p>Optional key for this comparison only. Kept in panel memory, cleared on submit/refresh/navigation; the application uses no browser storage. Sent only to VitaAi and the fixed provider endpoint. Leave empty to use the server credential. Discovery uses server configuration.</p>
-        <label>{entry.provider} key for one comparison<input type="password" autoComplete="off" spellCheck={false}
+        <p>Optional key for one explicit live comparison or admin discovery. Kept in panel memory, cleared on submit/refresh/navigation; the application uses no browser storage. Sent only to VitaAi and the fixed provider endpoint. Leave empty to use the server credential. Discovery only lists models and never starts inference.</p>
+        <label>{entry.provider} key for one request<input type="password" autoComplete="off" spellCheck={false}
           maxLength={512} value={keys[entry.provider] || ""} disabled={disabled || role === "viewer"}
-          onChange={event => { requestKeys.current = { ...requestKeys.current, [entry.provider]: event.target.value }; setKeys(requestKeys.current); }} /></label>
-        <button disabled={disabled || !keys[entry.provider]} onClick={() => { requestKeys.current = { ...requestKeys.current, [entry.provider]: "" }; setKeys(requestKeys.current); }}>Clear {entry.provider} key</button>
+          onChange={event => { ++eligibilityEpoch.current; requestKeys.current = { ...requestKeys.current, [entry.provider]: event.target.value }; setKeys(requestKeys.current); }} /></label>
+        <button disabled={disabled || !keys[entry.provider]} onClick={() => { ++eligibilityEpoch.current; requestKeys.current = { ...requestKeys.current, [entry.provider]: "" }; setKeys(requestKeys.current); }}>Clear {entry.provider} key</button>
       </>}
       <button disabled={disabled || role !== "admin"} onClick={() => mutate(entry)}>Discover {entry.provider} models</button>
     </fieldset>)}
@@ -165,6 +168,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     {error && <p role="alert" className="error-banner">{error}</p>}
     {discovery && <section aria-label="Model discovery"><h2>Model discovery</h2>
       <p>{discovery.provider} · requested {discovery.requested_mode} · returned {discovery.mode} · source {discovery.source} · configuration {discovery.configuration_revision} · observed {discovery.observed_at}.</p>
+      <p>Credential source: {discovery.credential_source === "request" ? "one-request user key (not retained)" : "server configuration"}.</p>
       <p>At most 100 IDs; {discovery.has_more ? "more models may exist; pagination was not followed" : "no further page reported"}. Discovery is separate from inference and compatibility validation.</p>
       {discovery.error_code && <p>{discovery.error_code}</p>}<ul>{discovery.models?.map(model => <li key={model}>{model}</li>)}</ul>
     </section>}

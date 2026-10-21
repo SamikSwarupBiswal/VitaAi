@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from .config import ComparisonProviderConfig
 from .contracts import Contract
@@ -40,6 +40,22 @@ class CatalogEntry(Contract):
 
 class DiscoveryRequest(Contract):
     mode: Literal["mock", "live"] = "mock"
+    expected_configuration_revision: int | None = Field(default=None, ge=1)
+    api_key: SecretStr | None = Field(default=None, exclude=True, repr=False, min_length=16, max_length=512)
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def bounded_key(cls, value):
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if raw is not None and (not isinstance(raw, str) or not re.fullmatch(r"[A-Za-z0-9_.:/+=-]{16,512}", raw)):
+            raise ValueError("Invalid request credential")
+        return value
+
+    @model_validator(mode="after")
+    def explicit_live_key(self):
+        if self.api_key is not None and (self.mode != "live" or self.expected_configuration_revision is None):
+            raise ValueError("Request credentials require explicit live mode and configuration revision")
+        return self
 
 
 class DiscoveryResult(Contract):
@@ -52,6 +68,7 @@ class DiscoveryResult(Contract):
     models: list[str] = Field(default_factory=list, max_length=100)
     has_more: bool = False
     error_code: str | None = None
+    credential_source: Literal["server", "request"] = "server"
 
 
 class CatalogFailure(Exception):
@@ -124,9 +141,19 @@ class ProviderCatalog:
 
     def discover(self, organization_id, provider, body):
         config = self.config(organization_id, provider)
+        if body.expected_configuration_revision is not None and body.expected_configuration_revision != config.revision:
+            raise PolicyDenied("comparison_configuration_changed", 409)
+        if body.api_key is not None:
+            if not self.settings.comparison_byok_enabled:
+                raise PolicyDenied("comparison_byok_disabled", 403)
+            if not (config.enabled and config.live_enabled and config.model
+                    and (provider != "foundry" or config.resource_name)):
+                raise PolicyDenied("provider_unconfigured", 409)
+            config.api_key = body.api_key
         result = DiscoveryResult(provider=provider, requested_mode=body.mode,
             mode="disabled" if not config.enabled else body.mode, source="none",
-            configuration_revision=config.revision, observed_at=datetime.now(UTC))
+            configuration_revision=config.revision, observed_at=datetime.now(UTC),
+            credential_source="request" if body.api_key is not None else "server")
         if not config.enabled:
             result.error_code = "provider_disabled"
         elif body.mode == "mock":
@@ -136,6 +163,8 @@ class ProviderCatalog:
         else:
             try:
                 payload = self.request(provider, config, "GET", "/models?limit=100" if provider == "anthropic" else "/models")
+                if config.api_key.get_secret_value() in json.dumps(payload):
+                    raise CatalogFailure("credential_echo_rejected")
                 data = payload.get("data")
                 if not isinstance(data, list) or len(data) > 2000:
                     raise CatalogFailure("invalid_provider_response")
@@ -181,12 +210,15 @@ def install_catalog_routes(app, store, identity, settings, transport=None):
                 raise PolicyDenied("provider_admin_required", 403)
             organization = fresh.organization_id
             config = catalog.config(organization, provider)
+            byok_enabled = settings.comparison_byok_enabled
         result = catalog.discover(organization, provider, body)
         with workflow._transaction(actor.id, write=False) as (_, fresh):
             if fresh.organization_id != organization or fresh.role != "admin":
                 raise PolicyDenied("provider_authority_changed", 403)
             if catalog.config(organization, provider) != config:
                 raise PolicyDenied("comparison_configuration_changed", 409)
+            if body.api_key is not None and (not byok_enabled or not settings.comparison_byok_enabled):
+                raise PolicyDenied("comparison_byok_disabled", 403)
         return result
 
     app.include_router(router)

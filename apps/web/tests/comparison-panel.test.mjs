@@ -247,7 +247,7 @@ test("discovery is a separate explicit admin action, mock by default and dated w
   const app = harness(); await mount(app);
   const pending = app.button("Discover openai models").props.onClick(); const request = app.requests.shift();
   assert.match(request.url, /providers\/openai\/discover$/);
-  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", mode: "mock" });
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", mode: "mock", expected_configuration_revision: 7 });
   request.resolve({ provider: "openai", configuration_revision: 7, requested_mode: "mock", mode: "mock", source: "configuration",
     observed_at: "2026-10-18T00:00:00Z", models: ["requested-alias"], has_more: true }); await flush();
   await app.settle(); await pending;
@@ -318,6 +318,81 @@ test("failed uncertainty refresh cannot restore eligibility; cancelled initial r
   assert.ok(late.every(request => request.init.signal.aborted));
   late[0].resolve(ready); late[1].resolve(catalog); late[2].resolve([{ ...run, actor_id: "Private late text" }]); await flush();
   assert.doesNotMatch(renderToStaticMarkup(cancelled.render()), /Private late text/);
+});
+
+test("request-only discovery clears before dispatch, binds revision and never compares or retries", async () => {
+  const app = harness("admin", new Set(), [{ ...catalog[0], byok_allowed: true, live_configured: false }]); await mount(app);
+  app.input(2).props.onChange({ target: { value: "synthetic-discovery-key" } });
+  app.input(1).props.onChange({ target: { checked: true } });
+  const action = app.button("Discover openai models").props.onClick;
+  const pending = action(); action();
+  const request = app.requests.shift(); assert.equal(app.requests.length, 0);
+  assert.equal(app.input(2).props.value, "");
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", mode: "live",
+    expected_configuration_revision: 7, api_key: "synthetic-discovery-key" });
+  request.resolve({ provider: "openai", configuration_revision: 7, requested_mode: "live", mode: "live",
+    credential_source: "request", models: ["discovered-model"], observed_at: "2026-10-21T00:00:00Z" });
+  await flush(); assert.ok(app.requests.every(item => !item.init.method)); await app.settle(); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /one-request user key \(not retained\)/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("cleared discovery keys and obsolete entry callbacks cannot send another request", async () => {
+  for (const clear of ["button", "focus", "unmount"]) {
+    const app = harness("admin", new Set(), [{ ...catalog[0], byok_allowed: true, live_configured: false }]); await mount(app);
+    app.input(2).props.onChange({ target: { value: "synthetic-discovery-key" } });
+    app.input(1).props.onChange({ target: { checked: true } });
+    const action = app.button("Discover openai models").props.onClick;
+    if (clear === "button") app.button("Clear openai key").props.onClick();
+    else if (clear === "focus") { app.focus(); await flush(); await app.settle(); }
+    else app.unmount();
+    await action(); assert.equal(app.requests.length, 0); if (clear !== "unmount") app.unmount();
+  }
+});
+
+test("pre-refresh discovery callback cannot use a newly entered key without renewed live selection", async () => {
+  const app = harness("admin", new Set(), [{ ...catalog[0], byok_allowed: true, live_configured: false }]); await mount(app);
+  app.input(2).props.onChange({ target: { value: "synthetic-old-discovery-key" } });
+  app.input(1).props.onChange({ target: { checked: true } });
+  const obsolete = app.button("Discover openai models").props.onClick;
+  app.focus(); await flush(); await app.settle();
+  assert.equal(app.input(1).props.checked, false);
+  app.input(2).props.onChange({ target: { value: "synthetic-new-discovery-key" } });
+  await obsolete(); assert.equal(app.requests.length, 0);
+  const pending = app.button("Discover openai models").props.onClick(), request = app.requests.shift();
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", mode: "mock", expected_configuration_revision: 7 });
+  request.resolve({ provider: "openai", requested_mode: "mock", configuration_revision: 7, credential_source: "server" });
+  await flush(); await app.settle(); await pending; app.unmount();
+});
+
+test("live, key and choice edits invalidate captured discovery and comparison callbacks", async () => {
+  for (const edit of ["live", "key", "choice"]) {
+    const app = harness("admin", new Set(), [{ ...catalog[0], byok_allowed: true }]); await mount(app);
+    app.input(2).props.onChange({ target: { value: "synthetic-first-discovery-key" } });
+    app.input(0).props.onChange({ target: { checked: true } });
+    app.input(1).props.onChange({ target: { checked: true } });
+    const discover = app.button("Discover openai models").props.onClick;
+    const compare = app.button("Compare selected providers").props.onClick;
+    if (edit === "live") app.input(1).props.onChange({ target: { checked: false } });
+    else if (edit === "key") app.input(2).props.onChange({ target: { value: "synthetic-replacement-key" } });
+    else app.input(0).props.onChange({ target: { checked: false } });
+    await discover(); await compare(); assert.equal(app.requests.length, 0); app.unmount();
+  }
+});
+
+test("uncertain discovery only reads, and crossed credential provenance hides output", async () => {
+  for (const result of [null, { provider: "openai", configuration_revision: 7, requested_mode: "live", mode: "live",
+    credential_source: "server", models: ["crossed-private-model"] }]) {
+    const app = harness("admin", new Set(), [{ ...catalog[0], byok_allowed: true }]); await mount(app);
+    app.input(2).props.onChange({ target: { value: "synthetic-discovery-key" } });
+    app.input(1).props.onChange({ target: { checked: true } });
+    const pending = app.button("Discover openai models").props.onClick(), request = app.requests.shift();
+    if (result) request.resolve(result); else request.reject(new Error("uncertain"));
+    await flush(); assert.ok(app.requests.every(item => !item.init.method && !item.init.body));
+    await app.settle(); await pending;
+    assert.doesNotMatch(renderToStaticMarkup(app.render()), /crossed-private-model/);
+    assert.equal(app.input(2).props.value, ""); assert.equal(app.requests.length, 0); app.unmount();
+  }
 });
 
 test("crossed discovery configuration or requested mode is rejected without repeating POST", async () => {

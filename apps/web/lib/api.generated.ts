@@ -2037,6 +2037,10 @@ export interface components {
              * @enum {string}
              */
             mode: "mock" | "live";
+            /** Expected Configuration Revision */
+            expected_configuration_revision?: number | null;
+            /** Api Key */
+            api_key?: string | null;
         };
         /** DiscoveryResult */
         DiscoveryResult: {
@@ -2082,6 +2086,12 @@ export interface components {
             has_more: boolean;
             /** Error Code */
             error_code?: string | null;
+            /**
+             * Credential Source
+             * @default server
+             * @enum {string}
+             */
+            credential_source: "server" | "request";
         };
         /** Evidence */
         Evidence: {
