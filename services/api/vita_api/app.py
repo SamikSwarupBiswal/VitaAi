@@ -23,6 +23,7 @@ from .pipeline import Pipeline, PipelineRequest, PipelineRun
 from .provider_catalog import PREFIX as COMPARISON_PREFIX
 from .provider_catalog import install_catalog_routes
 from .provider_comparison import install_comparison_routes
+from .provider_probe import install_probe_routes
 from .research import PREFIX as RESEARCH_PREFIX
 from .research_narrative import install_narrative_routes
 from .research_service import install_research_routes
@@ -215,6 +216,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_narrative_routes(app, store, identity, settings, narrative_transport)
     install_catalog_routes(app, store, identity, settings, comparison_transport)
     install_comparison_routes(app, store, identity, settings, comparison_transport)
+    install_probe_routes(app, store, identity, settings, comparison_transport)
     return app
 
 

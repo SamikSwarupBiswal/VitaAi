@@ -1261,6 +1261,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-comparison/providers/{provider}/test-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness */
+        get: operations["readiness_api_provider_comparison_providers__provider__test_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-comparison/providers/{provider}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start */
+        post: operations["start_api_provider_comparison_providers__provider__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-comparison/tests/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_api_provider_comparison_tests__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-comparison/providers/{provider}/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_provider_comparison_providers__provider__tests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3462,6 +3530,148 @@ export interface components {
             connector_id: string;
             /** Payload */
             payload: components["schemas"]["TaskPayload"] | components["schemas"]["NotePayload"] | components["schemas"]["OutlookPayload"];
+        };
+        /** ProbeReadiness */
+        ProbeReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Model */
+            model: string | null;
+            /** Expected Response Model */
+            expected_response_model: string | null;
+            /** Can Start */
+            can_start: boolean;
+            /** Live Configured */
+            live_configured: boolean;
+            /** Byok Allowed */
+            byok_allowed: boolean;
+            /** Pending Run Id */
+            pending_run_id: string | null;
+            /** Next Start At */
+            next_start_at: string | null;
+        };
+        /** ProbeRequest */
+        ProbeRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Mode
+             * @default mock
+             * @enum {string}
+             */
+            mode: "mock" | "live";
+            /** Expected Configuration Revision */
+            expected_configuration_revision: number;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** ProbeRun */
+        ProbeRun: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            /**
+             * Policy Version
+             * @default synthetic-probe-1
+             * @constant
+             */
+            policy_version: "synthetic-probe-1";
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Model */
+            model: string | null;
+            /** Expected Response Model */
+            expected_response_model: string | null;
+            /** Response Model */
+            response_model?: string | null;
+            /**
+             * Credential Source
+             * @enum {string}
+             */
+            credential_source: "server" | "request";
+            /**
+             * Requested Mode
+             * @enum {string}
+             */
+            requested_mode: "mock" | "live";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "disabled" | "mock" | "live" | "fallback";
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded";
+            /**
+             * Validation
+             * @default not_run
+             * @enum {string}
+             */
+            validation: "not_run" | "rejected" | "synthetic_compatibility_valid";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Worker Deadline At
+             * Format: date-time
+             */
+            worker_deadline_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Request Id */
+            request_id?: string | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Error Code */
+            error_code?: string | null;
         };
         /** ProviderStatus */
         ProviderStatus: {
@@ -6811,6 +7021,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComparisonRun"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readiness_api_provider_comparison_providers__provider__test_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_api_provider_comparison_providers__provider__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_provider_comparison_tests__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_provider_comparison_providers__provider__tests_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeRun"][];
                 };
             };
             /** @description Validation Error */
