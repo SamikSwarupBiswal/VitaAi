@@ -1637,6 +1637,11 @@ export interface components {
             status: "disabled" | "unconfigured" | "configured_unverified";
             /** Capabilities */
             capabilities: ("model_discovery" | "account_analysis")[];
+            /**
+             * Byok Allowed
+             * @default false
+             */
+            byok_allowed: boolean;
         };
         /** CommunicationDrafts */
         CommunicationDrafts: {
@@ -1699,6 +1704,8 @@ export interface components {
             mode: "mock" | "live";
             /** Expected Configuration Revision */
             expected_configuration_revision: number;
+            /** Api Key */
+            api_key?: string | null;
         };
         /** ComparisonReadiness */
         ComparisonReadiness: {
@@ -1887,6 +1894,12 @@ export interface components {
             /** Error Code */
             error_code?: string | null;
             analysis?: components["schemas"]["Analysis"] | null;
+            /**
+             * Credential Source
+             * @default server
+             * @enum {string}
+             */
+            credential_source: "server" | "request";
         };
         /** ComparisonRun */
         ComparisonRun: {

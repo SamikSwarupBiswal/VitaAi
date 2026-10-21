@@ -31,13 +31,15 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
   const [error, setError] = useState<string | null>(null);
   const lifetime = useRef<AbortController | null>(null), sequence = useRef(0), locked = useRef(false);
   const scope = view.account.organization_id;
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  const requestKeys = useRef<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted) return;
     const current = ++sequence.current;
     setReading(true); setReady(null); setCatalog([]); setRuns([]); setSelected(null); setRecovery(null); setDiscovery(null);
-    setChoices({}); setLive({}); setError(null);
+    setChoices({}); setLive({}); requestKeys.current = {}; setKeys({}); setError(null);
     try {
       const value = await readComparisons(view, signal);
       if (!signal.aborted && current === sequence.current) {
@@ -53,7 +55,7 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     queueMicrotask(() => { if (!controller.signal.aborted) void refresh(); });
     const reload = () => { void refresh(); };
     window.addEventListener("focus", reload); window.addEventListener("vitaai-comparison-changed", reload);
-    return () => { controller.abort(); window.removeEventListener("focus", reload);
+    return () => { controller.abort(); requestKeys.current = {}; window.removeEventListener("focus", reload);
       window.removeEventListener("vitaai-comparison-changed", reload); };
   }, [refresh]);
 
@@ -61,13 +63,15 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     const signal = lifetime.current?.signal;
     const providers = catalog.filter(item => choices[item.provider]).map(item => ({ schema_version: "1" as const,
       provider: item.provider, mode: live[item.provider] ? "live" as const : "mock" as const,
-      expected_configuration_revision: item.configuration_revision }));
+      expected_configuration_revision: item.configuration_revision,
+      ...(live[item.provider] && requestKeys.current[item.provider] ? { api_key: requestKeys.current[item.provider] } : {}) }));
     if (!signal || signal.aborted || locked.current || comparisonPending.has(scope) || reading || !ready
       || (entry ? role !== "admin" : role === "viewer" || !ready.can_start || !providers.length || providers.length > 4)
       || (entry ? live[entry.provider] && !entry.live_configured
-        : providers.some(choice => choice.mode === "live" && !catalog.find(item => item.provider === choice.provider)?.live_configured))) return;
+        : providers.some(choice => choice.mode === "live" && !catalog.find(item => item.provider === choice.provider)?.live_configured
+          && !(catalog.find(item => item.provider === choice.provider)?.byok_allowed && choice.api_key)))) return;
     locked.current = true; comparisonPending.add(scope); ++sequence.current;
-    setBusy(true); setReady(null); setSelected(null); setRecovery(null); setDiscovery(null); setError(null); setNotice(null);
+    setBusy(true); setReady(null); requestKeys.current = {}; setKeys({}); setSelected(null); setRecovery(null); setDiscovery(null); setError(null); setNotice(null);
     let found: DiscoveryResult | null = null;
     try {
       if (entry) found = await discoverComparisonProvider(entry, live[entry.provider] ? "live" : "mock", signal);
@@ -137,15 +141,22 @@ function ComparisonAccount({ view, role }: { view: AccountView; role: string }) 
     {ready?.pending_run_id && <p>Pending run {ready.pending_run_id} blocks new starts, including after worker loss. Inspect that run to check explicit finalization eligibility; reading never retries it.</p>}
     {ready?.next_start_at && <p>60-second account cooldown ends {ready.next_start_at}. Refresh records to check eligibility.</p>}
     {role === "viewer" && <p>Read only. Your current role cannot compare or discover providers.</p>}
-    <p>Choose up to four providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Models and credentials are managed on the server.</p>
+    <p>Choose up to four providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Models and endpoints are managed on the server.</p>
     {catalog.map(entry => <fieldset key={entry.provider} disabled={disabled}><legend>{entry.provider}</legend>
       <p>{entry.status} · configuration revision {entry.configuration_revision} · requested model {entry.model || "Unconfigured"} · expected response model {entry.expected_response_model || "Unconfigured"}.</p>
       {entry.provider === "foundry" && <p>Foundry requests use the configured deployment name. Discovered model IDs do not select deployments or prove inference compatibility.</p>}
       <label><input type="checkbox" checked={!!choices[entry.provider]} disabled={disabled || role === "viewer" || (!choices[entry.provider] && chosenCount >= 4)}
         onChange={event => { if (event.target.checked && !choices[entry.provider] && chosenCount >= 4) return;
           setChoices({ ...choices, [entry.provider]: event.target.checked }); }} />Include {entry.provider} in comparison</label>
-      <label><input type="checkbox" checked={!!live[entry.provider]} disabled={disabled || role === "viewer" || !entry.live_configured}
+      <label><input type="checkbox" checked={!!live[entry.provider]} disabled={disabled || role === "viewer" || (!live[entry.provider] && !(entry.live_configured || entry.byok_allowed && keys[entry.provider]))}
         onChange={event => setLive({ ...live, [entry.provider]: event.target.checked })} />Use live {entry.provider} for the next explicit request</label>
+      {entry.byok_allowed && <>
+        <p>Optional key for this comparison only. Kept in panel memory, cleared on submit/refresh/navigation; the application uses no browser storage. Sent only to VitaAi and the fixed provider endpoint. Leave empty to use the server credential. Discovery uses server configuration.</p>
+        <label>{entry.provider} key for one comparison<input type="password" autoComplete="off" spellCheck={false}
+          maxLength={512} value={keys[entry.provider] || ""} disabled={disabled || role === "viewer"}
+          onChange={event => { requestKeys.current = { ...requestKeys.current, [entry.provider]: event.target.value }; setKeys(requestKeys.current); }} /></label>
+        <button disabled={disabled || !keys[entry.provider]} onClick={() => { requestKeys.current = { ...requestKeys.current, [entry.provider]: "" }; setKeys(requestKeys.current); }}>Clear {entry.provider} key</button>
+      </>}
       <button disabled={disabled || role !== "admin"} onClick={() => mutate(entry)}>Discover {entry.provider} models</button>
     </fieldset>)}
     <div className="source-actions"><button disabled={disabled || role === "viewer" || !ready?.can_start || !Object.values(choices).some(Boolean)}
@@ -194,6 +205,7 @@ function ComparisonRecord({ run, view }: { run: ComparisonRun; view: AccountView
     {run.results.map(result => <section key={result.id} aria-label={`${result.provider} result`}><h4>{result.provider}</h4>
       <p>Result {result.id} · requested {result.requested_mode} · returned {result.mode} / {result.status} · configuration {result.configuration_revision}.</p>
       <p>Requested model {result.model || "Unconfigured"}; expected response model {result.expected_response_model || "Unconfigured"}; actual response model {result.response_model || "Not returned"}.</p>
+      <p>Credential source: {result.credential_source === "request" ? "one-request user key (not retained)" : "server configuration"}.</p>
       <p>Validation {result.validation}; factual confidence {result.factual_confidence}. Schema and evidence-reference checks do not certify factual truth.</p>
       <p>Started {result.started_at || "Not started"}; finished {result.finished_at || "Pending"}; latency {result.latency_ms ?? "Not supplied"} ms; request {result.request_id || "Not supplied"}; input tokens {result.input_tokens ?? "Not supplied"}; output tokens {result.output_tokens ?? "Not supplied"}.</p>
       {result.error_code && <p>Server result: {result.error_code}</p>}

@@ -153,6 +153,63 @@ function harness(role = "admin", sharedPending = new Set(), available = catalog)
 }
 async function mount(app, status = ready, history = []) { app.render(); await flush(); await app.settle(status, history); }
 
+test("BYOK is sent once only on explicit live compare and clears before uncertainty refresh", async () => {
+  const available = [{ ...catalog[0], byok_allowed: true, live_configured: false }];
+  const app = harness("seller", new Set(), available); await mount(app);
+  const key = "synthetic-private-one-use-key";
+  assert.equal(app.input(2).props.type, "password");
+  assert.equal(app.input(2).props.autoComplete, "off");
+  app.input(2).props.onChange({ target: { value: key } });
+  app.input(0).props.onChange({ target: { checked: true } });
+  app.input(1).props.onChange({ target: { checked: true } });
+  const action = app.button("Compare selected providers").props.onClick;
+  const pending = action(); action();
+  const request = app.requests.shift(); assert.equal(app.requests.length, 0);
+  const body = JSON.parse(request.init.body);
+  assert.equal(body.providers[0].api_key, key); assert.equal(body.providers[0].mode, "live");
+  assert.equal(app.input(2).props.value, "");
+  request.reject(new Error("uncertain")); await flush();
+  assert.ok(app.requests.every(item => !item.init.method && !item.init.body));
+  await app.settle({ ...ready, can_start: false, pending_run_id: run.id }, []); await pending;
+  assert.equal(app.input(2).props.value, ""); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("clearing a request key allows returning to mock when no server key exists", async () => {
+  const available = [{ ...catalog[0], byok_allowed: true, live_configured: false }];
+  for (const clear of ["button", "keyboard"]) {
+    const app = harness("seller", new Set(), available); await mount(app);
+    app.input(2).props.onChange({ target: { value: "synthetic-private-one-use-key" } });
+    app.input(0).props.onChange({ target: { checked: true } });
+    app.input(1).props.onChange({ target: { checked: true } });
+    if (clear === "button") app.button("Clear openai key").props.onClick();
+    else app.input(2).props.onChange({ target: { value: "" } });
+    assert.equal(app.input(1).props.checked, true);
+    assert.equal(app.input(1).props.disabled, false);
+    app.input(1).props.onChange({ target: { checked: false } });
+    const pending = app.button("Compare selected providers").props.onClick();
+    const request = app.requests.shift();
+    assert.deepEqual(JSON.parse(request.init.body).providers, [{ schema_version: "1", provider: "openai",
+      mode: "mock", expected_configuration_revision: 7 }]);
+    request.resolve(run); await flush(); await app.settle(); await pending; app.unmount();
+  }
+});
+
+test("clear, focus and unmount prevent captured BYOK callbacks from reusing cleared keys", async () => {
+  const available = [{ ...catalog[0], byok_allowed: true, live_configured: false }];
+  for (const clear of ["button", "focus", "unmount"]) {
+    const app = harness("seller", new Set(), available); await mount(app);
+    app.input(2).props.onChange({ target: { value: "synthetic-private-one-use-key" } });
+    app.input(0).props.onChange({ target: { checked: true } });
+    app.input(1).props.onChange({ target: { checked: true } });
+    const captured = app.button("Compare selected providers").props.onClick;
+    if (clear === "button") app.button("Clear openai key").props.onClick();
+    else if (clear === "focus") { app.focus(); await flush(); await app.settle(); }
+    else app.unmount();
+    await captured(); assert.equal(app.requests.length, 0);
+    if (clear !== "unmount") { assert.equal(app.input(2).props.value, ""); app.unmount(); }
+  }
+});
+
 
 test("reads never dispatch; deliberate mock choices bind exact snapshot and configuration once", async () => {
   const app = harness(); await mount(app);

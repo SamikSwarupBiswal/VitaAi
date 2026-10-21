@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -49,6 +49,21 @@ class ComparisonChoice(Contract):
     provider: ProviderId
     mode: Literal["mock", "live"] = "mock"
     expected_configuration_revision: int = Field(ge=1)
+    api_key: SecretStr | None = Field(default=None, exclude=True, repr=False, min_length=16, max_length=512)
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def bounded_key(cls, value):
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if raw is not None and (not isinstance(raw, str) or not re.fullmatch(r"[A-Za-z0-9_.:/+=-]{16,512}", raw)):
+            raise ValueError("Invalid request credential")
+        return value
+
+    @model_validator(mode="after")
+    def explicit_live_key(self):
+        if self.api_key is not None and self.mode != "live":
+            raise ValueError("Request credentials require explicit live mode")
+        return self
 
 
 class ComparisonRequest(Contract):
@@ -119,6 +134,7 @@ class ComparisonResult(Contract):
     output_tokens: int | None = None
     error_code: str | None = None
     analysis: Analysis | None = None
+    credential_source: Literal["server", "request"] = "server"
 
 
 class ComparisonRun(Contract):
@@ -318,6 +334,11 @@ class ComparisonService:
             if latest is not None and int(now.timestamp()) - latest < 60:
                 raise PolicyDenied("comparison_rate_limited", 429)
             configs = [self.catalog.config(actor.organization_id, choice.provider) for choice in body.providers]
+            for choice, config in zip(body.providers, configs, strict=True):
+                if choice.api_key is not None and not (self.catalog.settings.comparison_byok_enabled
+                        and config.enabled and config.live_enabled and config.model
+                        and (choice.provider != "foundry" or config.resource_name)):
+                    raise PolicyDenied("comparison_byok_unavailable", 409)
             if any(config.revision != choice.expected_configuration_revision
                    for config, choice in zip(configs, body.providers, strict=True)):
                 raise PolicyDenied("comparison_configuration_changed", 409)
@@ -329,8 +350,12 @@ class ComparisonService:
                     provider=choice.provider, requested_mode=choice.mode,
                     mode="disabled" if not config.enabled else choice.mode,
                     configuration_revision=config.revision, model=config.model or None,
+                    credential_source="request" if choice.api_key is not None else "server",
                     expected_response_model=config.response_model or config.model or None)
                     for config, choice in zip(configs, body.providers, strict=True)])
+            if any(choice.api_key is not None and choice.api_key.get_secret_value() in run.model_dump_json()
+                   for choice in body.providers):
+                raise PolicyDenied("comparison_credential_conflicts_with_context", 409)
             connection.execute(comparisons.insert().values(id=str(run.id), organization_id=run.organization_id,
                 account_id=str(account_id), started_at=int(now.timestamp()), status="pending", payload=run.model_dump(mode="json")))
         # One durable intent commits before any provider call. A lost worker retains pending; reads never retry it.
@@ -342,6 +367,8 @@ class ComparisonService:
                         self.check(connection, fresh, run)
                         if self.catalog.config(run.organization_id, run.results[index].provider) != config:
                             raise PolicyDenied("comparison_configuration_changed", 409)
+                        if body.providers[index].api_key is not None and not self.catalog.settings.comparison_byok_enabled:
+                            raise PolicyDenied("comparison_byok_unavailable", 409)
 
                 before_request()
                 # Reserve processing durably before dispatch. A paused reservation may have dispatched;
@@ -356,18 +383,26 @@ class ComparisonService:
                     result.status, result.error_code = "unavailable", "provider_disabled"
                 elif result.mode == "mock":
                     result.status = "unavailable"  # No fabricated advisory inference; baseline is saved separately.
-                elif not (config.live_enabled and config.api_key.get_secret_value() and config.model
+                elif not (config.live_enabled and (body.providers[index].api_key is not None or config.api_key.get_secret_value()) and config.model
                           and (result.provider != "foundry" or config.resource_name)):
                     result.mode, result.status, result.error_code = "fallback", "unavailable", "provider_unconfigured"
                 else:
-                    result = analyze(self.catalog, result.provider, config, run.snapshot.model_copy(deep=True), result,
+                    effective = config.model_copy(update={"api_key": body.providers[index].api_key}) if body.providers[index].api_key is not None else config
+                    result = analyze(self.catalog, result.provider, effective, run.snapshot.model_copy(deep=True), result,
                         before_request=before_request)
+                    key = body.providers[index].api_key
+                    if key is not None and key.get_secret_value() in result.model_dump_json():
+                        result.analysis, result.request_id, result.response_model = None, None, None
+                        result.mode, result.status, result.validation = "fallback", "invalid_output", "rejected"
+                        result.error_code = "credential_in_provider_output"
                 result.finished_at = result.finished_at or datetime.now(UTC)
                 with self.workflow._transaction(actor_id) as (connection, fresh):
                     self.worker_check(connection, run)
                     self.check(connection, fresh, run)
                     if self.catalog.config(run.organization_id, result.provider) != config:
                         raise PolicyDenied("comparison_configuration_changed", 409)
+                    if body.providers[index].api_key is not None and not self.catalog.settings.comparison_byok_enabled:
+                        raise PolicyDenied("comparison_byok_unavailable", 409)
                     run.results[index] = result
                     if index == len(configs) - 1:
                         run.status, run.finished_at = "completed", datetime.now(UTC)
@@ -385,6 +420,10 @@ class ComparisonService:
                     saved.status, saved.finished_at = "discarded", self.clock()
                     self.save(connection, saved)
             raise
+
+        finally:
+            for choice in body.providers:
+                choice.api_key = None
 
     def get(self, actor_id, run_id):
         with self.workflow._transaction(actor_id, write=False) as (connection, actor):

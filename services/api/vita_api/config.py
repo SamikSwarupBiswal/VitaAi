@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     nebius_model: str = ""
     nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
     comparison_organization_id: str = Field(default="", pattern=r"^(?:[A-Za-z0-9_-]{1,80})?$")
+    comparison_byok_enabled: bool = False
     comparison_providers: dict[Literal["nebius", "openai", "anthropic", "nvidia", "foundry"], ComparisonProviderConfig] = Field(
         default_factory=dict, max_length=5)
     research_enabled: bool = False
