@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountView } from "@/lib/api";
-import { checkNarrative, narrativePending, readNarrative, readNarratives, readNarrativeRecovery, recoverNarrative, startNarrative,
+import { narrativePending, readNarrative, readNarratives, readNarrativeRecovery, readPendingNarrative, recoverNarrative, startNarrative,
   type NarrativeReadiness, type NarrativeRecoveryReadiness, type NarrativeRun } from "@/lib/research-narrative";
 import { researchContextUsable, researchSourceMatchedLink, type ResearchContextView } from "@/lib/research";
 
@@ -78,14 +78,15 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     }
   }
 
-  async function inspect(id: string) {
+  async function inspect(id: string, accountPending = false) {
     const signal = lifetime.current?.signal;
-    if (!signal || signal.aborted || locked.current || reading) return;
+    if (!signal || signal.aborted || locked.current || reading || narrativePending.has(scope)
+      || (accountPending && (!ready || readyBinding.current !== ready || ready.pending_run_id !== id))) return;
     const current = ++detailSequence.current;
     recoveryBinding.current = null; setRecovery(null);
     setSelected(null); setError(null);
     try {
-      const run = checkNarrative(view, context, await readNarrative(view, context, id, signal));
+      const run = accountPending ? await readPendingNarrative(view, id, signal) : await readNarrative(view, context, id, signal);
       if (signal.aborted || current !== detailSequence.current) return;
       setSelected(run);
       if (run.status !== "pending") return;
@@ -112,7 +113,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     ++sequence.current; ++detailSequence.current;
     setBusy(true); setReady(null); setRecovery(null); setSelected(null); setError(null); setNotice(null);
     try {
-      const saved = await recoverNarrative(view, context, selected, recovery, signal);
+      const saved = await recoverNarrative(view, selected.context, selected, recovery, signal);
       if (!signal.aborted) setNotice(`Narrative ${saved.id} finalized as interrupted. No inference was retried.`);
     } catch {
       if (!signal.aborted) setNotice("Narrative finalization could not be confirmed and may have persisted. Refresh reads saved history without repeating finalization or inference.");
@@ -130,7 +131,8 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     <p>{reading ? "Loading narrative records..." : ready ? `Narrative model: ${ready.model || "Unconfigured"}; ${ready.live_configured ? "configured, unverified" : "live unavailable"}.` : "Readiness unavailable."}</p>
     {!usable && <p>Current public context is unavailable or expired. Historical narratives never renew it.</p>}
     {!writer && <p>Read only. Your current role cannot request a narrative.</p>}
-    {ready?.pending_run_id && <p>Pending narrative {ready.pending_run_id} blocks new starts. Inspect its saved record for explicit finalization after the worker deadline. Reading never retries inference.</p>}
+    {ready?.pending_run_id && <p>Pending narrative {ready.pending_run_id} blocks new starts. Inspect its saved record for explicit finalization after the worker deadline. Reading never retries inference.
+      <button disabled={disabled} onClick={() => inspect(ready.pending_run_id!, true)}>Inspect pending narrative</button></p>}
     {ready?.next_start_at && <p>Account cooldown ends {ready.next_start_at}. Refresh to recheck eligibility.</p>}
     <label><input type="checkbox" checked={live} disabled={disabled || !writer || !usable || !ready?.live_configured}
       onChange={event => setLive(event.target.checked)} />Use live Nebius for this narrative (paid call; requires authorized service access)</label>
@@ -144,6 +146,7 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     <ul>{runs.map(run => <li key={run.id}><button disabled={disabled} onClick={() => inspect(run.id)}>Inspect narrative {run.id}</button>
       <span> · {run.mode} / {run.status} · {run.started_at}</span></li>)}</ul>
     {selected && <NarrativeRecord run={selected} current={usable
+      && selected.research_run_id === context.retained_run.id && selected.context.retained_run.revision === context.retained_run.revision
       && selected.context.internal.assessment.snapshot_hash === view.assessment.snapshot_hash
       && researchContextUsable(selected.context, now)} />}
     {selected?.status === "pending" && <section aria-label="Interrupted narrative recovery"><h4>Interrupted narrative recovery</h4>

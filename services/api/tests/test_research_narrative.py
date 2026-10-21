@@ -341,6 +341,37 @@ class NarrativeTests(unittest.TestCase):
             later.start(UUID(self.saved["id"]), NarrativeRequest(**self.body))
         self.assertEqual(self.calls, [])
 
+    def test_pending_from_older_unlisted_research_blocks_current_run_and_keeps_own_recovery_binding(self):
+        run = self.lost_narrative()
+        before = self.client.get(f"/api/accounts/{ACCOUNT}").json()
+        with self.store.engine.begin() as connection:
+            for index in range(21):
+                saved = {**self.saved, "id": str(uuid4())}
+                connection.execute(research_runs.insert().values(id=saved["id"], organization_id=SAMPLE_ORG,
+                    account_id=ACCOUNT, started_at=int(datetime.now(UTC).timestamp()) + index + 1,
+                    status=saved["status"], payload=saved))
+        current_path = f"{PREFIX}/runs/{saved['id']}"
+        history = self.client.get(f"{PREFIX}/accounts/{ACCOUNT}/runs").json()
+        self.assertEqual(len(history), 20)
+        self.assertNotIn(self.saved["id"], [item["id"] for item in history])
+        self.assertEqual(self.client.get(current_path + "/narratives").json(), [])
+        ready = self.client.get(current_path + "/narrative-readiness").json()
+        self.assertEqual(ready["pending_run_id"], run["id"])
+        self.assertFalse(ready["can_start"])
+        path = f"{PREFIX}/narratives/{run['id']}"
+        self.assertEqual(self.client.get(path).json(), run)
+        with patch("vita_api.research_service.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(run["worker_deadline_at"])
+            self.assertTrue(self.client.get(path + "/recovery-readiness").json()["can_recover"])
+            response = self.client.post(path + "/recover", headers=HEADERS,
+                json={"expected_revision": run["revision"], "expected_account_revision": 1})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["context"], run["context"])
+            self.assertEqual(response.json()["research_run_id"], self.saved["id"])
+        self.assertEqual(self.client.get(f"/api/accounts/{ACCOUNT}").json(), before)
+        self.assertEqual(self.client.get(self.path).json(), self.saved)
+        self.assertEqual(self.calls, [])
+
     def test_unknown_internal_values_and_baseline_caveats_survive_model_output(self):
         with self.store.engine.begin() as connection:
             account = connection.execute(select(accounts.c.payload).where(accounts.c.id == ACCOUNT)).scalar_one()

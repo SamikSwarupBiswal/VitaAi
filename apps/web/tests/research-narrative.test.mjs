@@ -262,3 +262,57 @@ test("generation readiness failure preserves scoped history and explicit recover
   await app.settle({ ...ready, can_start: false }, [interrupted(run)]); await pending;
   assert.equal(app.button("Record mock narrative").props.disabled, true); app.unmount();
 });
+
+test("account pending inspection finds an older research narrative outside selected history and finalizes its own binding", async () => {
+  const app = harness();
+  const older = { ...app.ctx, status: "expired", retained_run: { ...app.ctx.retained_run, id: "older-research", revision: 1,
+    expires_at: new Date(Date.now() - 60000).toISOString() } };
+  const run = { ...pendingRun(older), research_run_id: "older-research" };
+  await mount(app, { ...ready, can_start: false, pending_run_id: run.id }, []);
+  assert.equal(app.inspect(), undefined);
+  const button = app.button("Inspect pending narrative");
+  assert.ok(button, "Account-wide pending narrative must be inspectable outside selected-run history");
+  const inspection = button.props.onClick();
+  assert.equal(app.requests.length, 1); assert.match(app.requests[0].url, /narratives\/narrative$/);
+  app.requests.shift().resolve(run); await flush();
+  assert.match(app.requests[0].url, /narratives\/narrative\/recovery-readiness$/);
+  app.requests.shift().resolve(recoveryReady(run)); await inspection;
+  assert.match(app.html(), /research older-research/); assert.match(app.html(), /Historical or expired context/);
+  assert.equal(app.button("Record mock narrative").props.disabled, true);
+  const finalization = app.button("Finalize interrupted narrative").props.onClick();
+  const post = app.requests.shift();
+  assert.deepEqual(JSON.parse(post.init.body), { schema_version: "1", expected_revision: 1, expected_account_revision: 3 });
+  post.resolve(interrupted(run)); await flush(); await app.settle(ready, []); await finalization;
+  assert.match(app.html(), /finalized as interrupted/); assert.doesNotMatch(app.html(), /could not be confirmed/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("account pending inspection rejects crossed records and captured callbacks after refresh", async () => {
+  const app = harness(); const run = pendingRun(app.ctx);
+  await mount(app, { ...ready, can_start: false, pending_run_id: run.id });
+  const captured = app.button("Inspect pending narrative").props.onClick;
+  const refresh = app.button("Refresh narrative records").props.onClick();
+  await captured(); assert.equal(app.requests.length, 2);
+  await app.settle({ ...ready, can_start: false, pending_run_id: "new-pending" }); await refresh;
+  await captured(); assert.equal(app.requests.length, 0);
+  for (const change of [{ id: "different" }, { account_id: "foreign" }, { organization_id: "foreign" },
+    { research_run_id: "different" }, { context: { ...app.ctx, retained_run: { ...app.ctx.retained_run, account_id: "foreign" } } },
+    { context: { ...app.ctx, retained_run: { ...app.ctx.retained_run, organization_id: "foreign" } } }]) {
+    const result = app.helper.readPendingNarrative(view, run.id, new AbortController().signal);
+    app.requests.shift().resolve({ ...run, ...change }); await assert.rejects(result);
+  }
+  app.unmount();
+});
+
+test("late account-pending inspection cannot restore recovery after refresh or unmount", async () => {
+  const app = harness(); const run = pendingRun(app.ctx);
+  await mount(app, { ...ready, can_start: false, pending_run_id: run.id });
+  const inspection = app.button("Inspect pending narrative").props.onClick(); const detail = app.requests.shift();
+  const refresh = app.button("Refresh narrative records").props.onClick();
+  detail.resolve(run); await inspection;
+  assert.equal(app.requests.length, 2); assert.doesNotMatch(app.html(), /Saved unverified narrative/);
+  await app.settle({ ...ready, can_start: false, pending_run_id: run.id }); await refresh;
+  const next = app.button("Inspect pending narrative").props.onClick(); const late = app.requests.shift();
+  app.unmount(); late.resolve(run); await next;
+  assert.equal(app.requests.length, 0); assert.doesNotMatch(app.html(), /Saved unverified narrative/);
+});

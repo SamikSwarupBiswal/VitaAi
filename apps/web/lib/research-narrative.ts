@@ -14,6 +14,7 @@ export function checkNarrative(view: AccountView, context: ResearchContextView, 
   if (run.organization_id !== view.account.organization_id || run.account_id !== view.account.id
     || run.research_run_id !== context.retained_run.id || run.context.retained_run.id !== context.retained_run.id
     || run.context.retained_run.revision !== context.retained_run.revision
+    || run.context.retained_run.account_id !== run.account_id || run.context.retained_run.organization_id !== run.organization_id
     || internal.account.id !== run.account_id || internal.account.organization_id !== run.organization_id) {
     throw new Error("Narrative record does not match this account and research run.");
   }
@@ -39,6 +40,12 @@ export async function readNarrative(view: AccountView, context: ResearchContextV
   const run = await api<NarrativeRun>(`${prefix}/narratives/${encodeURIComponent(id)}`, { signal });
   if (run.id !== id) throw new Error("Narrative identity changed.");
   return checkNarrative(view, context, run);
+}
+
+export async function readPendingNarrative(view: AccountView, id: string, signal: AbortSignal) {
+  const run = await api<NarrativeRun>(`${prefix}/narratives/${encodeURIComponent(id)}`, { signal });
+  if (run.id !== id) throw new Error("Narrative identity changed.");
+  return checkNarrative(view, run.context, run);
 }
 
 export async function startNarrative(view: AccountView, context: ResearchContextView, ready: NarrativeReadiness,
