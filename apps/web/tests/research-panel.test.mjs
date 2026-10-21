@@ -49,6 +49,7 @@ function harness(role = "admin", transport) {
   const api = (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject }));
   const helper = transport?.helper ?? load("../lib/research.ts", { "./api": { api } });
   const panel = load("../components/research-panel.tsx", { react: hooks, "@/lib/research": helper,
+    "./research-narrative-panel": { ResearchNarrativePanel: () => null },
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) } });
   let key;
   const render = () => { cursor = 0; const outer = panel.ResearchPanel({ view }); key = outer.key;

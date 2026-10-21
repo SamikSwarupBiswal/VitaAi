@@ -6,6 +6,7 @@ import { checkResearchRun, readResearch, readResearchRun, readResearchRecovery, 
   readResearchContext, researchContextUsable, researchContext, researchSourceMatchedLink, startResearch,
   type ResearchContextView, type ResearchReadiness, type ResearchRecoveryReadiness, type ResearchRun } from "@/lib/research";
 import { useSession } from "./session-gate";
+import { ResearchNarrativePanel } from "./research-narrative-panel";
 
 export function ResearchPanel({ view }: { view: AccountView }) {
   const session = useSession();
@@ -173,6 +174,8 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
       {selected && <button disabled={disabled || contextReading} onClick={() => inspectContext()}>Inspect current research context</button>}
       {contextReading && <p role="status">Reading saved context...</p>}
       {context && <ResearchContextRecord context={context} now={now} />}
+      {context && <ResearchNarrativePanel view={view} context={context} writer={writer}
+        key={`${context.retained_run.id}:${context.retained_run.revision}:${context.evaluated_at}`} />}
       {selected?.status === "pending" && <section aria-label="Interrupted research recovery"><h3>Interrupted research recovery</h3>
         <p>Finalization retains the original target, revision, modes and dates. It adds no sources or context window and never searches or retries. An already-authorized search may still begin or finish; finalization does not prove provider cancellation.</p>
         <p>{recovery ? `Recovery: ${recovery.reason}. Run revision ${recovery.run_revision}.` : "Recovery readiness unavailable. Inspect this run again before finalizing."}</p>
