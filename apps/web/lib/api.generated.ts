@@ -785,6 +785,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/refresh-occurrences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Refresh History */
+        get: operations["refresh_history_api_integrations_hubspot_accounts__account_id__refresh_occurrences_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/refresh-occurrences/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Refresh Occurrence */
+        get: operations["refresh_occurrence_api_integrations_hubspot_refresh_occurrences__record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/refresh-occurrences/{record_id}/recovery-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Refresh Recovery Readiness */
+        get: operations["refresh_recovery_readiness_api_integrations_hubspot_refresh_occurrences__record_id__recovery_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/refresh-occurrences/{record_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Recover */
+        post: operations["refresh_recover_api_integrations_hubspot_refresh_occurrences__record_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -4036,6 +4104,107 @@ export interface components {
             /** Duration Seconds */
             duration_seconds: number;
         };
+        /** RefreshOccurrence */
+        RefreshOccurrence: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /**
+             * Authorization Id
+             * Format: uuid
+             */
+            authorization_id: string;
+            /** Authorization Revision */
+            authorization_revision: number;
+            /** Slot */
+            slot: number;
+            /**
+             * Due At
+             * Format: date-time
+             */
+            due_at: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Worker Deadline At
+             * Format: date-time
+             */
+            worker_deadline_at: string;
+            /**
+             * Sync Run Id
+             * Format: uuid
+             */
+            sync_run_id: string;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "failed" | "interrupted";
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /** Recovered By */
+            recovered_by?: string | null;
+            /** Recovered At */
+            recovered_at?: string | null;
+        };
+        /** RefreshRecoveryReadiness */
+        RefreshRecoveryReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            occurrence: components["schemas"]["RefreshOccurrence"];
+            /** Account Revision */
+            account_revision: number;
+            /** Eligible */
+            eligible: boolean;
+        };
+        /** RefreshRecoveryRequest */
+        RefreshRecoveryRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /**
+             * Expected Worker Deadline At
+             * Format: date-time
+             */
+            expected_worker_deadline_at: string;
+        };
         /** RefreshRevokeRequest */
         RefreshRevokeRequest: {
             /**
@@ -4075,6 +4244,8 @@ export interface components {
              * @constant
              */
             worker_available: false;
+            /** Pending Occurrence Id */
+            pending_occurrence_id?: string | null;
         };
         /** ResearchBrief */
         ResearchBrief: {
@@ -6424,6 +6595,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RefreshAuthorization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_history_api_integrations_hubspot_accounts__account_id__refresh_occurrences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshOccurrence"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_occurrence_api_integrations_hubspot_refresh_occurrences__record_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshOccurrence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_recovery_readiness_api_integrations_hubspot_refresh_occurrences__record_id__recovery_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshRecoveryReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_recover_api_integrations_hubspot_refresh_occurrences__record_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshOccurrence"];
                 };
             };
             /** @description Validation Error */

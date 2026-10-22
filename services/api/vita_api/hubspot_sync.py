@@ -50,6 +50,9 @@ from .hubspot_refresh import (
     RefreshAuthorization,
     RefreshAuthorizations,
     RefreshGrantRequest,
+    RefreshOccurrence,
+    RefreshRecoveryReadiness,
+    RefreshRecoveryRequest,
     RefreshRevokeRequest,
     RefreshScheduleView,
 )
@@ -371,6 +374,22 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     @router.post("/accounts/{account_id}/refresh-schedule/revoke", response_model=RefreshAuthorization)
     def revoke_refresh(account_id: UUID, body: RefreshRevokeRequest, actor: Current, operation: Service):
         return RefreshAuthorizations(operation).revoke(account_id, body)
+
+    @router.get("/accounts/{account_id}/refresh-occurrences", response_model=list[RefreshOccurrence])
+    def refresh_history(account_id: UUID, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).history(account_id)
+
+    @router.get("/refresh-occurrences/{record_id}", response_model=RefreshOccurrence)
+    def refresh_occurrence(record_id: UUID, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).inspect(record_id)
+
+    @router.get("/refresh-occurrences/{record_id}/recovery-readiness", response_model=RefreshRecoveryReadiness)
+    def refresh_recovery_readiness(record_id: UUID, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).recovery_readiness(record_id)
+
+    @router.post("/refresh-occurrences/{record_id}/recover", response_model=RefreshOccurrence)
+    def refresh_recover(record_id: UUID, body: RefreshRecoveryRequest, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).recover(record_id, body)
 
     @router.get("/runs/{run_id}", response_model=HubSpotSyncRun)
     def get_run(run_id: UUID, actor: Current, operation: Service):

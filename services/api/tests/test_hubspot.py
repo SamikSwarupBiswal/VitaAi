@@ -124,6 +124,102 @@ class HubSpotTransportTests(unittest.TestCase):
 
 
 class HubSpotApiTests(unittest.TestCase):
+    def refresh_recovery_fixture(self):
+        from vita_api.hubspot_sync import HubSpotSync
+        path, _, due, worker = self.refresh_worker_fixture()
+        with patch.object(HubSpotSync, "sync", side_effect=RuntimeError("synthetic worker loss")), self.assertRaises(RuntimeError):
+            worker.execute_due(ACCOUNT_ID)
+        view = self.client.get(path).json()
+        record_path = "/api/integrations/hubspot/refresh-occurrences/" + view["pending_occurrence_id"]
+        ready = self.client.get(record_path + "/recovery-readiness").json()
+        body = {"expected_revision": ready["occurrence"]["revision"],
+            "expected_account_revision": ready["account_revision"],
+            "expected_worker_deadline_at": ready["occurrence"]["worker_deadline_at"]}
+        return path, record_path, ready, body, due, worker
+
+    def test_refresh_recovery_exact_deadline_revision_and_scope_without_network(self):
+        path, record_path, ready, body, due, worker = self.refresh_recovery_fixture()
+        self.assertFalse(ready["eligible"])
+        self.assertEqual(self.client.post(record_path + "/recover", headers=HEADERS, json=body).status_code, 409)
+        original = self.client.get(record_path).json()
+        self.assertEqual(self.client.get(path.replace("refresh-schedule", "refresh-occurrences")).json(), [original])
+        with patch("vita_api.hubspot_refresh.datetime", wraps=datetime) as clock:
+            clock.now.return_value = due + timedelta(seconds=120)
+            self.assertTrue(self.client.get(record_path + "/recovery-readiness").json()["eligible"])
+            for changes in ({"expected_revision": 99}, {"expected_account_revision": 99},
+                            {"expected_worker_deadline_at": (due + timedelta(seconds=121)).isoformat()}):
+                self.assertEqual(self.client.post(record_path + "/recover", headers=HEADERS,
+                                                 json={**body, **changes}).status_code, 409)
+            result = self.client.post(record_path + "/recover", headers=HEADERS, json=body)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()["status"], "interrupted")
+            self.assertEqual(result.json()["revision"], 2)
+            self.assertEqual(result.json()["recovered_by"], self.admin.id)
+            for key in ("id", "authorization_id", "authorization_revision", "slot", "due_at", "started_at",
+                        "worker_deadline_at", "sync_run_id"):
+                self.assertEqual(result.json()[key], original[key])
+            self.assertEqual(self.client.post(record_path + "/recover", headers=HEADERS, json=body).status_code, 409)
+        self.assertIsNone(self.client.get(path).json()["pending_occurrence_id"])
+        worker.clock = lambda: due + timedelta(seconds=900)
+        self.assertIsNone(worker.execute_due(ACCOUNT_ID))
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_recovery_concurrency_and_disabled_remapped_connector(self):
+        _, record_path, _, body, due, _ = self.refresh_recovery_fixture()
+        disabled = self.settings.model_copy(update={"hubspot_enabled": False, "hubspot_refresh_enabled": False,
+                                                   "hubspot_company_map": {}})
+        with TestClient(create_app(disabled)) as other, patch("vita_api.hubspot_refresh.datetime", wraps=datetime) as clock:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            clock.now.return_value = due + timedelta(seconds=121)
+            self.assertEqual(other.get(record_path).status_code, 200)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda client: client.post(record_path + "/recover", headers=HEADERS,
+                    json=body), [self.client, other]))
+            self.assertEqual(sorted(r.status_code for r in results), [200, 409])
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_recovery_read_only_roles_and_strict_request(self):
+        _, record_path, _, body, due, _ = self.refresh_recovery_fixture()
+        with patch("vita_api.hubspot_refresh.datetime", wraps=datetime) as clock:
+            clock.now.return_value = due + timedelta(seconds=121)
+            for role in ("seller", "reviewer", "viewer"):
+                self.identity.create_user(role, "test-password-long", SAMPLE_ORG, role)
+                self.login(role)
+                self.assertEqual(self.client.get(record_path).status_code, 200)
+                self.assertFalse(self.client.get(record_path + "/recovery-readiness").json()["eligible"])
+                self.assertEqual(self.client.post(record_path + "/recover", headers=HEADERS, json=body).status_code, 403)
+            self.login()
+            self.assertEqual(self.client.post(record_path + "/recover", headers=HEADERS,
+                json={**body, "retry": True}).status_code, 422)
+            self.assertEqual(self.client.request("HEAD", record_path + "/recover").status_code, 405)
+            self.identity.logout(self.client.cookies.get("vitaai_session"))
+            self.assertEqual(self.client.get(record_path).status_code, 401)
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_recovery_fences_late_publication(self):
+        from vita_api.governance import PolicyDenied
+        path, _, due, worker = self.refresh_worker_fixture()
+        recovered = []
+        def finalize():
+            pending = self.client.get(path).json()["pending_occurrence_id"]
+            record_path = "/api/integrations/hubspot/refresh-occurrences/" + pending
+            ready = self.client.get(record_path + "/recovery-readiness").json()
+            body = {"expected_revision": ready["occurrence"]["revision"],
+                "expected_account_revision": ready["account_revision"],
+                "expected_worker_deadline_at": ready["occurrence"]["worker_deadline_at"]}
+            with patch("vita_api.hubspot_refresh.datetime", wraps=datetime) as clock:
+                clock.now.return_value = due + timedelta(seconds=120)
+                response = self.client.post(record_path + "/recover", headers=HEADERS, json=body)
+                self.assertEqual(response.status_code, 200, response.text)
+                recovered.append(response.json())
+        self.on_company = finalize
+        with self.assertRaises(PolicyDenied):
+            worker.execute_due(ACCOUNT_ID)
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(occurrences.c.payload)).scalar_one(), recovered[0])
+            self.assertEqual(connection.execute(select(func.count()).select_from(observations)).scalar_one(), 0)
+        self.assertEqual(len(self.calls), 2)
+
     def refresh_worker_fixture(self):
         path, body = self.refresh_fixture()
         result = self.client.post(path, headers=HEADERS, json=body)
