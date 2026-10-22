@@ -21,7 +21,12 @@ from vita_api.app import create_app
 from vita_api.config import PROPERTY_SEMANTICS, Settings
 from vita_api.hubspot import HubSpot, HubSpotFailure
 from vita_api.hubspot_changes import SourceDetection, detections
-from vita_api.hubspot_refresh import RefreshWorker, authorizations, occurrences
+from vita_api.hubspot_refresh import (
+    RefreshScheduler,
+    RefreshWorker,
+    authorizations,
+    occurrences,
+)
 from vita_api.hubspot_sync import observations, sync_runs
 from vita_api.identity import Identity, users
 from vita_api.provider_comparison import comparisons
@@ -124,6 +129,69 @@ class HubSpotTransportTests(unittest.TestCase):
 
 
 class HubSpotApiTests(unittest.TestCase):
+    def test_refresh_scheduler_default_off_and_application_lifecycle(self):
+        self.assertIsNone(self.app.state.refresh_scheduler.thread)
+        settings = self.settings.model_copy(update={"hubspot_refresh_enabled": True,
+                                                   "hubspot_refresh_worker_enabled": True})
+        app = create_app(settings, hubspot_transport=httpx.MockTransport(self.respond))
+        with TestClient(app):
+            self.assertTrue(app.state.refresh_scheduler.thread.is_alive())
+            self.assertFalse(app.state.refresh_scheduler.start())
+            self.assertEqual(self.calls, [])
+        self.assertFalse(app.state.refresh_scheduler.thread.is_alive())
+        for changes in ({"auth_mode": "sample"}, {"hubspot_refresh_enabled": False},
+                        {"hubspot_refresh_worker_enabled": False}, {"hubspot_enabled": False}):
+            worker = RefreshWorker(self.app.state.store, settings.model_copy(update=changes))
+            scheduler = RefreshScheduler(worker)
+            self.assertFalse(scheduler.start())
+            self.assertIsNone(scheduler.thread)
+
+    def test_refresh_scheduler_runs_due_once_and_stops_without_repeating(self):
+        _, _, _, worker = self.refresh_worker_fixture()
+        worker.settings = worker.settings.model_copy(update={"hubspot_refresh_worker_enabled": True})
+        completed = Event()
+        original = worker.execute_due
+        def execute(account_id):
+            result = original(account_id)
+            if result is not None:
+                completed.set()
+            return result
+        worker.execute_due = execute
+        scheduler = RefreshScheduler(worker, interval_seconds=0.01)
+        try:
+            self.assertTrue(scheduler.start())
+            self.assertFalse(scheduler.start())
+            self.assertTrue(completed.wait(5))
+        finally:
+            self.assertTrue(scheduler.stop())
+        self.assertEqual(len(self.calls), 2)
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(occurrences.c.status)).scalar_one(), "succeeded")
+
+    def test_refresh_scheduler_stop_fences_inflight_publication(self):
+        _, _, _, worker = self.refresh_worker_fixture()
+        scheduler = RefreshScheduler(worker)
+        self.on_company = scheduler.stop
+        scheduler.tick()
+        self.assertTrue(scheduler.stop_event.is_set())
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(occurrences.c.status)).scalar_one(), "pending")
+            self.assertEqual(connection.execute(select(func.count()).select_from(observations)).scalar_one(), 0)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_refresh_scheduler_logs_safe_failure_and_never_retries_pending(self):
+        from vita_api.hubspot_sync import HubSpotSync
+        _, _, _, worker = self.refresh_worker_fixture()
+        scheduler = RefreshScheduler(worker)
+        with patch.object(HubSpotSync, "sync", side_effect=RuntimeError("synthetic-sensitive-body")), \
+                self.assertLogs("vita_api.hubspot_refresh", level="WARNING") as messages:
+            scheduler.tick()
+        self.assertNotIn("synthetic-sensitive-body", str(messages.output))
+        scheduler.tick()
+        self.assertEqual(self.calls, [])
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(occurrences.c.status)).scalar_one(), "pending")
+
     def refresh_recovery_fixture(self):
         from vita_api.hubspot_sync import HubSpotSync
         path, _, due, worker = self.refresh_worker_fixture()

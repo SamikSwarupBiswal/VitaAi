@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import Settings
 from .contracts import AccountView, AnalyzeRequest, ModelRun, Portfolio, ProviderStatus
 from .hubspot import PREFIX as HUBSPOT_PREFIX
+from .hubspot_refresh import RefreshScheduler, RefreshWorker
 from .hubspot_sync import install_hubspot_routes
 from .identity import Actor, Identity, LoginFailure, LoginRequest, SessionView
 from .microsoft import PREFIX as MICROSOFT_PREFIX
@@ -46,17 +47,23 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     microsoft = Microsoft(store, settings, microsoft_transport, client_factory=microsoft_client_factory)
     login_lock = Lock()
     login_attempts: list[float] = []
+    refresh_scheduler = RefreshScheduler(RefreshWorker(store, settings, hubspot_transport))
 
     @asynccontextmanager
     async def lifespan(app):
         store.initialize()
         store.seed(sample_records(datetime.now(UTC)))
-        yield
-        store.engine.dispose()
+        try:
+            refresh_scheduler.start()
+            yield
+        finally:
+            refresh_scheduler.stop()
+            store.engine.dispose()
 
     app = FastAPI(title="VitaAi local foundation", version="0.1.0", lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
     app.state.store = store
+    app.state.refresh_scheduler = refresh_scheduler
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):

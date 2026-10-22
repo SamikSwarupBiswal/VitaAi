@@ -1,7 +1,9 @@
 """Durable staging-refresh grants; registration never contacts HubSpot."""
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime, timedelta
+from threading import Event, Lock, Thread
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -89,7 +91,7 @@ class RefreshScheduleView(HubSpotContract):
     configuration_hash: str
     authorization: RefreshAuthorization | None
     can_authorize: bool
-    worker_available: Literal[False] = False
+    worker_available: bool = False
     pending_occurrence_id: UUID | None = None
 
 
@@ -126,6 +128,10 @@ class RefreshAuthorizations:
                 account_revision=account.revision, configuration_hash=digest,
                 authorization=RefreshAuthorization.model_validate(row["payload"]) if row else None,
                 pending_occurrence_id=pending,
+                worker_available=bool(self.operation.connector.settings.auth_mode == "session"
+                    and self.operation.connector.settings.hubspot_refresh_worker_enabled
+                    and self.operation.connector.settings.hubspot_refresh_enabled
+                    and self.operation.connector.configured),
                 can_authorize=actor.role == "admin" and str(account_id) in self.operation.connector.settings.hubspot_company_map
                     and self.operation.connector.configured
                     and self.operation.connector.settings.hubspot_refresh_enabled)
@@ -264,13 +270,16 @@ class RefreshRecoveryReadiness(HubSpotContract):
 
 class RefreshWorker:
     """Callable worker protocol; no process/thread or implicit startup scheduling."""
-    def __init__(self, store, settings, transport=None, *, clock=None):
+    def __init__(self, store, settings, transport=None, *, clock=None, cancelled=None):
         self.store, self.settings, self.transport = store, settings, transport
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.cancelled = cancelled or (lambda: False)
 
     def execute_due(self, account_id):
         from .hubspot_sync import HubSpotSync
 
+        if self.cancelled():
+            raise PolicyDenied("refresh_worker_stopped", 409)
         connector = HubSpot(self.settings, self.transport)
         # This bounded lookup identifies intent only; it grants no authority.
         with self.store.engine.connect() as connection:
@@ -285,6 +294,8 @@ class RefreshWorker:
         service = RefreshAuthorizations(operation)
 
         def authority(connection, actor):
+            if self.cancelled():
+                raise PolicyDenied("refresh_worker_stopped", 409)
             now = self.clock()
             latest = service.latest(connection, grant.organization_id, account_id)
             _, digest = service.binding(account_id)
@@ -345,3 +356,51 @@ class RefreshWorker:
             if changed.rowcount != 1:
                 raise PolicyDenied("refresh_worker_fenced", 409)
             return final
+
+
+class RefreshScheduler:
+    """Opt-in loop; database occurrence claims remain the cross-process authority."""
+    def __init__(self, worker, *, interval_seconds=30):
+        self.worker = worker
+        self.interval_seconds = interval_seconds
+        self.stop_event = Event()
+        self.worker.cancelled = self.stop_event.is_set
+        self.lock = Lock()
+        self.thread = None
+
+    def start(self):
+        settings = self.worker.settings
+        if (settings.auth_mode != "session" or not settings.hubspot_refresh_enabled
+                or not settings.hubspot_refresh_worker_enabled or not HubSpot(settings).configured):
+            return False
+        with self.lock:
+            if self.thread is not None and self.thread.is_alive():
+                return False
+            self.stop_event.clear()
+            self.thread = Thread(target=self.run, name="vitaai-hubspot-refresh", daemon=True)
+            self.thread.start()
+            return True
+
+    def stop(self):
+        self.stop_event.set()
+        thread = self.thread
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=5)
+        return thread is None or not thread.is_alive()
+
+    def run(self):
+        while not self.stop_event.wait(self.interval_seconds):
+            self.tick()
+
+    def tick(self):
+        for account_id in tuple(self.worker.settings.hubspot_company_map):
+            if self.stop_event.is_set():
+                break
+            try:
+                self.worker.execute_due(account_id)
+            except PolicyDenied:
+                continue
+            except Exception:  # noqa: BLE001 -- keep the loop alive, log safely, retain pending without retry
+                # Never log provider bodies, credentials or arbitrary exception messages.
+                logging.getLogger(__name__).warning(
+                    "Scheduled HubSpot staging failed; inspect retained occurrence history")

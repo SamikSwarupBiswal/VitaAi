@@ -4241,9 +4241,8 @@ export interface components {
             /**
              * Worker Available
              * @default false
-             * @constant
              */
-            worker_available: false;
+            worker_available: boolean;
             /** Pending Occurrence Id */
             pending_occurrence_id?: string | null;
         };
