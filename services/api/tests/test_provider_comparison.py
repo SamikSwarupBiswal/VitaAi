@@ -451,6 +451,25 @@ class ComparisonApiTests(unittest.TestCase):
                     self.assertEqual(self.client.get(PREFIX + "/runs/" + result["id"]).json(), result)
                     self.assertEqual(self.client.get("/api/portfolio").json(), before)
 
+    def test_server_key_echo_rejects_before_publication_without_hiding_other_provider(self):
+        def response(request):
+            original = self.valid_response(request).json()
+            if request.url.host == "api.openai.com":
+                original["id"] = "synthetic-openai"
+            return httpx.Response(200, json=original)
+        self.inference = response
+        run = self.compare(providers=[{"provider": name, "mode": "live", "expected_configuration_revision": 1}
+            for name in ["openai", "anthropic"]]).json()
+        bad, good = run["results"]
+        self.assertEqual((bad["status"], bad["error_code"]), ("invalid_output", "credential_in_provider_output"))
+        self.assertIsNone(bad["analysis"])
+        self.assertIsNone(bad["request_id"])
+        self.assertIsNone(bad["response_model"])
+        self.assertNotIn("synthetic-openai", json.dumps(run))
+        self.assertEqual(good["status"], "succeeded")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.client.get(PREFIX + "/runs/" + run["id"]).json(), run)
+
     def test_truncated_output_retains_safe_usage_and_request_provenance(self):
         def response(request):
             if request.url.host == "api.anthropic.com":

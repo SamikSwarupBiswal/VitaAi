@@ -401,7 +401,7 @@ class ComparisonService:
                     effective = config.model_copy(update={"api_key": body.providers[index].api_key}) if body.providers[index].api_key is not None else config
                     result = analyze(self.catalog, result.provider, effective, run.snapshot.model_copy(deep=True), result,
                         before_request=before_request)
-                    key = body.providers[index].api_key
+                    key = body.providers[index].api_key or config.api_key
                     if key is not None and key.get_secret_value() in result.model_dump_json():
                         result.analysis, result.request_id, result.response_model = None, None, None
                         result.mode, result.status, result.validation = "fallback", "invalid_output", "rejected"

@@ -267,6 +267,31 @@ class NarrativeTests(unittest.TestCase):
                 self.assertEqual(self.client.get(f"/api/accounts/{ACCOUNT}").json(), before)
                 self.assertEqual(self.client.get(self.path).json(), self.saved)
 
+    def test_server_credential_echo_never_enters_saved_output_or_metadata(self):
+        for field in ["content", "encoded_content", "id", "model"]:
+            with self.subTest(field=field):
+                with self.store.engine.begin() as connection:
+                    connection.execute(narratives.delete())
+                output = self.output()
+                if field in {"content", "encoded_content"}:
+                    output["hypotheses"][0]["interpretation"] = "Provider echoed synthetic-model"
+                payload = {"id": "safe-request", "model": MODEL,
+                    "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(output)}}]}
+                if field == "encoded_content":
+                    payload["choices"][0]["message"]["content"] = json.dumps(output).replace("synthetic-model", "\\u0073ynthetic-model")
+                elif field != "content":
+                    payload[field] = "synthetic-model"
+                self.model_response = httpx.Response(200, json=payload)
+                previous = len(self.calls)
+                result = self.start().json()
+                self.assertEqual((result["status"], result["error_code"]), ("failed", "credential_echo_rejected"))
+                self.assertIsNone(result["output"])
+                self.assertIsNone(result["request_id"])
+                self.assertIsNone(result["response_model"])
+                self.assertNotIn("synthetic-model", json.dumps(result))
+                self.assertEqual(self.client.get(f'{PREFIX}/narratives/{result["id"]}').json(), result)
+                self.assertEqual(len(self.calls), previous + 1)
+
     def test_safe_transport_failures_have_no_retry_or_provider_body(self):
         for response in [httpx.Response(401, text="synthetic-model"), httpx.Response(302,
                 headers={"Location": "https://foreign.test"}), httpx.Response(200, content=b"x" * 131073)]:

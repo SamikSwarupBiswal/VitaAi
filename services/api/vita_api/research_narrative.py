@@ -153,6 +153,8 @@ def generate(catalog, config, run, *, before_request):
                          {"role": "user", "content": json.dumps(data, ensure_ascii=False, allow_nan=False)}]}
         before_request()
         payload = catalog.request("nebius", config, "POST", "/chat/completions", body)
+        if config.api_key.get_secret_value() in json.dumps(payload, ensure_ascii=False):
+            raise CatalogFailure("credential_echo_rejected")
         metadata_from_response(payload, run, "nebius")
         if run.response_model != run.expected_response_model:
             raise CatalogFailure("response_model_mismatch")
@@ -165,6 +167,9 @@ def generate(catalog, config, run, *, before_request):
         content = choice["message"]["content"]
         json.loads(content, object_pairs_hook=unique_narrative_object)
         output = NarrativeOutput.model_validate_json(content)
+        if config.api_key.get_secret_value() in output.model_dump_json():
+            run.request_id, run.response_model, run.input_tokens, run.output_tokens = None, None, None, None
+            raise CatalogFailure("credential_echo_rejected")
         evidence = {item.id for item in context.internal.evidence}
         urls = {item.url for item in context.usable_sources}
         if any(not set(item.evidence_ids).issubset(evidence) or not set(item.source_urls).issubset(urls)
