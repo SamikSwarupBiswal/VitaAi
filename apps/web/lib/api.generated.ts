@@ -4571,6 +4571,8 @@ export interface components {
             internal_evidence_ids: string[];
             /** Verification Questions */
             verification_questions?: components["schemas"]["ResearchReviewQuestion"][];
+            /** Topics */
+            topics?: components["schemas"]["ResearchTopic"][];
             /** Caveats */
             caveats: string[];
         };
@@ -4915,6 +4917,40 @@ export interface components {
             domain: string;
             /** Publisher Domains */
             publisher_domains?: string[];
+        };
+        /** ResearchTopic */
+        ResearchTopic: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy Version
+             * @default research-topics-1
+             * @constant
+             */
+            policy_version: "research-topics-1";
+            /**
+             * Topic
+             * @enum {string}
+             */
+            topic: "Financing" | "Leadership" | "Workforce" | "Regulation" | "Markets" | "Other public updates";
+            /**
+             * Basis
+             * @default keyword_mentions
+             * @constant
+             */
+            basis: "keyword_mentions";
+            /** Source Urls */
+            source_urls: string[];
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
         };
         /** ReviewDecision */
         ReviewDecision: {

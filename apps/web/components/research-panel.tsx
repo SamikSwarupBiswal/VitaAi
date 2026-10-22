@@ -200,6 +200,14 @@ function ResearchContextRecord({ context, now }: { context: ResearchContextView;
       <p>{context.brief.internal_summary}</p>
       <p>Internal evidence: {context.brief.internal_evidence_ids.join(", ") || "None"}.</p>
       <ul>{context.brief.caveats.map((caveat, index) => <li key={index}>{caveat}</li>)}</ul>
+      {usable && !!context.brief.topics?.length && <section aria-label="Public research topics">
+        <h4>Public research topics</h4>
+        <p>Keyword mentions only, including denials and contradictory reports. These groups do not establish events,
+          sentiment, business impact or account identity. Factual confidence remains unverified; original source dates appear below.</p>
+        <ul>{context.brief.topics.map(topic => <li key={topic.topic}>
+          {topic.topic} · {topic.policy_version} · unverified. Public sources: {topic.source_urls.join(", ")}.
+        </li>)}</ul>
+      </section>}
       {usable && <ol>{context.brief.verification_questions?.map((question, index) => <li key={index}>
         <p>{question.question}</p><p>Internal evidence: {question.evidence_ids.join(", ") || "None"}.
           Public sources: {question.source_urls.join(", ")}.</p>

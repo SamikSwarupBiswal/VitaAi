@@ -1,4 +1,5 @@
 """Read-only pairing of selected CRM evidence and retained, untrusted research."""
+import re
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -27,12 +28,21 @@ class ResearchReviewQuestion(ResearchContract):
     source_urls: list[str] = Field(max_length=5)
 
 
+class ResearchTopic(ResearchContract):
+    policy_version: Literal["research-topics-1"] = "research-topics-1"
+    topic: Literal["Financing", "Leadership", "Workforce", "Regulation", "Markets", "Other public updates"]
+    basis: Literal["keyword_mentions"] = "keyword_mentions"
+    source_urls: list[str] = Field(min_length=1, max_length=5)
+    factual_confidence: Literal["unverified"] = "unverified"
+
+
 class ResearchBrief(ResearchContract):
     policy_version: Literal["research-brief-1"] = "research-brief-1"
     basis: Literal["internal_only", "supporting_context"]
     internal_summary: str
     internal_evidence_ids: list[str]
     verification_questions: list[ResearchReviewQuestion] = Field(default_factory=list, max_length=4)
+    topics: list[ResearchTopic] = Field(default_factory=list, max_length=6)
     caveats: list[str]
 
 
@@ -52,6 +62,29 @@ class ResearchContext(ResearchContract):
                    "score, recommendation, plan, approval or execution change is established.")
 
 
+def group_topics(sources: list[ResearchSource]) -> list[ResearchTopic]:
+    # Organize mentions, including negated/contradictory ones; never infer an event or its impact.
+    patterns = [
+        ("Financing", r"\b(?:funding|financing|investment|investments|ipo)\b"),
+        ("Leadership", r"\b(?:ceo|cfo|leadership|executive|executives)\b"),
+        ("Workforce", r"\b(?:layoff|layoffs|hiring|workforce|employees)\b"),
+        ("Regulation", r"\b(?:regulation|regulations|regulatory|compliance|lawsuit|lawsuits)\b"),
+        ("Markets", r"\b(?:market|markets|expansion|competition|competitor|competitors)\b"),
+    ]
+    groups = {label: set() for label, _ in patterns}
+    groups["Other public updates"] = set()
+    for source in sources:
+        text = f"{source.title}\n{source.text}"
+        matched = False
+        for label, pattern in patterns:
+            if re.search(pattern, text, flags=re.IGNORECASE):
+                groups[label].add(source.url)
+                matched = True
+        if not matched:
+            groups["Other public updates"].add(source.url)
+    return [ResearchTopic(topic=label, source_urls=sorted(urls)) for label, urls in groups.items() if urls]
+
+
 def build_brief(context: ResearchContext) -> ResearchBrief:
     view, assessment = context.internal, context.internal.assessment
     summary = (f"Saved internal assessment for {view.account.name} on {assessment.as_of}: "
@@ -68,6 +101,7 @@ def build_brief(context: ResearchContext) -> ResearchBrief:
         brief.caveats.append(f"Public context is {context.status}. This brief uses internal observations only.")
         return brief
     urls = [source.url for source in context.usable_sources]
+    brief.topics = group_topics(context.usable_sources)
     for metric, label in [("usage_change", "product usage"), ("support_cases", "unresolved support"),
                           ("expansion", "expansion interest"), ("renewal", "renewal timing")]:
         ids = sorted({item.id for item in view.evidence if item.metric == metric})

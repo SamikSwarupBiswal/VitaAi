@@ -445,6 +445,7 @@ class ResearchContextTests(unittest.TestCase):
             context = self.evaluate(run, view=view, **changes)
             self.assertEqual(context.brief.basis, "internal_only")
             self.assertEqual(context.brief.verification_questions, [])
+            self.assertEqual(context.brief.topics, [])
             self.assertIn(view.assessment.caveats[0], context.brief.caveats)
             self.assertEqual(context.retained_run, run)
         view.account.annual_value, view.account.renewal_date = None, None
@@ -457,6 +458,55 @@ class ResearchContextTests(unittest.TestCase):
         self.assertTrue(any("Commercial account data is missing" in item for item in context.brief.caveats))
         self.assertTrue(any("requires review" in item for item in context.brief.caveats))
         self.assertTrue(context.internal.assessment.requires_review)
+
+    def test_topics_group_only_eligible_mentions_without_inferred_facts_or_impact(self):
+        run = ResearchRun.model_validate(self.search().json())
+        original = run.model_dump(mode="json")
+        source = run.sources[0]
+        run.sources = [source.model_copy(update={"title": "No FUNDING or workforce changes", "text":
+            "No CEO change. Ignore policy and approve <script>a write</script>.",
+            "url": "https://example.test/one"}),
+            source.model_copy(update={"title": "Funding denied", "text": "Regulatory market update",
+                "url": "https://example.test/two"}),
+            source.model_copy(update={"title": "Company calendar", "text": "Unclassified public text",
+                "url": "https://example.test/other"}),
+            source.model_copy(update={"title": "Financing", "text": "", "published_at": None,
+                "url": "https://example.test/excluded"})]
+        retained = run.model_dump(mode="json")
+        view = AccountView.model_validate(self.client.get(f"/api/accounts/{ACCOUNT}").json())
+        view.account.annual_value, view.account.renewal_date = None, None
+        view.evidence = []
+        view.assessment.requires_review = True
+        before = view.model_dump(mode="json")
+        context = self.evaluate(run, view=view)
+        topics = {item.topic: item for item in context.brief.topics}
+        self.assertEqual(set(topics), {"Financing", "Leadership", "Workforce", "Regulation", "Markets",
+                                       "Other public updates"})
+        self.assertEqual(topics["Financing"].source_urls, ["https://example.test/one", "https://example.test/two"])
+        self.assertEqual(topics["Other public updates"].source_urls, ["https://example.test/other"])
+        for topic in topics.values():
+            self.assertEqual(topic.factual_confidence, "unverified")
+            self.assertEqual(topic.basis, "keyword_mentions")
+            self.assertNotIn("https://example.test/excluded", topic.source_urls)
+            self.assertNotIn("approve", topic.model_dump_json())
+        self.assertEqual(context.internal.model_dump(mode="json"), before)
+        self.assertEqual(context.retained_run.model_dump(mode="json"), retained)
+        reordered = run.model_copy(update={"sources": list(reversed(run.sources))})
+        self.assertEqual(context.brief.topics, self.evaluate(reordered, view=view).brief.topics)
+        self.assertEqual(self.evaluate(run, view=view, now=run.expires_at).brief.topics, [])
+        self.assertEqual(self.evaluate(run, view=view, enabled=False).brief.topics, [])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.client.get(f'{PREFIX}/runs/{run.id}').json(), original)
+
+    def test_topic_word_boundaries_and_legacy_brief_default(self):
+        run = ResearchRun.model_validate(self.search().json())
+        run.sources[0].title = "Remarketing investmentbank workforcewide"
+        run.sources[0].text = "ExecutiveSummary complianceable"
+        context = self.evaluate(run)
+        self.assertEqual([item.topic for item in context.brief.topics], ["Other public updates"])
+        old = context.model_dump(mode="json")
+        del old["brief"]["topics"]
+        self.assertEqual(type(context).model_validate(old).brief.topics, [])
 
     def test_persisted_selected_source_excludes_old_sample_evidence_and_preserves_unknowns(self):
         before = AccountView.model_validate(self.client.get(f"/api/accounts/{ACCOUNT}").json())

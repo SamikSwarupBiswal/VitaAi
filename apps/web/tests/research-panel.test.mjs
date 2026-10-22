@@ -265,6 +265,8 @@ test("advisory brief is escaped and cited; expiry removes public verification qu
   const value = contextFixture(instant);
   value.brief = { policy_version: "research-brief-1", basis: "supporting_context",
     internal_summary: "<script>Internal summary</script>", internal_evidence_ids: ["evidence-1"],
+    topics: [{ topic: "Financing", policy_version: "research-topics-1", basis: "keyword_mentions",
+      source_urls: ["https://example.test/news"], factual_confidence: "unverified" }],
     caveats: ["Internal review remains required."], verification_questions: [{ question: "Check public relevance to saved support observations.",
       evidence_ids: ["evidence-1"], source_urls: ["https://example.test/news"] }] };
   const app = harness(); await mount(app, ready, [value.retained_run]); await inspectSaved(app, value.retained_run);
@@ -272,9 +274,13 @@ test("advisory brief is escaped and cited; expiry removes public verification qu
   let html = renderToStaticMarkup(app.render()); assert.match(html, /Advisory research brief/);
   assert.match(html, /research-brief-1/); assert.match(html, /&lt;script&gt;Internal summary/);
   assert.match(html, /Check public relevance to saved support/); assert.match(html, /Internal review remains required/);
+  assert.match(html, /Public research topics/); assert.match(html, /Financing/);
+  assert.match(html, /research-topics-1/); assert.match(html, /including denials and contradictory reports/);
+  assert.match(html, /Public sources: https:\/\/example.test\/news/);
   assert.doesNotMatch(html, /<script>/);
   clock.mock.mockImplementation(() => instant + 60000); app.tick(); html = renderToStaticMarkup(app.render());
   assert.match(html, /Public context is no longer usable/); assert.doesNotMatch(html, /Check public relevance to saved support/);
+  assert.doesNotMatch(html, /Public research topics|Financing|research-topics-1/);
   assert.equal(app.requests.length, 0); app.unmount();
 });
 
