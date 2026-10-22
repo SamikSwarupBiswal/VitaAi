@@ -21,6 +21,7 @@ from vita_api.app import create_app
 from vita_api.config import PROPERTY_SEMANTICS, Settings
 from vita_api.hubspot import HubSpot, HubSpotFailure
 from vita_api.hubspot_changes import SourceDetection, detections
+from vita_api.hubspot_refresh import authorizations
 from vita_api.hubspot_sync import observations, sync_runs
 from vita_api.identity import Identity, users
 from vita_api.provider_comparison import comparisons
@@ -123,6 +124,136 @@ class HubSpotTransportTests(unittest.TestCase):
 
 
 class HubSpotApiTests(unittest.TestCase):
+    def refresh_fixture(self):
+        settings = self.settings.model_copy(update={"hubspot_refresh_enabled": True})
+        self.client.__exit__(None, None, None)
+        self.settings = settings
+        self.app = create_app(settings, hubspot_transport=httpx.MockTransport(self.respond))
+        self.client = TestClient(self.app).__enter__()
+        self.identity = Identity(self.app.state.store.engine)
+        self.login()
+        path = f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/refresh-schedule"
+        view = self.client.get(path).json()
+        body = {"expected_revision": 0, "expected_account_revision": view["account_revision"],
+            "expected_configuration_hash": view["configuration_hash"], "interval_seconds": 900,
+            "duration_seconds": 7200}
+        return path, body
+
+    def test_refresh_grant_persists_without_network_or_fact_changes(self):
+        path, body = self.refresh_fixture()
+        before = self.client.get("/api/portfolio").json()
+        granted = self.client.post(path, headers=HEADERS, json=body)
+        self.assertEqual(granted.status_code, 200, granted.text)
+        grant = granted.json()
+        self.assertEqual(grant["status"], "authorized")
+        self.assertEqual(grant["revision"], 1)
+        self.assertEqual(grant["account_revision"], body["expected_account_revision"])
+        self.assertEqual(grant["actor_id"], self.admin.id)
+        self.assertNotIn("session_hash", grant)
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        with TestClient(create_app(self.settings)) as other:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            view = other.get(path).json()
+            self.assertEqual(view["authorization"], grant)
+            self.assertFalse(view["worker_available"])
+        with self.app.state.store.engine.connect() as connection:
+            saved = connection.execute(select(authorizations)).mappings().one()
+            self.assertNotIn(self.client.cookies.get("vitaai_session"), str(saved))
+            self.assertNotIn("test-only-token", str(saved))
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_concurrent_grants_and_revoke_are_single_winner_and_append_only(self):
+        path, body = self.refresh_fixture()
+        with TestClient(create_app(self.settings)) as other, ThreadPoolExecutor(max_workers=2) as pool:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            responses = list(pool.map(lambda client: client.post(path, headers=HEADERS, json=body),
+                                      [self.client, other]))
+        self.assertEqual(sorted(r.status_code for r in responses), [200, 409])
+        original = next(r.json() for r in responses if r.status_code == 200)
+        revoked = self.client.post(path + "/revoke", headers=HEADERS, json={"expected_revision": 1})
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        self.assertEqual(revoked.json()["previous_id"], original["id"])
+        for key in ("authorized_at", "expires_at", "first_due_at", "configuration_hash", "account_revision"):
+            self.assertEqual(revoked.json()[key], original[key])
+        self.assertEqual(self.client.post(path + "/revoke", headers=HEADERS,
+                                         json={"expected_revision": 1}).status_code, 409)
+        self.assertEqual(self.client.post(path + "/revoke", headers=HEADERS,
+                                         json={"expected_revision": 2}).status_code, 409)
+        with self.app.state.store.engine.connect() as connection:
+            rows = connection.execute(select(authorizations).order_by(authorizations.c.revision)).mappings().all()
+            self.assertEqual([r["revision"] for r in rows], [1, 2])
+            self.assertEqual(rows[0]["payload"], original)
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_stale_configuration_account_and_strict_requests_deny(self):
+        path, body = self.refresh_fixture()
+        for changes, code in [({"expected_configuration_hash": "0" * 64}, 409),
+                ({"expected_account_revision": 999}, 409), ({"expected_revision": 1}, 409),
+                ({"duration_seconds": 900}, 409), ({"interval_seconds": 899}, 422),
+                ({"expected_revision": False}, 422), ({"mode": "live"}, 422),
+                ({"url": "https://foreign.test"}, 422)]:
+            with self.subTest(changes=changes):
+                self.assertEqual(self.client.post(path, headers=HEADERS, json={**body, **changes}).status_code, code)
+        self.assertEqual(self.client.get(path).json()["authorization"], None)
+        self.assertEqual(self.client.request("HEAD", path).status_code, 405)
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_roles_logout_and_default_gate_deny_grants(self):
+        path, body = self.refresh_fixture()
+        for role in ("seller", "reviewer", "viewer"):
+            self.identity.create_user(role, "test-password-long", SAMPLE_ORG, role)
+            self.login(role)
+            self.assertFalse(self.client.get(path).json()["can_authorize"])
+            self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 403)
+        self.login()
+        self.identity.logout(self.client.cookies.get("vitaai_session"))
+        self.assertEqual(self.client.post(path, headers=HEADERS, json=body).status_code, 401)
+        self.login()
+        disabled = self.settings.model_copy(update={"hubspot_refresh_enabled": False})
+        with TestClient(create_app(disabled)) as other:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            self.assertFalse(other.get(path).json()["can_authorize"])
+            self.assertEqual(other.post(path, headers=HEADERS, json=body).status_code, 503)
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_expiry_capped_by_original_session_and_disabled_gate_revocation(self):
+        from vita_api.identity import sessions, token_digest
+        path, body = self.refresh_fixture()
+        expiry = int((datetime.now(UTC) + timedelta(seconds=1800)).timestamp())
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(sessions).where(sessions.c.token_hash == token_digest(
+                self.client.cookies.get("vitaai_session"))).values(expires_at=expiry))
+        grant = self.client.post(path, headers=HEADERS, json=body)
+        self.assertEqual(grant.status_code, 200, grant.text)
+        self.assertEqual(datetime.fromisoformat(grant.json()["expires_at"]).timestamp(), expiry)
+        disabled = self.settings.model_copy(update={"hubspot_refresh_enabled": False, "hubspot_enabled": False})
+        with TestClient(create_app(disabled)) as other:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            self.assertEqual(other.post(path + "/revoke", headers=HEADERS,
+                                       json={"expected_revision": 1}).status_code, 200)
+        self.assertEqual(self.calls, [])
+
+    def test_refresh_removed_mapping_retains_scoped_inspection_and_revocation(self):
+        path, body = self.refresh_fixture()
+        grant = self.client.post(path, headers=HEADERS, json=body).json()
+        remapped = self.settings.model_copy(update={"hubspot_company_map": {}})
+        with TestClient(create_app(remapped)) as other:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            view = other.get(path)
+            self.assertEqual(view.status_code, 200, view.text)
+            self.assertEqual(view.json()["authorization"], grant)
+            self.assertFalse(view.json()["can_authorize"])
+            self.assertEqual(other.post(path, headers=HEADERS, json={**body, "expected_revision": 1}).status_code, 404)
+            self.assertEqual(other.post(path + "/revoke", headers=HEADERS,
+                                       json={"expected_revision": 1}).status_code, 200)
+            foreign = self.identity.create_user("foreign", "test-password-long", "other-org", "admin")
+            _, token = self.identity.login(foreign.username, "test-password-long", 8)
+            other.cookies.set("vitaai_session", token)
+            self.assertEqual(other.get(path).status_code, 404)
+            self.assertEqual(other.post(path + "/revoke", headers=HEADERS,
+                                       json={"expected_revision": 2}).status_code, 404)
+        self.assertEqual(self.calls, [])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.pg_admin = None
@@ -260,6 +391,8 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(comparisons)).all(), [])
             self.assertEqual(connection.execute(select(narratives)).all(), [])
             self.assertEqual(connection.execute(select(probes)).all(), [])
+            self.assertEqual(connection.execute(select(authorizations)).all(), [])
+            authorizations.drop(connection)
             probes.drop(connection)
             narratives.drop(connection)
             comparisons.drop(connection)
@@ -269,7 +402,7 @@ class HubSpotApiTests(unittest.TestCase):
         with self.app.state.store.engine.connect() as connection:
             for table in (detections, source_versions, observations, plans, audits, versions):
                 self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
-            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0013")
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0014")
         selected = self.client.post(path, headers=HEADERS, json=body)
         self.assertEqual(selected.status_code, 200, selected.text)
         self.assertEqual(selected.json()["selection"]["detection"], changed)
@@ -581,6 +714,8 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(comparisons)).all(), [])
             self.assertEqual(connection.execute(select(narratives)).all(), [])
             self.assertEqual(connection.execute(select(probes)).all(), [])
+            self.assertEqual(connection.execute(select(authorizations)).all(), [])
+            authorizations.drop(connection)
             probes.drop(connection)
             narratives.drop(connection)
             comparisons.drop(connection)
@@ -592,7 +727,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0013")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0014")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)

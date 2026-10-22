@@ -46,6 +46,13 @@ from .hubspot_normalize import (
     HubSpotPromoteRequest,
     normalize,
 )
+from .hubspot_refresh import (
+    RefreshAuthorization,
+    RefreshAuthorizations,
+    RefreshGrantRequest,
+    RefreshRevokeRequest,
+    RefreshScheduleView,
+)
 from .identity import Actor, sessions, token_digest, users
 from .storage import accounts, selected_evidence, selected_source, source_versions
 
@@ -100,11 +107,11 @@ class HubSpotSync:
                 connection.rollback()
                 raise
 
-    def account(self, connection, actor, account_id, expected=None):
+    def account(self, connection, actor, account_id, expected=None, *, require_mapping=True):
         payload = connection.execute(select(accounts.c.payload).where(
             accounts.c.organization_id == actor.organization_id, accounts.c.id == str(account_id))
             .with_for_update()).scalar()
-        if payload is None or str(account_id) not in self.connector.settings.hubspot_company_map:
+        if payload is None or (require_mapping and str(account_id) not in self.connector.settings.hubspot_company_map):
             raise PolicyDenied("record_not_found", 404)
         account = Account.model_validate(payload)
         if expected is not None and account.revision != expected:
@@ -342,6 +349,18 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     @router.post("/accounts/{account_id}/sync", response_model=HubSpotSyncRun)
     def sync(account_id: UUID, body: HubSpotSyncRequest, actor: Current, operation: Service):
         return operation.sync(account_id, body.expected_account_revision)
+
+    @router.get("/accounts/{account_id}/refresh-schedule", response_model=RefreshScheduleView)
+    def refresh_schedule(account_id: UUID, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).view(account_id)
+
+    @router.post("/accounts/{account_id}/refresh-schedule", response_model=RefreshAuthorization)
+    def authorize_refresh(account_id: UUID, body: RefreshGrantRequest, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).grant(account_id, body)
+
+    @router.post("/accounts/{account_id}/refresh-schedule/revoke", response_model=RefreshAuthorization)
+    def revoke_refresh(account_id: UUID, body: RefreshRevokeRequest, actor: Current, operation: Service):
+        return RefreshAuthorizations(operation).revoke(account_id, body)
 
     @router.get("/runs/{run_id}", response_model=HubSpotSyncRun)
     def get_run(run_id: UUID, actor: Current, operation: Service):

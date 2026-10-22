@@ -750,6 +750,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/refresh-schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Refresh Schedule */
+        get: operations["refresh_schedule_api_integrations_hubspot_accounts__account_id__refresh_schedule_get"];
+        put?: never;
+        /** Authorize Refresh */
+        post: operations["authorize_refresh_api_integrations_hubspot_accounts__account_id__refresh_schedule_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/accounts/{account_id}/refresh-schedule/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Refresh */
+        post: operations["revoke_refresh_api_integrations_hubspot_accounts__account_id__refresh_schedule_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -3910,6 +3945,137 @@ export interface components {
             action: components["schemas"]["ActionProposal"];
             communication: components["schemas"]["CommunicationResult"];
         };
+        /** RefreshAuthorization */
+        RefreshAuthorization: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "authorized" | "revoked";
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Portal Id */
+            portal_id: string;
+            /** Company Id */
+            company_id: string;
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Mapping Hash */
+            mapping_hash: string;
+            /** Interval Seconds */
+            interval_seconds: number;
+            /**
+             * Authorized At
+             * Format: date-time
+             */
+            authorized_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * First Due At
+             * Format: date-time
+             */
+            first_due_at: string;
+            /** Previous Id */
+            previous_id?: string | null;
+            /**
+             * Policy
+             * @default hubspot-staging-refresh-1
+             * @constant
+             */
+            policy: "hubspot-staging-refresh-1";
+        };
+        /** RefreshGrantRequest */
+        RefreshGrantRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Configuration Hash */
+            expected_configuration_hash: string;
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Duration Seconds */
+            duration_seconds: number;
+        };
+        /** RefreshRevokeRequest */
+        RefreshRevokeRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+        };
+        /** RefreshScheduleView */
+        RefreshScheduleView: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Configuration Hash */
+            configuration_hash: string;
+            authorization: components["schemas"]["RefreshAuthorization"] | null;
+            /** Can Authorize */
+            can_authorize: boolean;
+            /**
+             * Worker Available
+             * @default false
+             * @constant
+             */
+            worker_available: false;
+        };
         /** ResearchBrief */
         ResearchBrief: {
             /**
@@ -6157,6 +6323,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HubSpotSyncRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_schedule_api_integrations_hubspot_accounts__account_id__refresh_schedule_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshScheduleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    authorize_refresh_api_integrations_hubspot_accounts__account_id__refresh_schedule_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshAuthorization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_refresh_api_integrations_hubspot_accounts__account_id__refresh_schedule_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshAuthorization"];
                 };
             };
             /** @description Validation Error */
