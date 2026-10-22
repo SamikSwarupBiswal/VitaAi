@@ -49,13 +49,36 @@ test("provider tests forward only explicit bounded methods without credential he
   for (const [method, suffix] of [["GET", "providers/openai/test"], ["HEAD", "providers/openai/test"],
     ["POST", "providers/openai/tests"], ["POST", "providers/openai/test-readiness"], ["POST", `tests/${id}`],
     ["POST", "providers/unknown/test"], ["POST", "providers/foundry/test/extra"], ["GET", "tests/invalid"],
-    ["GET", `tests/${id}/extra`], ["HEAD", "providers/openai/tests"], ["POST", `tests/${id}/recover`]]) {
+    ["GET", `tests/${id}/extra`], ["HEAD", "providers/openai/tests"]]) {
     const name = `provider-comparison/${suffix}`;
     assert.equal((await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, {
       method, headers: { host: "127.0.0.1:3000" },
     }), { params: Promise.resolve({ path: name.split("/") }) })).status, 404);
   }
   assert.equal(upstream.mock.callCount(), 0);
+});
+
+test("provider test recovery only forwards canonical readiness GET and explicit exact-body POST", async t => {
+  const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8", prefix = `provider-comparison/tests/${id}`;
+  const body = JSON.stringify({ schema_version: "1", expected_provider: "openai", expected_revision: 1,
+    expected_worker_deadline_at: "2026-10-21T00:02:00Z" });
+  const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+    assert.equal(init.headers.Cookie, "vitaai_session=opaque-session"); assert.equal(init.cache, "no-store");
+    if (init.method === "POST") assert.equal(init.body, body);
+    return Response.json({ status: "interrupted" });
+  });
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  for (const [method, name, expected] of [["GET", `${prefix}/recovery-readiness`, 200], ["POST", `${prefix}/recover`, 200],
+    ["GET", `${prefix}/recover`, 404], ["HEAD", `${prefix}/recover`, 404], ["POST", `${prefix}/recovery-readiness`, 404],
+    ["POST", `${prefix}/recover/extra`, 404], ["POST", "provider-comparison/tests/invalid/recover", 404]]) {
+    const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, { method,
+      headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", cookie: "vitaai_session=opaque-session" },
+      ...(method === "POST" ? { body } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, expected);
+  }
+  assert.equal(upstream.mock.callCount(), 2);
 });
 
 test("research allows bounded reads, explicit search/finalization; implicit HEAD cannot mutate", async t => {

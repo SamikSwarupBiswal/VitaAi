@@ -31,8 +31,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     ? new RegExp(`^integrations/research(?:/runs/${uuid}(?:/recovery-readiness|/context|/narrative-readiness|/narratives)?|/narratives/${uuid}(?:/recovery-readiness)?|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
     : request.method === "POST" && new RegExp(`^integrations/research/(?:accounts/${uuid}/search|runs/${uuid}/(?:recover|narratives)|narratives/${uuid}/recover)$`).test(joined);
   const comparisonPath = request.method === "GET"
-    ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}(?:/recovery-readiness)?|accounts/${uuid}/(?:runs|readiness)|providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:test-readiness|tests)|tests/${uuid})$`).test(joined)
-    : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:discover|test)|accounts/${uuid}/compare|runs/${uuid}/recover)$`).test(joined);
+    ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}(?:/recovery-readiness)?|accounts/${uuid}/(?:runs|readiness)|providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:test-readiness|tests)|tests/${uuid}(?:/recovery-readiness)?)$`).test(joined)
+    : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:discover|test)|accounts/${uuid}/compare|(?:runs|tests)/${uuid}/recover)$`).test(joined);
   const allowed = request.method === "GET"
     ? workflowPath || hubspotPath || microsoftPath || researchPath || comparisonPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined)
     : workflowPath || hubspotPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);

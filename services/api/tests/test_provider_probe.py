@@ -15,7 +15,9 @@ from vita_api.identity import users
 from vita_api.provider_catalog import ProviderCatalog
 from vita_api.provider_probe import (
     WORKER_BUDGET,
+    ProbeRecoveryRequest,
     ProbeRequest,
+    ProbeRun,
     ProbeService,
     probe_once,
     probes,
@@ -56,6 +58,152 @@ class ProbeTests(unittest.TestCase):
             result.update(choices=[{"finish_reason": "stop", "message": {"content": '{"status":"ok"}'}}],
                 usage={"prompt_tokens": 12, "completion_tokens": 5})
         return httpx.Response(200, json=result)
+
+    def pending_probe(self):
+        self.settings.comparison_test_enabled = True
+        self.now = datetime.now(UTC)
+        class WorkerLost(BaseException): pass
+        def lose(_): raise WorkerLost()
+        self.response = lose
+        with self.assertRaises(WorkerLost):
+            self.service().start(self.admin.id, "openai", ProbeRequest(mode="live", expected_configuration_revision=1))
+        return ProbeRun.model_validate(self.saved()[-1])
+
+    @staticmethod
+    def recovery_request(run, **changes):
+        return ProbeRecoveryRequest(expected_provider=run.provider, expected_revision=run.revision,
+            expected_worker_deadline_at=run.worker_deadline_at, **changes)
+
+    def test_explicit_recovery_preserves_original_intent_across_restart_with_gates_disabled(self):
+        pending = self.pending_probe()
+        self.assertEqual(self.service().recovery_readiness(self.admin.id, pending.id).reason, "worker_active")
+        with self.assertRaisesRegex(PolicyDenied, "probe_worker_not_recoverable"):
+            self.service().recover(self.admin.id, pending.id, self.recovery_request(pending))
+        self.now = pending.worker_deadline_at
+        self.settings.comparison_test_enabled = self.settings.comparison_byok_enabled = False
+        self.settings.comparison_organization_id = "remapped"
+        self.settings.comparison_providers.clear()
+        before = self.client.get("/api/portfolio").json()
+        reconstructed = Store(self.settings.database_url)
+        try:
+            service = self.service(reconstructed)
+            ready = service.recovery_readiness(self.admin.id, pending.id)
+            self.assertTrue(ready.can_recover)
+            self.assertEqual((ready.run_revision, ready.worker_deadline_at, ready.provider),
+                (pending.revision, pending.worker_deadline_at, pending.provider))
+            saved = service.recover(self.admin.id, pending.id, self.recovery_request(pending))
+            self.assertEqual((saved.status, saved.revision, saved.error_code), ("interrupted", 2, "probe_interrupted"))
+            self.assertEqual(saved.recovery.previous_revision, pending.revision)
+            self.assertEqual((saved.recovery.actor_id, saved.recovery.recovered_at), (self.admin.id, self.now))
+            mutable = {"revision", "status", "error_code", "finished_at", "recovery"}
+            self.assertEqual(saved.model_dump(exclude=mutable), pending.model_dump(exclude=mutable))
+            self.assertEqual(service.recovery_readiness(self.admin.id, pending.id).reason, "terminal")
+            with self.assertRaisesRegex(PolicyDenied, "probe_recovery_state_changed"):
+                service.recover(self.admin.id, pending.id, self.recovery_request(pending))
+        finally: reconstructed.engine.dispose()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        self.assertEqual(self.client.get(fixtures.PREFIX + f"/tests/{saved.id}").json(), saved.model_dump(mode="json"))
+
+    def test_recovery_requires_exact_provider_revision_deadline_and_current_admin(self):
+        pending = self.pending_probe()
+        self.now = pending.worker_deadline_at
+        body = self.recovery_request(pending)
+        for change in [{"expected_provider": "anthropic"}, {"expected_revision": 2},
+                       {"expected_worker_deadline_at": pending.worker_deadline_at + timedelta(microseconds=1)}]:
+            with self.assertRaisesRegex(PolicyDenied, "probe_recovery_state_changed"):
+                self.service().recover(self.admin.id, pending.id, body.model_copy(update=change))
+        for role in ["reviewer", "seller", "viewer"]:
+            with self.app.state.store.engine.begin() as connection:
+                connection.execute(update(users).where(users.c.id == self.admin.id).values(role=role))
+            self.assertFalse(self.service().recovery_readiness(self.admin.id, pending.id).can_recover)
+            with self.assertRaises(PolicyDenied):
+                self.service().recover(self.admin.id, pending.id, body)
+        with self.app.state.store.engine.begin() as connection:
+            connection.execute(update(users).where(users.c.id == self.admin.id).values(role="admin"))
+        service = self.service()
+        self.identity.logout(self.client.cookies.get("vitaai_session"))
+        with self.assertRaisesRegex(PolicyDenied, "authentication_required"):
+            service.recover(self.admin.id, pending.id, body)
+        self.assertEqual(self.saved()[0], pending.model_dump(mode="json"))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_concurrent_recoveries_have_one_winner_and_never_retry_provider(self):
+        pending = self.pending_probe()
+        self.now = pending.worker_deadline_at + timedelta(seconds=1)
+        body = self.recovery_request(pending)
+        def recover():
+            try: return self.service().recover(self.admin.id, pending.id, body).status
+            except PolicyDenied as error: return error.code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: recover(), range(2)))
+        self.assertCountEqual(results, ["interrupted", "probe_recovery_state_changed"])
+        self.assertEqual((len(self.saved()), self.saved()[0]["revision"], len(self.calls)), (1, 2, 1))
+
+    def test_finalization_fences_late_publication_and_session_loss_discard(self):
+        for lose_session in [False, True]:
+            with self.subTest(lose_session=lose_session):
+                self.settings.comparison_test_enabled = True
+                self.now = datetime.now(UTC)
+                entered, release = Event(), Event()
+                def response(request, entered=entered, release=release, lose_session=lose_session):
+                    entered.set()
+                    if not release.wait(10): raise AssertionError("fixture timed out")
+                    if lose_session: self.identity.logout(self.client.cookies.get("vitaai_session"))
+                    return self.valid(request)
+                self.response = response
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(self.service().start, self.admin.id, "openai",
+                        ProbeRequest(mode="live", expected_configuration_revision=1))
+                    try:
+                        self.assertTrue(entered.wait(5))
+                        pending = ProbeRun.model_validate(self.saved()[-1])
+                        self.now = pending.worker_deadline_at + timedelta(seconds=1)
+                        saved = self.service().recover(self.admin.id, pending.id, self.recovery_request(pending))
+                    finally: release.set()
+                    with self.assertRaises(PolicyDenied): future.result(10)
+                self.assertEqual(self.saved()[-1], saved.model_dump(mode="json"))
+                if lose_session: self.login()
+                with self.app.state.store.engine.begin() as connection:
+                    connection.execute(update(probes).values(started_at=0))
+        self.assertEqual(len(self.calls), 2)
+
+    def test_finalized_worker_cannot_cross_request_boundary(self):
+        self.settings.comparison_test_enabled = True
+        self.now = datetime.now(UTC)
+        def finalize(catalog, config, run, before_request):
+            self.now = run.worker_deadline_at
+            self.service().recover(self.admin.id, run.id, self.recovery_request(run))
+            return probe_once(catalog, config, run, before_request)
+        with patch("vita_api.provider_probe.probe_once", finalize), self.assertRaisesRegex(PolicyDenied, "probe_worker_fenced"):
+            self.service().start(self.admin.id, "openai", ProbeRequest(mode="live", expected_configuration_revision=1))
+        self.assertEqual(self.saved()[0]["status"], "interrupted")
+        self.assertEqual(self.calls, [])
+
+    def test_recovery_http_schema_scope_and_network_free_reads(self):
+        pending = self.pending_probe()
+        path = fixtures.PREFIX + f"/tests/{pending.id}"
+        ready = self.client.get(path + "/recovery-readiness")
+        self.assertEqual(ready.status_code, 200)
+        self.assertFalse(ready.json()["can_recover"])
+        body = self.recovery_request(pending).model_dump(mode="json")
+        for bad in [{**body, "api_key": KEY}, {**body, "expected_revision": 0},
+                    {**body, "expected_worker_deadline_at": "2026-10-21T00:00:00"}]:
+            self.assertEqual(self.client.post(path + "/recover", headers=fixtures.HEADERS, json=bad).status_code, 422)
+        self.assertEqual(self.client.post(path + "/recover", headers=fixtures.HEADERS, json=body).status_code, 409)
+        self.assertEqual(self.client.head(path + "/recover").status_code, 405)
+        with patch("vita_api.provider_probe.datetime", wraps=datetime) as clock:
+            clock.now.return_value = pending.worker_deadline_at
+            result = self.client.post(path + "/recover", headers=fixtures.HEADERS, json=body)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual((result.json()["status"], result.json()["recovery"]["previous_revision"]), ("interrupted", 1))
+        self.identity.create_user("foreign-recovery-admin", "synthetic-password-123", "foreign", "admin")
+        self.client.post("/api/auth/logout", headers=fixtures.HEADERS)
+        self.client.post("/api/auth/login", headers=fixtures.HEADERS,
+            json={"username": "foreign-recovery-admin", "password": "synthetic-password-123"})
+        self.assertEqual(self.client.get(path + "/recovery-readiness").status_code, 404)
+        self.assertEqual(self.client.post(path + "/recover", headers=fixtures.HEADERS, json=body).status_code, 404)
+        self.assertEqual(len(self.calls), 1)
 
     def test_default_off_mock_role_and_read_only_history(self):
         path = fixtures.PREFIX + "/providers/openai/test-readiness"

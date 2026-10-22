@@ -21,7 +21,18 @@ const run = { schema_version: "1", id, organization_id: "org", actor_id: "actor"
 const liveRun = { ...run, requested_mode: "live", mode: "live", status: "succeeded", validation: "synthetic_compatibility_valid",
   response_model: "canonical", request_id: "req-1", input_tokens: 12, output_tokens: 4, latency_ms: 123, error_code: null };
 const pendingRun = { ...run, revision: 1, status: "pending", finished_at: null, error_code: null };
+const recoveryReady = { schema_version: "1", organization_id: "org", provider: "openai", run_id: id, run_revision: 1,
+  worker_deadline_at: pendingRun.worker_deadline_at, can_recover: true, reason: "eligible" };
+const interruptedRun = { ...pendingRun, revision: 2, status: "interrupted", error_code: "probe_interrupted", finished_at: "2026-10-21T00:03:00Z",
+  recovery: { schema_version: "1", actor_id: "actor", recovered_at: "2026-10-21T00:03:00Z", previous_revision: 1, reason: "worker_deadline_elapsed" } };
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+async function inspectPending(app, readiness = recoveryReady) {
+  const pending = (app.button("Inspect pending provider test") || app.button(`Inspect test ${id}`)).props.onClick();
+  app.requests.shift().resolve(pendingRun); await flush();
+  const read = app.requests.shift(); assert.match(read.url, /recovery-readiness$/); assert.equal(read.init.method, undefined);
+  read.resolve(readiness); await pending;
+}
 
 function load(relative, mocks) {
   const filename = fileURLToPath(new URL(relative, import.meta.url));
@@ -149,7 +160,7 @@ test("pending inspection works outside latest20 and preserves original deadline 
   const app = harness(); await app.mount({ ...ready, can_start: false, pending_run_id: id });
   const inspection = app.button("Inspect pending provider test").props.onClick(), request = app.requests.shift();
   assert.match(request.url, new RegExp(`tests/${id}$`)); assert.equal(request.init.method, undefined);
-  request.resolve(pendingRun); await inspection;
+  request.resolve(pendingRun); await flush(); app.requests.shift().resolve(recoveryReady); await inspection;
   assert.match(app.record(), /2026-10-21T00:02:00Z/); assert.match(app.record(), /Unresolved pending intent blocks duplicates/);
   assert.equal(app.requests.length, 0); app.unmount();
 });
@@ -204,4 +215,88 @@ test("successful test displays original measured metadata and historical configu
   const inspection = app.button(`Inspect test ${id}`).props.onClick(); app.requests.shift().resolve({ ...liveRun, configuration_revision: 6 }); await inspection;
   for (const text of ["123", "req-1", "12", "4", "synthetic_compatibility_valid", "Historical configuration differs", "No account analysis"]) assert.ok(app.record().includes(text));
   assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("explicit finalization binds inspected provider/revision/deadline without start-readiness and duplicate clicks make one POST", async () => {
+  const app = harness(); await app.mount({ ...ready, organization_id: "unavailable" }, [pendingRun]);
+  await inspectPending(app);
+  assert.equal(app.button("Test selected provider").props.disabled, true);
+  assert.equal(app.button("Finalize interrupted provider test").props.disabled, false);
+  const action = app.button("Finalize interrupted provider test").props.onClick, pending = action(); action();
+  const request = app.requests.shift(); assert.match(request.url, new RegExp(`tests/${id}/recover$`));
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", expected_provider: "openai", expected_revision: 1,
+    expected_worker_deadline_at: pendingRun.worker_deadline_at });
+  assert.equal(app.requests.length, 0); request.resolve(interruptedRun); await pending;
+  await app.reads({ ...ready, can_start: false }, [interruptedRun]);
+  const inspect = app.button(`Inspect test ${id}`).props.onClick(); app.requests.shift().resolve(interruptedRun); await inspect;
+  assert.match(app.record(), /Finalized as interrupted by actor/); assert.match(app.record(), /previous revision 1/);
+  assert.match(app.record(), /2026-10-21T00:03:00Z/); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("crossed recovery readiness, non-admin, active worker and readiness failures preserve history without finalization", async () => {
+  for (const change of [{ organization_id: "other" }, { provider: "anthropic" }, { run_id: otherId }, { run_revision: 2 },
+    { worker_deadline_at: "2026-10-21T00:04:00Z" }, { can_recover: false, reason: "worker_active" }]) {
+    const app = harness(); await app.mount({ ...ready, can_start: false, pending_run_id: id }); await inspectPending(app, { ...recoveryReady, ...change });
+    assert.equal(app.button("Finalize interrupted provider test").props.disabled, true);
+    await app.button("Finalize interrupted provider test").props.onClick(); assert.equal(app.requests.length, 0);
+    assert.match(app.record(), /Unresolved pending intent/); app.unmount();
+  }
+  for (const role of ["seller", "reviewer", "viewer"]) {
+    const app = harness(role); await app.mount({ ...ready, can_start: false, pending_run_id: id }); await inspectPending(app);
+    await app.button("Finalize interrupted provider test").props.onClick(); assert.equal(app.requests.length, 0); app.unmount();
+  }
+  const app = harness(); await app.mount({ ...ready, can_start: false, pending_run_id: id });
+  const pending = app.button("Inspect pending provider test").props.onClick(); app.requests.shift().resolve(pendingRun); await flush();
+  app.requests.shift().reject(new Error("offline")); await pending;
+  assert.match(app.record(), /Unresolved pending intent/); assert.equal(app.button("Finalize interrupted provider test").props.disabled, true); app.unmount();
+});
+
+test("captured finalization handlers cannot survive refresh, new inspection, provider/key/live changes", async () => {
+  for (const edit of ["refresh", "inspect", "provider", "key", "live"]) {
+    const app = harness(); await app.mount({ ...ready, can_start: false, pending_run_id: id }); await inspectPending(app);
+    const captured = app.button("Finalize interrupted provider test").props.onClick;
+    if (edit === "refresh") void app.button("Refresh provider test records").props.onClick();
+    if (edit === "inspect") void app.button("Inspect pending provider test").props.onClick();
+    if (edit === "provider") app.field().props.onChange({ target: { value: "" } });
+    if (edit === "key") app.input("password").props.onChange({ target: { value: "synthetic-one-use-key" } });
+    if (edit === "live") app.input("checkbox").props.onChange({ target: { checked: true } });
+    await captured(); assert.ok(app.requests.every(item => !item.init.method)); app.unmount();
+  }
+});
+
+test("obsolete recovery reads cannot restore finalization after focus or another record inspection", async () => {
+  const app = harness(); await app.mount({ ...ready, can_start: false, pending_run_id: id });
+  const pending = app.button("Inspect pending provider test").props.onClick(); app.requests.shift().resolve(pendingRun); await flush();
+  const obsolete = app.requests.shift(); app.focus(); await app.reads({ ...ready, can_start: false });
+  obsolete.resolve(recoveryReady); await pending;
+  assert.equal(app.button("Finalize interrupted provider test"), undefined); assert.equal(app.record(), ""); app.unmount();
+});
+
+test("uncertain finalization only refreshes; failed refresh keeps new tests unavailable", async () => {
+  const app = harness(); await app.mount({ ...ready, can_start: false, pending_run_id: id }); await inspectPending(app);
+  const pending = app.button("Finalize interrupted provider test").props.onClick(); app.requests.shift().reject(new Error("lost")); await pending;
+  assert.ok(app.requests.every(item => !item.init.method)); app.requests.shift().reject(new Error("offline")); await flush();
+  assert.match(renderToStaticMarkup(app.render()), /Finalization response could not be confirmed/);
+  assert.equal(app.button("Test selected provider").props.disabled, true); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("finalization transport lock spans remount and late completion only refreshes retained history", async () => {
+  const shared = new Set(), first = harness("admin", shared); await first.mount({ ...ready, can_start: false, pending_run_id: id }); await inspectPending(first);
+  const pending = first.button("Finalize interrupted provider test").props.onClick(), request = first.requests.shift(); first.unmount();
+  const next = harness("admin", shared); await next.mount({ ...ready, can_start: false, pending_run_id: id }); await inspectPending(next);
+  await next.button("Finalize interrupted provider test").props.onClick(); assert.equal(next.requests.length, 0);
+  assert.equal(request.init.signal.aborted, true); request.resolve(interruptedRun); await pending;
+  assert.equal(shared.size, 0); await next.reads({ ...ready, can_start: false }, [interruptedRun]); assert.equal(next.requests.length, 0); next.unmount();
+});
+
+test("finalization rejects altered original provenance and malformed recovery attribution", async () => {
+  const app = harness(), signal = new AbortController().signal;
+  for (const change of [{ model: "changed" }, { started_at: "2026-10-20T00:00:00Z" }, { actor_id: "other" }, { credential_source: "request", requested_mode: "live" }]) {
+    const pending = app.helper.recoverProbe("org", "actor", pendingRun, recoveryReady, signal);
+    app.requests.shift().resolve({ ...interruptedRun, ...change }); await assert.rejects(pending);
+  }
+  for (const change of [{ actor_id: {} }, { previous_revision: 99 }, { recovered_at: "2026-10-21T00:00:00Z" }, { reason: "retry" }, { api_key: "unsafe" }]) {
+    assert.throws(() => app.helper.checkProbeRun("org", "openai", { ...interruptedRun, recovery: { ...interruptedRun.recovery, ...change } }));
+  }
+  assert.equal(app.requests.length, 0);
 });

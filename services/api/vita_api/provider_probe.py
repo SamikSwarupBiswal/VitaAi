@@ -34,6 +34,29 @@ class ProbeRequest(DiscoveryRequest):
     expected_configuration_revision: int = Field(ge=1)
 
 
+class ProbeRecoveryRequest(Contract):
+    expected_provider: ProviderId
+    expected_revision: int = Field(ge=1)
+    expected_worker_deadline_at: AwareDatetime
+
+
+class ProbeRecovery(Contract):
+    actor_id: str
+    recovered_at: AwareDatetime
+    previous_revision: int
+    reason: Literal["worker_deadline_elapsed"] = "worker_deadline_elapsed"
+
+
+class ProbeRecoveryReadiness(Contract):
+    organization_id: str
+    provider: ProviderId
+    run_id: UUID
+    run_revision: int
+    worker_deadline_at: AwareDatetime
+    can_recover: bool
+    reason: Literal["eligible", "role_denied", "terminal", "worker_active"]
+
+
 class ProbeRun(Contract):
     id: UUID
     organization_id: str
@@ -48,7 +71,7 @@ class ProbeRun(Contract):
     credential_source: Literal["server", "request"]
     requested_mode: Literal["mock", "live"]
     mode: Literal["disabled", "mock", "live", "fallback"]
-    status: Literal["pending", "succeeded", "unavailable", "failed", "invalid_output", "discarded"] = "pending"
+    status: Literal["pending", "succeeded", "unavailable", "failed", "invalid_output", "discarded", "interrupted"] = "pending"
     validation: Literal["not_run", "rejected", "synthetic_compatibility_valid"] = "not_run"
     started_at: AwareDatetime
     worker_deadline_at: AwareDatetime
@@ -58,6 +81,7 @@ class ProbeRun(Contract):
     input_tokens: int | None = None
     output_tokens: int | None = None
     error_code: str | None = None
+    recovery: ProbeRecovery | None = None
 
 
 class ProbeReadiness(Contract):
@@ -158,6 +182,38 @@ class ProbeService:
                     and not pending and (next_start is None or self.clock() >= next_start)),
                 live_configured=entry.live_configured, byok_allowed=entry.byok_allowed,
                 pending_run_id=pending, next_start_at=next_start)
+
+    def recovery_readiness(self, actor_id, run_id):
+        with self.workflow._transaction(actor_id, write=False) as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            reason = ("role_denied" if actor.role != "admin" else "terminal" if run.status != "pending"
+                else "worker_active" if self.clock() < run.worker_deadline_at else "eligible")
+            return ProbeRecoveryReadiness(organization_id=actor.organization_id, provider=run.provider,
+                run_id=run.id, run_revision=run.revision, worker_deadline_at=run.worker_deadline_at,
+                can_recover=reason == "eligible", reason=reason)
+
+    def recover(self, actor_id, run_id, body):
+        with self.workflow._transaction(actor_id) as (connection, actor):
+            run = self.load(connection, actor.organization_id, run_id)
+            if actor.role != "admin":
+                raise PolicyDenied("provider_admin_required", 403)
+            if (run.status != "pending" or run.revision != body.expected_revision
+                    or run.provider != body.expected_provider or run.worker_deadline_at != body.expected_worker_deadline_at):
+                raise PolicyDenied("probe_recovery_state_changed", 409)
+            now = self.clock()
+            if now < run.worker_deadline_at:
+                raise PolicyDenied("probe_worker_not_recoverable", 409)
+            run.recovery = ProbeRecovery(actor_id=actor.id, recovered_at=now, previous_revision=run.revision)
+            run.status, run.error_code, run.finished_at = "interrupted", "probe_interrupted", now
+            # Separate from worker finish: finalization requires the original deadline to have elapsed.
+            result = connection.execute(update(probes).where(probes.c.id == str(run.id),
+                probes.c.organization_id == actor.organization_id, probes.c.provider == body.expected_provider,
+                probes.c.status == "pending", probes.c.payload["revision"].as_integer() == body.expected_revision)
+                .values(status=run.status, payload=run.model_copy(update={"revision": run.revision + 1}).model_dump(mode="json")))
+            if result.rowcount != 1:
+                raise PolicyDenied("probe_recovery_state_changed", 409)
+            run.revision += 1
+            return run
 
     def check(self, connection, actor, run, config, request_key):
         saved = self.load(connection, run.organization_id, run.id)
@@ -271,6 +327,14 @@ def install_probe_routes(app, store, identity, settings, transport=None):
     def get(run_id: UUID, request: Request, actor: Annotated[Actor, Depends(current)]):
         with service(request).workflow._transaction(actor.id, write=False) as (connection, fresh):
             return ProbeService.load(connection, fresh.organization_id, run_id)
+
+    @router.get("/tests/{run_id}/recovery-readiness", response_model=ProbeRecoveryReadiness)
+    def recovery_readiness(run_id: UUID, request: Request, actor: Annotated[Actor, Depends(current)]):
+        return service(request).recovery_readiness(actor.id, run_id)
+
+    @router.post("/tests/{run_id}/recover", response_model=ProbeRun)
+    def recover(run_id: UUID, body: ProbeRecoveryRequest, request: Request, actor: Annotated[Actor, Depends(current)]):
+        return service(request).recover(actor.id, run_id, body)
 
     @router.get("/providers/{provider}/tests", response_model=list[ProbeRun])
     def history(provider: ProviderId, request: Request, actor: Annotated[Actor, Depends(current)]):

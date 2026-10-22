@@ -4,6 +4,7 @@ import type { CatalogEntry } from "./comparison";
 
 export type ProbeRun = components["schemas"]["ProbeRun"];
 export type ProbeReadiness = components["schemas"]["ProbeReadiness"];
+export type ProbeRecoveryReadiness = components["schemas"]["ProbeRecoveryReadiness"];
 export type ProviderId = CatalogEntry["provider"];
 const prefix = "provider-comparison";
 const providers: ProviderId[] = ["nebius", "openai", "anthropic", "nvidia", "foundry"];
@@ -33,14 +34,14 @@ export function checkProbeRun(organization: string, provider: ProviderId, run: P
   const fields = ["schema_version", "id", "organization_id", "actor_id", "provider", "policy_version", "revision",
     "configuration_revision", "model", "expected_response_model", "response_model", "credential_source", "requested_mode",
     "mode", "status", "validation", "started_at", "worker_deadline_at", "finished_at", "latency_ms", "request_id",
-    "input_tokens", "output_tokens", "error_code"];
+    "input_tokens", "output_tokens", "error_code", "recovery"];
   if (!run || Object.keys(run).some(key => !fields.includes(key)) || run.schema_version !== "1" || !uuid.test(run.id)
     || run.organization_id !== organization || run.provider !== provider || typeof run.actor_id !== "string" || !run.actor_id.trim()
     || run.policy_version !== "synthetic-probe-1" || !positive(run.revision) || !positive(run.configuration_revision)
     || !model(run.model) || !model(run.expected_response_model) || !model(run.response_model)
     || !["server", "request"].includes(run.credential_source) || !["mock", "live"].includes(run.requested_mode)
     || !["disabled", "mock", "live", "fallback"].includes(run.mode)
-    || !["pending", "succeeded", "unavailable", "failed", "invalid_output", "discarded"].includes(run.status)
+    || !["pending", "succeeded", "unavailable", "failed", "invalid_output", "discarded", "interrupted"].includes(run.status)
     || !["not_run", "rejected", "synthetic_compatibility_valid"].includes(run.validation)
     || !date(run.started_at) || !date(run.worker_deadline_at) || Date.parse(run.worker_deadline_at) <= Date.parse(run.started_at)
     || (run.finished_at !== null && (!date(run.finished_at) || Date.parse(run.finished_at) < Date.parse(run.started_at)))
@@ -53,7 +54,38 @@ export function checkProbeRun(organization: string, provider: ProviderId, run: P
       || run.validation !== "synthetic_compatibility_valid" || !run.model || !run.expected_response_model
       || run.response_model !== run.expected_response_model || run.error_code !== null
       : run.validation === "synthetic_compatibility_valid")) throw failure();
+  const recovery = run.recovery;
+  if (run.status === "interrupted") {
+    if (!recovery || Object.keys(recovery).some(key => !["schema_version", "actor_id", "recovered_at", "previous_revision", "reason"].includes(key))
+      || recovery.schema_version !== "1" || typeof recovery.actor_id !== "string" || !recovery.actor_id.trim()
+      || recovery.previous_revision !== run.revision - 1 || !positive(recovery.previous_revision)
+      || recovery.reason !== "worker_deadline_elapsed" || !date(recovery.recovered_at)
+      || Date.parse(recovery.recovered_at) < Date.parse(run.worker_deadline_at)
+      || recovery.recovered_at !== run.finished_at || run.error_code !== "probe_interrupted" || run.validation !== "not_run") throw failure();
+  } else if (recovery) throw failure();
   return run;
+}
+
+export async function readProbeRecovery(organization: string, run: ProbeRun, signal: AbortSignal) {
+  const ready = await api<ProbeRecoveryReadiness>(`${prefix}/tests/${run.id}/recovery-readiness`, { signal });
+  if (ready.organization_id !== organization || ready.provider !== run.provider || ready.run_id !== run.id
+    || ready.run_revision !== run.revision || ready.worker_deadline_at !== run.worker_deadline_at
+    || typeof ready.can_recover !== "boolean" || !["eligible", "role_denied", "terminal", "worker_active"].includes(ready.reason)
+    || ready.can_recover !== (ready.reason === "eligible") || ready.can_recover && run.status !== "pending") throw failure();
+  return ready;
+}
+
+export async function recoverProbe(organization: string, actor: string, run: ProbeRun, ready: ProbeRecoveryReadiness, signal: AbortSignal) {
+  const body: components["schemas"]["ProbeRecoveryRequest"] = { schema_version: "1", expected_provider: run.provider,
+    expected_revision: ready.run_revision, expected_worker_deadline_at: ready.worker_deadline_at };
+  const saved = checkProbeRun(organization, run.provider, await api<ProbeRun>(`${prefix}/tests/${run.id}/recover`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  }));
+  const mutable = ["revision", "status", "error_code", "finished_at", "recovery"];
+  if (saved.id !== run.id || saved.status !== "interrupted" || saved.revision !== run.revision + 1
+    || saved.recovery?.actor_id !== actor || Object.keys(run).some(key => !mutable.includes(key)
+      && JSON.stringify(saved[key as keyof ProbeRun]) !== JSON.stringify(run[key as keyof ProbeRun]))) throw failure();
+  return saved;
 }
 
 export async function readTestReadiness(organization: string, entry: CatalogEntry, signal: AbortSignal) {

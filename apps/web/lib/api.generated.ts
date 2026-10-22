@@ -1312,6 +1312,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-comparison/tests/{run_id}/recovery-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recovery Readiness */
+        get: operations["recovery_readiness_api_provider_comparison_tests__run_id__recovery_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-comparison/tests/{run_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover */
+        post: operations["recover_api_provider_comparison_tests__run_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-comparison/providers/{provider}/tests": {
         parameters: {
             query?: never;
@@ -3563,6 +3597,86 @@ export interface components {
             /** Next Start At */
             next_start_at: string | null;
         };
+        /** ProbeRecovery */
+        ProbeRecovery: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Recovered At
+             * Format: date-time
+             */
+            recovered_at: string;
+            /** Previous Revision */
+            previous_revision: number;
+            /**
+             * Reason
+             * @default worker_deadline_elapsed
+             * @constant
+             */
+            reason: "worker_deadline_elapsed";
+        };
+        /** ProbeRecoveryReadiness */
+        ProbeRecoveryReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Revision */
+            run_revision: number;
+            /**
+             * Worker Deadline At
+             * Format: date-time
+             */
+            worker_deadline_at: string;
+            /** Can Recover */
+            can_recover: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "eligible" | "role_denied" | "terminal" | "worker_active";
+        };
+        /** ProbeRecoveryRequest */
+        ProbeRecoveryRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Expected Provider
+             * @enum {string}
+             */
+            expected_provider: "nebius" | "openai" | "anthropic" | "nvidia" | "foundry";
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Expected Worker Deadline At
+             * Format: date-time
+             */
+            expected_worker_deadline_at: string;
+        };
         /** ProbeRequest */
         ProbeRequest: {
             /**
@@ -3643,7 +3757,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded";
+            status: "pending" | "succeeded" | "unavailable" | "failed" | "invalid_output" | "discarded" | "interrupted";
             /**
              * Validation
              * @default not_run
@@ -3672,6 +3786,7 @@ export interface components {
             output_tokens?: number | null;
             /** Error Code */
             error_code?: string | null;
+            recovery?: components["schemas"]["ProbeRecovery"] | null;
         };
         /** ProviderStatus */
         ProviderStatus: {
@@ -7110,6 +7225,72 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_readiness_api_provider_comparison_tests__run_id__recovery_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeRecoveryReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recover_api_provider_comparison_tests__run_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeRecoveryRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

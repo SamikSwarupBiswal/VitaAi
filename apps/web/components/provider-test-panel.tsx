@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CatalogEntry } from "@/lib/comparison";
-import { probeScope, providerTestPending, readProbe, readTestCatalog, readTestHistory, readTestReadiness, startProbe,
-  type ProbeReadiness, type ProbeRun, type ProviderId } from "@/lib/provider-tests";
+import { probeScope, providerTestPending, readProbe, readProbeRecovery, recoverProbe, readTestCatalog, readTestHistory, readTestReadiness, startProbe,
+  type ProbeReadiness, type ProbeRecoveryReadiness, type ProbeRun, type ProviderId } from "@/lib/provider-tests";
 
 export function ProviderTestPanel({ organization, actor, role }: { organization: string; actor: string; role: string }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
@@ -11,6 +11,7 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
   const [ready, setReady] = useState<ProbeReadiness | null>(null);
   const [runs, setRuns] = useState<ProbeRun[]>([]);
   const [selected, setSelected] = useState<ProbeRun | null>(null);
+  const [recovery, setRecovery] = useState<ProbeRecoveryReadiness | null>(null);
   const [lookup, setLookup] = useState("");
   const [live, setLive] = useState(false), [key, setKey] = useState("");
   const [reading, setReading] = useState(true), [busy, setBusy] = useState(false);
@@ -19,12 +20,14 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
   const choice = useRef<ProviderId | "">(""), requestKey = useRef(""), locked = useRef(false);
   const epoch = useRef(0), renderedEpoch = epoch.current;
   const currentReady = useRef<ProbeReadiness | null>(null);
+  const currentSelected = useRef<ProbeRun | null>(null), currentRecovery = useRef<ProbeRecoveryReadiness | null>(null);
 
   const refresh = useCallback(async (next = choice.current) => {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted) return;
     const current = ++sequence.current; ++detailSequence.current; ++epoch.current;
     choice.current = next; currentReady.current = null; requestKey.current = "";
+    currentSelected.current = null; currentRecovery.current = null; setRecovery(null);
     setProvider(next); setKey(""); setLive(false); setReading(true); setReady(null);
     setCatalog([]); setRuns([]); setSelected(null); setLookup(""); setError(null);
     try {
@@ -54,6 +57,7 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
     window.addEventListener("focus", reload); window.addEventListener("vitaai-provider-tests-changed", reload);
     return () => {
       controller.abort(); requestKey.current = ""; currentReady.current = null;
+      currentSelected.current = null; currentRecovery.current = null;
       window.removeEventListener("focus", reload); window.removeEventListener("vitaai-provider-tests-changed", reload);
     };
   }, [refresh]);
@@ -62,11 +66,42 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
     const signal = lifetime.current?.signal;
     if (!provider || choice.current !== provider || renderedEpoch !== epoch.current || !id || !signal || signal.aborted || locked.current || reading) return;
     const current = ++detailSequence.current;
-    setSelected(null); setError(null);
+    currentSelected.current = null; currentRecovery.current = null;
+    setSelected(null); setRecovery(null); setError(null);
     try {
       const run = await readProbe(organization, provider, id, signal);
-      if (!signal.aborted && current === detailSequence.current) setSelected(run);
+      if (signal.aborted || current !== detailSequence.current) return;
+      currentSelected.current = run; setSelected(run);
+      if (run.status === "pending") {
+        try {
+          const value = await readProbeRecovery(organization, run, signal);
+          if (!signal.aborted && current === detailSequence.current) { currentRecovery.current = value; setRecovery(value); }
+        } catch { if (!signal.aborted && current === detailSequence.current) setError("Finalization readiness unavailable. The saved test remains inspectable."); }
+      }
     } catch { if (!signal.aborted && current === detailSequence.current) setError("Saved provider test unavailable for this organization and provider."); }
+  }
+
+  async function finalize() {
+    const signal = lifetime.current?.signal, scope = probeScope(organization, provider);
+    if (!signal || signal.aborted || renderedEpoch !== epoch.current || choice.current !== provider
+      || locked.current || providerTestPending.has(scope) || reading || role !== "admin" || !selected
+      || selected.provider !== provider || selected.status !== "pending" || currentSelected.current !== selected
+      || !recovery?.can_recover || currentRecovery.current !== recovery || recovery.run_id !== selected.id
+      || recovery.run_revision !== selected.revision || Date.now() < Date.parse(recovery.worker_deadline_at)) return;
+    locked.current = true; providerTestPending.add(scope);
+    const current = ++sequence.current; ++detailSequence.current; ++epoch.current;
+    currentReady.current = null; currentSelected.current = null; currentRecovery.current = null; requestKey.current = "";
+    setBusy(true); setKey(""); setLive(false); setReady(null); setSelected(null); setRecovery(null); setNotice(null); setError(null);
+    try {
+      const saved = await recoverProbe(organization, actor, selected, recovery, signal);
+      if (!signal.aborted && current === sequence.current) setNotice(`Test ${saved.id} finalized as interrupted. No provider call or retry was requested. Inspect saved records.`);
+    } catch {
+      if (!signal.aborted && current === sequence.current) setNotice("Finalization response could not be confirmed and may have persisted. Refresh saved records; finalization and inference are never retried automatically.");
+    } finally {
+      locked.current = false; providerTestPending.delete(scope);
+      if (!signal.aborted) setBusy(false);
+      window.dispatchEvent(new Event("vitaai-provider-tests-changed"));
+    }
   }
 
   async function testProvider() {
@@ -83,6 +118,7 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
     locked.current = true; providerTestPending.add(scope);
     const current = ++sequence.current; ++detailSequence.current; ++epoch.current;
     requestKey.current = ""; currentReady.current = null;
+    currentSelected.current = null; currentRecovery.current = null; setRecovery(null);
     setKey(""); setLive(false); setReady(null); setSelected(null); setBusy(true); setNotice(null); setError(null);
     try {
       const saved = await startProbe(organization, actor, entry, mode, signal, apiKey);
@@ -108,7 +144,7 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
     {entry && <p>{entry.status} · configuration {entry.configuration_revision} · requested model {entry.model || "Unconfigured"} · expected response model {entry.expected_response_model || "Unconfigured"}.</p>}
     {role !== "admin" && <p>Read only. Only current session administrators may test providers.</p>}
     <p role="status">{reading ? "Loading saved provider test records..." : ready?.can_start ? "Explicit test available; live success remains unverified." : "Testing unavailable: role, test gate, organization, pending run or cooldown may block starts."}</p>
-    {ready?.pending_run_id && <p>Pending test {ready.pending_run_id} blocks new starts even after worker expiry. Inspect saved history; interrupted-test finalization is not available yet.</p>}
+    {ready?.pending_run_id && <p>Pending test {ready.pending_run_id} blocks new starts even after worker expiry. Inspect it to check explicit finalization eligibility; reading never unblocks or retries it.</p>}
     {ready?.next_start_at && <p>60-second provider cooldown ends {ready.next_start_at}. Refresh records to check eligibility.</p>}
     <fieldset disabled={disabled || role !== "admin" || !ready}><legend>Next explicit provider test</legend>
       <label><input type="checkbox" checked={live} disabled={disabled || role !== "admin" || !ready || !live && !(ready.live_configured || ready.byok_allowed && key)}
@@ -133,6 +169,12 @@ export function ProviderTestPanel({ organization, actor, role }: { organization:
       <label>Saved provider test ID<input value={lookup} onChange={event => setLookup(event.target.value)} /></label>
       <button disabled={disabled || !provider || !lookup.trim()} onClick={() => inspect(lookup.trim())}>Inspect saved provider test ID</button>
       {selected && <ProviderTestRecord run={selected} configuration={entry?.configuration_revision} />}
+      {selected?.status === "pending" && <section aria-label="Interrupted provider test finalization"><h3>Interrupted provider test finalization</h3>
+        <p>Finalize only the inspected pending intent after its original worker deadline. No provider call, retry or renewed authority follows. Already-authorized remote work may still process or bill; finalization does not prove cancellation.</p>
+        <p>{recovery ? `Finalization: ${recovery.reason}. Original worker deadline ${recovery.worker_deadline_at}; revision ${recovery.run_revision}.`
+          : "Finalization readiness unavailable. Inspect the saved test again before finalizing."}</p>
+        <button disabled={disabled || role !== "admin" || !recovery?.can_recover} onClick={() => finalize()}>Finalize interrupted provider test</button>
+      </section>}
     </section>
   </details>;
 }
@@ -149,5 +191,6 @@ function ProviderTestRecord({ run, configuration }: { run: ProbeRun; configurati
     {run.error_code && <p>Server result: {run.error_code}</p>}
     {run.status === "succeeded" && <p>Only synthetic credential/model compatibility was validated. No account analysis or factual-quality certification.</p>}
     {run.status === "pending" && <p>Unresolved pending intent blocks duplicates. Reading never unblocks or retries it.</p>}
+    {run.recovery && <p>Finalized as interrupted by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous revision {run.recovery.previous_revision}; reason {run.recovery.reason}. Original intent and metadata remain historical; this is no provider outcome or cancellation proof.</p>}
   </section>;
 }
