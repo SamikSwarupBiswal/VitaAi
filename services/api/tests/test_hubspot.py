@@ -21,7 +21,7 @@ from vita_api.app import create_app
 from vita_api.config import PROPERTY_SEMANTICS, Settings
 from vita_api.hubspot import HubSpot, HubSpotFailure
 from vita_api.hubspot_changes import SourceDetection, detections
-from vita_api.hubspot_refresh import authorizations
+from vita_api.hubspot_refresh import RefreshWorker, authorizations, occurrences
 from vita_api.hubspot_sync import observations, sync_runs
 from vita_api.identity import Identity, users
 from vita_api.provider_comparison import comparisons
@@ -124,6 +124,128 @@ class HubSpotTransportTests(unittest.TestCase):
 
 
 class HubSpotApiTests(unittest.TestCase):
+    def refresh_worker_fixture(self):
+        path, body = self.refresh_fixture()
+        result = self.client.post(path, headers=HEADERS, json=body)
+        self.assertEqual(result.status_code, 200, result.text)
+        grant = result.json()
+        due = datetime.fromisoformat(grant["first_due_at"])
+        worker = RefreshWorker(self.app.state.store, self.settings, httpx.MockTransport(self.respond), clock=lambda: due)
+        return path, grant, due, worker
+
+    def test_refresh_worker_due_concurrency_reconstruction_and_staging_only(self):
+        _, grant, due, worker = self.refresh_worker_fixture()
+        before = self.client.get("/api/portfolio").json()
+        worker.clock = lambda: due - timedelta(microseconds=1)
+        self.assertIsNone(worker.execute_due(ACCOUNT_ID))
+        self.assertEqual(self.calls, [])
+        worker.clock = lambda: due
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: worker.execute_due(ACCOUNT_ID), range(2)))
+        self.assertEqual(sum(result is not None for result in results), 1)
+        final = next(result for result in results if result is not None)
+        self.assertEqual(final.status, "succeeded")
+        self.assertEqual(final.slot, 0)
+        self.assertEqual(len(self.calls), 2)
+        again = RefreshWorker(self.app.state.store, self.settings, httpx.MockTransport(self.respond), clock=lambda: due)
+        self.assertIsNone(again.execute_due(ACCOUNT_ID))
+        saved = self.client.get(f"/api/integrations/hubspot/runs/{final.sync_run_id}")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["disposition"], "baseline")
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        again.clock = lambda: due + timedelta(seconds=1800)
+        later = again.execute_due(ACCOUNT_ID)
+        self.assertEqual(later.slot, 2)  # missed slot1 is not replayed
+        self.assertEqual(self.client.get(f"/api/integrations/hubspot/runs/{later.sync_run_id}").json()["disposition"], "unchanged")
+        self.assertEqual(len(self.calls), 4)
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(func.count()).select_from(observations)).scalar_one(), 1)
+            self.assertEqual(connection.execute(select(func.count()).select_from(occurrences)).scalar_one(), 2)
+        self.assertEqual(final.authorization_id.hex, grant["id"].replace("-", ""))
+
+    def test_refresh_worker_revocation_between_gets_fences_and_pending_blocks_regrant(self):
+        from vita_api.governance import PolicyDenied
+        path, _, _due, worker = self.refresh_worker_fixture()
+        def respond(request):
+            result = self.respond(request)
+            if request.url.path == "/account-info/v3/details":
+                self.assertEqual(self.client.post(path + "/revoke", headers=HEADERS,
+                                                 json={"expected_revision": 1}).status_code, 200)
+            return result
+        worker.transport = httpx.MockTransport(respond)
+        with self.assertRaises(PolicyDenied):
+            worker.execute_due(ACCOUNT_ID)
+        self.assertEqual(len(self.calls), 1)
+        view = self.client.get(path).json()
+        body = {"expected_revision": 2, "expected_account_revision": view["account_revision"],
+            "expected_configuration_hash": view["configuration_hash"], "interval_seconds": 900, "duration_seconds": 7200}
+        new = self.client.post(path, headers=HEADERS, json=body).json()
+        worker.clock = lambda: datetime.fromisoformat(new["first_due_at"]) + timedelta(seconds=900)
+        self.assertIsNone(worker.execute_due(ACCOUNT_ID))
+        self.assertEqual(len(self.calls), 1)
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(occurrences.c.status)).scalar_one(), "pending")
+            self.assertEqual(connection.execute(select(func.count()).select_from(observations)).scalar_one(), 0)
+
+    def test_refresh_worker_publication_deadline_and_logout_leave_pending_without_output(self):
+        from vita_api.governance import PolicyDenied
+        _, _, due, worker = self.refresh_worker_fixture()
+        self.on_company = lambda: setattr(worker, "clock", lambda: due + timedelta(seconds=120))
+        with self.assertRaises(PolicyDenied):
+            worker.execute_due(ACCOUNT_ID)
+        self.assertEqual(len(self.calls), 2)
+        self.identity.logout(self.client.cookies.get("vitaai_session"))
+        with self.assertRaises(PolicyDenied):
+            worker.execute_due(ACCOUNT_ID)
+        self.assertEqual(len(self.calls), 2)
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(occurrences.c.status)).scalar_one(), "pending")
+            self.assertEqual(connection.execute(select(func.count()).select_from(sync_runs)).scalar_one(), 0)
+            self.assertEqual(connection.execute(select(func.count()).select_from(observations)).scalar_one(), 0)
+
+    def test_refresh_worker_failed_occurrence_blocks_later_slots_without_retry(self):
+        _, _, due, worker = self.refresh_worker_fixture()
+        self.status = 503
+        failed = worker.execute_due(ACCOUNT_ID)
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.error_code, "hubspot_http_503")
+        self.assertEqual(len(self.calls), 2)
+        worker.clock = lambda: due + timedelta(seconds=900)
+        self.assertIsNone(worker.execute_due(ACCOUNT_ID))
+        self.assertEqual(len(self.calls), 2)
+
+    def test_refresh_worker_interruption_after_sync_commit_retains_pending_and_saved_run(self):
+        from vita_api.hubspot_sync import HubSpotSync
+        _, _, due, worker = self.refresh_worker_fixture()
+        original = HubSpotSync.sync
+        def interrupted(operation, *args, **kwargs):
+            original(operation, *args, **kwargs)
+            raise RuntimeError("synthetic interruption after publication")
+        with patch.object(HubSpotSync, "sync", interrupted), self.assertRaises(RuntimeError):
+            worker.execute_due(ACCOUNT_ID)
+        with self.app.state.store.engine.connect() as connection:
+            record = connection.execute(select(occurrences.c.payload)).scalar_one()
+            self.assertEqual(record["status"], "pending")
+            saved = connection.execute(select(sync_runs.c.payload).where(
+                sync_runs.c.id == record["sync_run_id"])).scalar_one()
+            self.assertEqual(saved["status"], "succeeded")
+        reconstructed = RefreshWorker(self.app.state.store, self.settings,
+            httpx.MockTransport(self.respond), clock=lambda: due + timedelta(seconds=900))
+        self.assertIsNone(reconstructed.execute_due(ACCOUNT_ID))
+        self.assertEqual(len(self.calls), 2)
+
+    def test_refresh_worker_changed_binding_and_expired_grant_never_dispatch(self):
+        from vita_api.governance import PolicyDenied
+        _, grant, due, worker = self.refresh_worker_fixture()
+        changed = self.settings.model_copy(update={"hubspot_configuration_revision": 2})
+        other = RefreshWorker(self.app.state.store, changed, httpx.MockTransport(self.respond), clock=lambda: due)
+        with self.assertRaises(PolicyDenied):
+            other.execute_due(ACCOUNT_ID)
+        worker.clock = lambda: datetime.fromisoformat(grant["expires_at"])
+        with self.assertRaises(PolicyDenied):
+            worker.execute_due(ACCOUNT_ID)
+        self.assertEqual(self.calls, [])
+
     def refresh_fixture(self):
         settings = self.settings.model_copy(update={"hubspot_refresh_enabled": True})
         self.client.__exit__(None, None, None)
@@ -392,6 +514,8 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(narratives)).all(), [])
             self.assertEqual(connection.execute(select(probes)).all(), [])
             self.assertEqual(connection.execute(select(authorizations)).all(), [])
+            self.assertEqual(connection.execute(select(occurrences)).all(), [])
+            occurrences.drop(connection)
             authorizations.drop(connection)
             probes.drop(connection)
             narratives.drop(connection)
@@ -402,7 +526,7 @@ class HubSpotApiTests(unittest.TestCase):
         with self.app.state.store.engine.connect() as connection:
             for table in (detections, source_versions, observations, plans, audits, versions):
                 self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
-            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0014")
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0015")
         selected = self.client.post(path, headers=HEADERS, json=body)
         self.assertEqual(selected.status_code, 200, selected.text)
         self.assertEqual(selected.json()["selection"]["detection"], changed)
@@ -715,6 +839,8 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(narratives)).all(), [])
             self.assertEqual(connection.execute(select(probes)).all(), [])
             self.assertEqual(connection.execute(select(authorizations)).all(), [])
+            self.assertEqual(connection.execute(select(occurrences)).all(), [])
+            occurrences.drop(connection)
             authorizations.drop(connection)
             probes.drop(connection)
             narratives.drop(connection)
@@ -727,7 +853,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0014")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0015")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)

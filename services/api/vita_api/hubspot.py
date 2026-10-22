@@ -127,7 +127,7 @@ class HubSpot:
         except (ValueError, UnicodeError):
             raise HubSpotFailure("invalid_response") from None
 
-    def read_company(self, company_id: str, now: datetime | None = None) -> CompanyRead:
+    def read_company(self, company_id: str, now: datetime | None = None, *, before_request=None) -> CompanyRead:
         if not self.configured:
             raise HubSpotFailure("hubspot_unconfigured")
         if company_id not in self.settings.hubspot_company_map.values():
@@ -135,6 +135,8 @@ class HubSpot:
         with httpx.Client(base_url="https://api.hubapi.com", timeout=15, follow_redirects=False,
                           transport=self.transport, headers={"Authorization": "Bearer " +
                           self.settings.hubspot_access_token.get_secret_value()}) as client:
+            if before_request:
+                before_request()
             portal = self._get(client, "/account-info/v3/details").get("portalId")
             if type(portal) is not int or portal < 1:
                 raise HubSpotFailure("invalid_response")
@@ -142,11 +144,15 @@ class HubSpot:
                 raise HubSpotFailure("portal_mismatch")
             types = self.property_types()
             for name, expected_type in types.items():
+                if before_request:
+                    before_request()
                 definition = self._get(client, f"/crm/v3/properties/companies/{name}")
                 if (definition.get("name") != name or definition.get("type") != expected_type
                         or definition.get("archived") is not False):
                     raise HubSpotFailure("property_type_mismatch")
             fields = ["name", "domain", "industry", *sorted(types)]
+            if before_request:
+                before_request()
             data = self._get(client, f"/crm/v3/objects/companies/{company_id}",
                              params={"properties": ",".join(fields), "archived": "false"})
         try:

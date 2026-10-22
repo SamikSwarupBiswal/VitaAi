@@ -75,8 +75,9 @@ sync_runs = Table("hubspot_sync_runs", metadata,
 
 
 class HubSpotSync:
-    def __init__(self, store, connector, token):
+    def __init__(self, store, connector, token, *, session_hash=None):
         self.engine, self.connector, self.token = store.engine, connector, token
+        self.session_hash = session_hash if session_hash is not None else token_digest(token or "")
 
     @contextmanager
     def transaction(self, *, write=False):
@@ -91,7 +92,7 @@ class HubSpotSync:
                                                        .encode()).digest()[:8], "big", signed=True)
                     connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
                 row = connection.execute(select(users).join(sessions, sessions.c.user_id == users.c.id).where(
-                    sessions.c.token_hash == token_digest(self.token or ""),
+                    sessions.c.token_hash == self.session_hash,
                     sessions.c.expires_at > int(datetime.now(UTC).timestamp()), users.c.enabled.is_(True))
                     .with_for_update()).mappings().first()
                 if row is None:
@@ -134,26 +135,35 @@ class HubSpotSync:
             self.account(connection, actor, record.account_id)
             return record
 
-    def sync(self, account_id, expected):
+    def sync(self, account_id, expected, *, guard=None, run_id=None):
         if not self.connector.configured:
             raise PolicyDenied("hubspot_unconfigured", 503)
         with self.transaction(write=True) as (connection, actor):
             account = self.account(connection, actor, account_id, expected)
+            if guard:
+                guard(connection, actor)
             previous = self.latest(connection, actor.organization_id, account_id)
         company_id = self.connector.settings.hubspot_company_map[str(account_id)]
         started = datetime.now(UTC)
         result, error_code = None, None
+        def before_request():
+            with self.transaction(write=True) as (connection, current):
+                self.account(connection, current, account_id, account.revision)
+                guard(connection, current)
         try:
             # Both provider GETs run outside database transactions/locks. No automatic retry.
-            result = self.connector.read_company(company_id)
+            result = (self.connector.read_company(company_id, before_request=before_request) if guard
+                      else self.connector.read_company(company_id))
         except HubSpotFailure as error:
             error_code = str(error)
         with self.transaction(write=True) as (connection, current):
             if current.id != actor.id or current.organization_id != actor.organization_id:
                 raise PolicyDenied("membership_changed", 409)
             self.account(connection, current, account_id, account.revision)
+            if guard:
+                guard(connection, current)
             latest = self.latest(connection, current.organization_id, account_id)
-            run = HubSpotSyncRun(id=uuid4(), organization_id=current.organization_id, account_id=account_id,
+            run = HubSpotSyncRun(id=run_id or uuid4(), organization_id=current.organization_id, account_id=account_id,
                 actor_id=current.id, account_revision=account.revision,
                 portal_id=self.connector.settings.hubspot_portal_id, company_id=company_id,
                 started_at=started, finished_at=datetime.now(UTC), status="failed", error_code=error_code)
