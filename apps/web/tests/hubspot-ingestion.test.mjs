@@ -73,8 +73,8 @@ function harness(role = "admin", shared = new Set()) {
   };
 }
 
-test("all four explicit types bind displayed configuration; duplicates and uncertainty never replay POST", async () => {
-  for (const type of ["contacts", "deals", "notes", "tasks"]) {
+test("all seven explicit types bind displayed configuration; duplicates and uncertainty never replay POST", async () => {
+  for (const type of ["contacts", "deals", "notes", "tasks", "calls", "meetings", "emails"]) {
     const app = harness(); await app.mount();
     assert.equal(app.button("Stage associated records").props.disabled, true);
     app.fill(type); const submit = app.forms()[0].props.onSubmit;

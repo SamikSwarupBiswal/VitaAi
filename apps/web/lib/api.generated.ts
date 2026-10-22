@@ -2964,7 +2964,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "contacts" | "deals" | "notes" | "tasks";
+            object_type: "contacts" | "deals" | "notes" | "tasks" | "calls" | "meetings" | "emails";
         };
         /** IngestionRun */
         IngestionRun: {
@@ -3002,7 +3002,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "contacts" | "deals" | "notes" | "tasks";
+            object_type: "contacts" | "deals" | "notes" | "tasks" | "calls" | "meetings" | "emails";
             /** Sequence */
             sequence: number;
             /**

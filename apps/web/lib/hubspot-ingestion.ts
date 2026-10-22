@@ -23,7 +23,7 @@ export function checkIngestion(view: AccountView, run: IngestionRun) {
     || !Number.isSafeInteger(run.configuration_revision) || run.configuration_revision < 1
     || (run.configuration_hash != null && !/^[a-f0-9]{64}$/.test(run.configuration_hash))
     || !Number.isSafeInteger(run.sequence) || run.sequence < 1 || !Number.isSafeInteger(run.revision) || run.revision < 1
-    || !["contacts", "deals", "notes", "tasks"].includes(run.object_type)
+    || !["contacts", "deals", "notes", "tasks", "calls", "meetings", "emails"].includes(run.object_type)
     || !["pending", "succeeded", "failed", "interrupted"].includes(run.status)
     || ![run.started_at, run.worker_deadline_at].every(time) || !optionalTime(run.finished_at)
     || !Array.isArray(run.objects) || run.objects.length > 20) throw new Error("Invalid saved ingestion record.");

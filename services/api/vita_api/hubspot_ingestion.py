@@ -25,10 +25,13 @@ from .hubspot import HubSpot, HubSpotContract, HubSpotFailure
 from .hubspot_refresh import RefreshAuthorizations
 from .storage import accounts
 
-ObjectType = Literal["contacts", "deals", "notes", "tasks"]
+ObjectType = Literal["contacts", "deals", "notes", "tasks", "calls", "meetings", "emails"]
 PROPERTIES = {
     "contacts": ("firstname", "lastname", "email", "jobtitle"),
     "deals": ("dealname", "dealstage", "pipeline", "amount", "deal_currency_code", "closedate"),
+    "calls": ("hs_call_title", "hs_call_body", "hs_call_status", "hs_call_direction", "hs_call_duration", "hs_timestamp"),
+    "meetings": ("hs_meeting_title", "hs_meeting_body", "hs_meeting_start_time", "hs_meeting_end_time", "hs_meeting_outcome", "hs_timestamp"),
+    "emails": ("hs_email_subject", "hs_email_text", "hs_email_direction", "hs_email_status", "hs_timestamp"),
     "notes": ("hs_note_body", "hs_timestamp"),
     "tasks": ("hs_task_subject", "hs_task_body", "hs_task_status", "hs_task_type", "hs_timestamp"),
 }
@@ -173,7 +176,8 @@ class AssociatedReader(HubSpot):
                 raise HubSpotFailure("ingestion_limit_exceeded")
             result = []
             for object_id, types in sorted(associations.items()):
-                data = get(f"/crm/v3/objects/{object_type}/{object_id}",
+                object_prefix = "/crm/objects/2026-09" if object_type in {"calls", "meetings", "emails"} else "/crm/v3/objects"
+                data = get(f"{object_prefix}/{object_type}/{object_id}",
                            {"properties": ",".join(PROPERTIES[object_type]), "archived": "false"})
                 try:
                     if data["id"] != object_id or data["archived"] is not False:

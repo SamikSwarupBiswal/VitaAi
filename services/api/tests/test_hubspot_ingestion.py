@@ -94,6 +94,32 @@ class TransportTests(unittest.TestCase):
             with self.subTest(page=page, record=record), self.assertRaises(HubSpotFailure):
                 AssociatedReader(settings(), httpx.MockTransport(respond)).read("123", "contacts", before_request=lambda: None)
 
+    def test_activity_types_use_exact_read_paths_and_preserve_raw_properties(self):
+        cases = {
+            "calls": {"hs_call_title": "Support is a claim", "hs_call_body": None, "hs_call_duration": "0005", "hs_timestamp": "not-normalized"},
+            "meetings": {"hs_meeting_title": "Review", "hs_meeting_start_time": "0", "hs_meeting_end_time": None},
+            "emails": {"hs_email_subject": "<script>untrusted</script>", "hs_email_text": "No inferred support score", "hs_email_status": "SENT"},
+        }
+        for kind, properties in cases.items():
+            calls = []
+            def respond(request, calls=calls, kind=kind, properties=properties):
+                calls.append(request)
+                self.assertEqual((request.method, request.url.host), ("GET", "api.hubapi.com"))
+                if request.url.path == "/account-info/v3/details":
+                    value = {"portalId": 456}
+                elif request.url.path == f"/crm/v4/objects/companies/123/associations/{kind}":
+                    value = {"results": [ASSOCIATION]}
+                else:
+                    self.assertEqual(request.url.path, f"/crm/objects/2026-09/{kind}/789")
+                    self.assertEqual(request.url.params["archived"], "false")
+                    value = {**OBJECT, "properties": {**properties, "unselected": "discard"}}
+                return httpx.Response(200, json=value)
+            with self.subTest(kind=kind):
+                result = AssociatedReader(settings(), httpx.MockTransport(respond)).read("123", kind, before_request=lambda: None)
+                self.assertEqual(result[0].properties, properties)
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(result[0].created_at, datetime(2026, 9, 1, tzinfo=UTC))
+
     def test_safe_errors_no_retry_and_gates(self):
         calls = []
         def reject(request):
@@ -349,6 +375,27 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(len(result), 1)
             if kind == "deals":
                 self.assertEqual(result[0].properties, {"amount": "120.50", "deal_currency_code": None, "closedate": None})
+
+    def test_new_activity_types_stage_and_reconstruct_without_fact_promotion(self):
+        before = self.client.get("/api/accounts/" + ACCOUNT).json()
+        real = datetime
+        for index, kind in enumerate(("calls", "meetings", "emails")):
+            self.record["properties"] = {"hs_timestamp": None, "hs_call_duration": "0005", "hs_email_status": "SENT", "hs_meeting_outcome": "COMPLETED"}
+            with patch("vita_api.hubspot_ingestion.datetime") as clock:
+                clock.now.side_effect = lambda *_, offset=index: real.now(UTC) + timedelta(seconds=61 * offset)
+                response = self.start(object_type=kind)
+            self.assertEqual(response.status_code, 200, response.text)
+            run = response.json()
+            self.assertEqual((run["object_type"], run["status"], run["disposition"]), (kind, "succeeded", "baseline"))
+            self.assertIsNone(run["objects"][0]["properties"]["hs_timestamp"])
+            self.assertEqual(self.client.get(PREFIX + "/ingestions/" + run["id"]).json(), run)
+        saved = self.client.get(PATH).json()
+        rebuilt = create_app(self.settings.model_copy(update={"hubspot_ingestion_enabled": False, "hubspot_company_map": {}}),
+            hubspot_transport=httpx.MockTransport(lambda _: self.fail("Unexpected historical provider call")))
+        with TestClient(rebuilt) as client:
+            client.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            self.assertEqual(client.get(PATH).json(), saved)
+        self.assertEqual(self.client.get("/api/accounts/" + ACCOUNT).json(), before)
 
     def test_strict_requests_roles_and_scope_before_network(self):
         for body in ({"object_type": "companies"}, {"expected_account_revision": True},

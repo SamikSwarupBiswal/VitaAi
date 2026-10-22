@@ -84,7 +84,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted || !admin || locked.current || ingestionRequests.has(ingestionKey(view))) return;
     if (kind === "start" && (!ready.current || !readiness?.can_start || currentReadiness.current !== readiness
-      || capturedInput !== inputRevision.current || !["contacts", "deals", "notes", "tasks"].includes(objectType))) return;
+      || capturedInput !== inputRevision.current || !["contacts", "deals", "notes", "tasks", "calls", "meetings", "emails"].includes(objectType))) return;
     if (kind === "recover" && (!selected || currentRecord.current !== selected || currentRecovery.current !== recovery
       || !recovery?.eligible || selected.status !== "pending" || Date.now() < Date.parse(selected.worker_deadline_at))) return;
     const body = kind === "start" ? { expected_account_revision: view.account.revision,
@@ -118,7 +118,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
     {!admin && <p>Read only. An administrator must start or finalize ingestion.</p>}
     <form onSubmit={submit}><label>Associated object type<select required value={objectType} onChange={event => {
       setInputVersion(++inputRevision.current); setObjectType(event.target.value as IngestionObjectType | "");
-    }}><option value="">Choose a type</option>{["contacts", "deals", "notes", "tasks"].map(type => <option key={type} value={type}>{type}</option>)}</select></label>
+    }}><option value="">Choose a type</option>{["contacts", "deals", "notes", "tasks", "calls", "meetings", "emails"].map(type => <option key={type} value={type}>{type}</option>)}</select></label>
       <button disabled={pending || reading || !admin || !readyDisplay || !readiness?.can_start || !objectType}>Stage associated records</button></form>
     <button disabled={pending} onClick={() => refresh()}>Refresh ingestion records</button>
     {reading && <p role="status">Loading saved ingestion records...</p>}{pending && <p role="status">Ingestion request pending.</p>}
