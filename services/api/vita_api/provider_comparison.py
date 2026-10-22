@@ -171,6 +171,13 @@ def metadata_from_response(payload, result, provider):
                 setattr(result, field, tokens)
 
 
+def unique_analysis_object(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("Duplicate analysis field")
+    return value
+
+
 def analyze(catalog, provider, config, view, result, *, before_request):
     """One provider POST, without discovery/retry or primary ModelRun persistence."""
     start = perf_counter()
@@ -197,7 +204,7 @@ def analyze(catalog, provider, config, view, result, *, before_request):
             if payload.get("stop_reason") != "end_turn":
                 raise CatalogFailure("incomplete_generation")
             blocks = payload["content"]
-            if len(blocks) != 1 or blocks[0].get("type") != "text":
+            if not isinstance(blocks, list) or len(blocks) != 1 or blocks[0].get("type") != "text":
                 raise ValueError("Unsupported content")
             content = blocks[0]["text"]
         else:
@@ -207,12 +214,16 @@ def analyze(catalog, provider, config, view, result, *, before_request):
             before_request()
             payload = catalog.request(provider, config, "POST", "/chat/completions", body)
             metadata_from_response(payload, result, provider)
-            choice = payload["choices"][0]
+            choices = payload["choices"]
+            if not isinstance(choices, list) or len(choices) != 1:
+                raise ValueError("Ambiguous analysis choices")
+            choice = choices[0]
             if choice.get("finish_reason") != "stop":
                 raise CatalogFailure("incomplete_generation")
             content = choice["message"]["content"]
         if result.response_model != result.expected_response_model:
             raise CatalogFailure("response_model_mismatch")
+        json.loads(content, object_pairs_hook=unique_analysis_object)
         output = Analysis.model_validate_json(content)
         allowed = {factor.evidence_id for factor in view.assessment.factors if factor.evidence_id}
         if any(not set(item.evidence_ids).issubset(allowed) for item in output.findings + output.next_steps):

@@ -398,6 +398,59 @@ class ComparisonApiTests(unittest.TestCase):
         self.assertEqual(result["results"][1]["status"], "succeeded")
         self.assertEqual(len(self.calls), 2)
 
+    def test_ambiguous_outputs_reject_independently_across_all_providers(self):
+        self.settings.comparison_providers["foundry"] = ComparisonProviderConfig(enabled=True,
+            live_enabled=True, api_key="synthetic-foundry", model="deployment-test",
+            response_model="canonical-test", resource_name="test-resource")
+        before = self.client.get("/api/portfolio").json()
+        evidence = self.view["evidence"][0]["id"]
+        valid = json.dumps({"findings": [{"text": "Advisory finding", "evidence_ids": [evidence]}],
+            "next_steps": [{"text": "Review only", "evidence_ids": [evidence]}], "caveats": ["Unverified"]})
+        variants = {
+            "root": valid.replace('"findings":', '"findings":[],"findings":'),
+            "nested": valid.replace('"text":', '"text":"Discarded text","text":', 1),
+            "escaped": valid.replace('"caveats":', '"caveats":[],"\\u0063aveats":'),
+            "surrogate": valid.replace('"caveats": [', '"caveats": ["\\ud800",'),
+            "multiple": valid,
+        }
+        for provider in [*ENDPOINTS, "foundry"]:
+            host = "test-resource.services.ai.azure.com" if provider == "foundry" else httpx.URL(ENDPOINTS[provider]).host
+            partner = "anthropic" if provider == "openai" else "openai"
+            for variant, content in variants.items():
+                with self.subTest(provider=provider, variant=variant):
+                    with self.app.state.store.engine.begin() as connection:
+                        connection.execute(comparisons.delete())
+                    def response(request, host=host, provider=provider, content=content, variant=variant):
+                        if request.url.host != host:
+                            return self.valid_response(request)
+                        model = self.settings.comparison_providers[provider]
+                        payload = {"id": "ambiguous-test", "model": model.response_model or model.model}
+                        if provider == "anthropic":
+                            block = {"type": "text", "text": content}
+                            payload.update(stop_reason="end_turn", content=[block] * (2 if variant == "multiple" else 1),
+                                usage={"input_tokens": 20, "output_tokens": 12})
+                        else:
+                            choice = {"finish_reason": "stop", "message": {"content": content}}
+                            payload.update(choices=[choice] * (2 if variant == "multiple" else 1),
+                                usage={"prompt_tokens": 20, "completion_tokens": 12})
+                        return httpx.Response(200, json=payload)
+                    self.inference = response
+                    previous = len(self.calls)
+                    reply = self.compare(providers=[{"provider": name, "mode": "live", "expected_configuration_revision": 1}
+                        for name in [provider, partner]])
+                    self.assertEqual(reply.status_code, 200, reply.text)
+                    result = reply.json()
+                    bad, good = result["results"]
+                    self.assertEqual((bad["status"], bad["validation"], bad["mode"]),
+                                     ("invalid_output", "rejected", "fallback"))
+                    self.assertIsNone(bad["analysis"])
+                    self.assertEqual((bad["request_id"], bad["input_tokens"], bad["output_tokens"]),
+                                     ("ambiguous-test", 20, 12))
+                    self.assertEqual(good["status"], "succeeded")
+                    self.assertEqual(len(self.calls), previous + 2)
+                    self.assertEqual(self.client.get(PREFIX + "/runs/" + result["id"]).json(), result)
+                    self.assertEqual(self.client.get("/api/portfolio").json(), before)
+
     def test_truncated_output_retains_safe_usage_and_request_provenance(self):
         def response(request):
             if request.url.host == "api.anthropic.com":
