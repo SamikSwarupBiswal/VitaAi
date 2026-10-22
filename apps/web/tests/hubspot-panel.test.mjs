@@ -171,8 +171,9 @@ function workspaceHarness(t) {
     useEffect(callback, deps) { const i = cursor++; if (!(i in slots) || deps.some((value, index) => value !== slots[i][index])) {
       slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = callback(); }); } },
   };
-  const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel", "ResearchPanel", "SourceDetectionPanel", "ComparisonPanel"].map(name => [name, () => null]));
+  const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel", "ResearchPanel", "SourceDetectionPanel", "ComparisonPanel", "HubSpotRefreshPanel"].map(name => [name, () => null]));
   const workspace = load("../components/workspace.tsx", { react: hooks,
+    "./hubspot-refresh-panel": children,
     "next/navigation": { useRouter: () => ({}), useSearchParams: () => new URLSearchParams({ account: "a" }) },
     "next/link": { __esModule: true, default: () => null }, "./session-gate": {},
     "./account-table": children, "./account-detail": children, "./pipeline-panel": children, "./hubspot-panel": children, "./research-panel": children, "./comparison-panel": children, "./source-detection-panel": children,
