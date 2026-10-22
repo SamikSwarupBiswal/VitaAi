@@ -716,6 +716,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/ingestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion History */
+        get: operations["ingestion_history_api_integrations_hubspot_accounts__account_id__ingestions_get"];
+        put?: never;
+        /** Ingest */
+        post: operations["ingest_api_integrations_hubspot_accounts__account_id__ingestions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/ingestions/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion Record */
+        get: operations["ingestion_record_api_integrations_hubspot_ingestions__record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/ingestions/{record_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingestion Recover */
+        post: operations["ingestion_recover_api_integrations_hubspot_ingestions__record_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot": {
         parameters: {
             query?: never;
@@ -1793,6 +1845,51 @@ export interface components {
             /** Caveats */
             caveats: string[];
         };
+        /** AssociatedObject */
+        AssociatedObject: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Object Id */
+            object_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Properties */
+            properties: {
+                [key: string]: string | null;
+            };
+            /** Association Types */
+            association_types: components["schemas"]["AssociationType"][];
+        };
+        /** AssociationType */
+        AssociationType: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "HUBSPOT_DEFINED" | "USER_DEFINED" | "INTEGRATOR_DEFINED";
+            /** Type Id */
+            type_id: number;
+            /** Label */
+            label: string | null;
+        };
         /** AuditEvent */
         AuditEvent: {
             /**
@@ -2740,6 +2837,113 @@ export interface components {
             observation_id?: string | null;
             /** Error Code */
             error_code?: string | null;
+        };
+        /** IngestionRecovery */
+        IngestionRecovery: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /**
+             * Expected Worker Deadline At
+             * Format: date-time
+             */
+            expected_worker_deadline_at: string;
+        };
+        /** IngestionRequest */
+        IngestionRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /**
+             * Object Type
+             * @enum {string}
+             */
+            object_type: "contacts" | "deals" | "notes" | "tasks";
+        };
+        /** IngestionRun */
+        IngestionRun: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Actor Id */
+            actor_id: string;
+            /** Portal Id */
+            portal_id: string;
+            /** Company Id */
+            company_id: string;
+            /** Configuration Revision */
+            configuration_revision: number;
+            /**
+             * Object Type
+             * @enum {string}
+             */
+            object_type: "contacts" | "deals" | "notes" | "tasks";
+            /** Sequence */
+            sequence: number;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Worker Deadline At
+             * Format: date-time
+             */
+            worker_deadline_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "failed" | "interrupted";
+            /** Error Code */
+            error_code?: string | null;
+            /** Fingerprint */
+            fingerprint?: string | null;
+            /** Disposition */
+            disposition?: ("baseline" | "unchanged" | "changed") | null;
+            /** Previous Run Id */
+            previous_run_id?: string | null;
+            /** Objects */
+            objects?: components["schemas"]["AssociatedObject"][];
+            /** Recovered By */
+            recovered_by?: string | null;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -6438,6 +6642,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Execution"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestion_history_api_integrations_hubspot_accounts__account_id__ingestions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionRun"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_api_integrations_hubspot_accounts__account_id__ingestions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestion_record_api_integrations_hubspot_ingestions__record_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestion_recover_api_integrations_hubspot_ingestions__record_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestionRecovery"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionRun"];
                 };
             };
             /** @description Validation Error */

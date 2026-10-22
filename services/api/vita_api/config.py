@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     research_account_map: dict[str, ResearchTarget] = Field(default_factory=dict, max_length=50)
     research_narrative_provider: ComparisonProviderConfig = Field(default_factory=ComparisonProviderConfig)
     hubspot_enabled: bool = False
+    hubspot_ingestion_enabled: bool = False
     hubspot_write_enabled: bool = False
     hubspot_refresh_enabled: bool = False
     hubspot_refresh_worker_enabled: bool = False

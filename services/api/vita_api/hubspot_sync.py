@@ -40,6 +40,12 @@ from .hubspot_changes import (
     detections,
     snapshot,
 )
+from .hubspot_ingestion import (
+    Ingestion,
+    IngestionRecovery,
+    IngestionRequest,
+    IngestionRun,
+)
 from .hubspot_normalize import (
     AccountSourceVersion,
     HubSpotPreview,
@@ -354,6 +360,22 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
 
     Current = Annotated[Actor, Depends(current)]
     Service = Annotated[HubSpotSync, Depends(service)]
+
+    @router.post("/accounts/{account_id}/ingestions", response_model=IngestionRun)
+    def ingest(account_id: UUID, body: IngestionRequest, actor: Current, operation: Service):
+        return Ingestion(operation).start(account_id, body)
+
+    @router.get("/accounts/{account_id}/ingestions", response_model=list[IngestionRun])
+    def ingestion_history(account_id: UUID, actor: Current, operation: Service):
+        return Ingestion(operation).history(account_id)
+
+    @router.get("/ingestions/{record_id}", response_model=IngestionRun)
+    def ingestion_record(record_id: UUID, actor: Current, operation: Service):
+        return Ingestion(operation).inspect(record_id)
+
+    @router.post("/ingestions/{record_id}/recover", response_model=IngestionRun)
+    def ingestion_recover(record_id: UUID, body: IngestionRecovery, actor: Current, operation: Service):
+        return Ingestion(operation).recover(record_id, body)
 
     @router.get("", response_model=HubSpotStatus)
     def status(actor: Current):
