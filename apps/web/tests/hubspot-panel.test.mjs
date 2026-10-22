@@ -171,9 +171,10 @@ function workspaceHarness(t) {
     useEffect(callback, deps) { const i = cursor++; if (!(i in slots) || deps.some((value, index) => value !== slots[i][index])) {
       slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = callback(); }); } },
   };
-  const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel", "ResearchPanel", "SourceDetectionPanel", "ComparisonPanel", "HubSpotRefreshPanel"].map(name => [name, () => null]));
+  const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel", "ResearchPanel", "SourceDetectionPanel", "ComparisonPanel", "HubSpotRefreshPanel", "HubSpotIngestionPanel"].map(name => [name, () => null]));
   const workspace = load("../components/workspace.tsx", { react: hooks,
     "./hubspot-refresh-panel": children,
+    "./hubspot-ingestion-panel": children,
     "next/navigation": { useRouter: () => ({}), useSearchParams: () => new URLSearchParams({ account: "a" }) },
     "next/link": { __esModule: true, default: () => null }, "./session-gate": {},
     "./account-table": children, "./account-detail": children, "./pipeline-panel": children, "./hubspot-panel": children, "./research-panel": children, "./comparison-panel": children, "./source-detection-panel": children,
@@ -197,6 +198,7 @@ test("parent invalidation cancels old analysis and reads; failed refresh keeps a
   const researchKey = app.child("ResearchPanel").key;
   const comparisonKey = app.child("ComparisonPanel").key;
   const detectionKey = app.child("SourceDetectionPanel").key;
+  const ingestionKey = app.child("HubSpotIngestionPanel").key;
   const analysis = app.child("AccountDetail").props.onAnalyze(); const oldAnalysis = app.requests.shift();
   app.refreshButton().props.onClick(); const oldPortfolio = app.requests.shift(), oldProvider = app.requests.shift();
   app.child("HubSpotPanel").props.onInvalidate();
@@ -205,6 +207,7 @@ test("parent invalidation cancels old analysis and reads; failed refresh keeps a
   assert.equal(app.child("ResearchPanel"), undefined);
   assert.equal(app.child("ComparisonPanel"), undefined);
   assert.equal(app.child("SourceDetectionPanel"), undefined);
+  assert.equal(app.child("HubSpotIngestionPanel"), undefined);
   assert.equal(app.child("HubSpotPanel").props.blocked, true);
   assert.equal(app.refreshButton().props.disabled, true);
   const refresh = app.child("HubSpotPanel").props.onRefresh("Request may have persisted.");
@@ -223,6 +226,8 @@ test("parent invalidation cancels old analysis and reads; failed refresh keeps a
   assert.notEqual(app.child("ComparisonPanel").key, comparisonKey);
   assert.equal(app.child("SourceDetectionPanel").props.view.account.revision, 4);
   assert.notEqual(app.child("SourceDetectionPanel").key, detectionKey);
+  assert.equal(app.child("HubSpotIngestionPanel").props.view.account.revision, 4);
+  assert.notEqual(app.child("HubSpotIngestionPanel").key, ingestionKey);
 });
 
 test("source completion after navigation refreshes mounted workspace and mission readers", async t => {

@@ -410,3 +410,37 @@ test("comparison allows only bounded paths; implicit HEAD cannot discover or com
   }
   assert.equal(upstream.mock.callCount(), 0);
 });
+
+test("associated ingestion forwards only six explicit method/path pairs, never implicit HEAD", async t => {
+  const id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8", prefix = "integrations/hubspot";
+  const body = '{"expected_revision":1,"expected_account_revision":3,"expected_worker_deadline_at":"2026-10-22T00:02:00Z"}';
+  const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.match(url, /^http:\/\/127\.0\.0\.1:8000\/api\/integrations\/hubspot\//);
+    assert.equal(init.headers.Cookie, "vitaai_session=opaque-session"); assert.equal(init.headers.Authorization, undefined);
+    assert.equal(init.cache, "no-store"); if (init.method === "POST") assert.equal(init.body, body);
+    return Response.json({ status: "retained" });
+  });
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  const pairs = [["GET", `accounts/${id}/ingestions/readiness`], ["GET", `accounts/${id}/ingestions`],
+    ["POST", `accounts/${id}/ingestions`], ["GET", `ingestions/${id}`],
+    ["GET", `ingestions/${id}/recovery-readiness`], ["POST", `ingestions/${id}/recover`]];
+  for (const [method, suffix] of pairs) {
+    const name = `${prefix}/${suffix}`;
+    const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, { method,
+      headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", cookie: "vitaai_session=opaque-session; other=private", authorization: "never" },
+      ...(method === "POST" ? { body } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(upstream.mock.callCount(), 6); upstream.mock.resetCalls();
+  for (const [method, suffix] of [...pairs.map(([, suffix]) => ["HEAD", suffix]),
+    ["POST", `accounts/${id}/ingestions/readiness`], ["GET", `ingestions/${id}/recover`],
+    ["POST", `ingestions/${id}`], ["POST", `ingestions/${id}/recovery-readiness`],
+    ["GET", "ingestions/invalid"], ["POST", `accounts/${id}/ingestions/extra`], ["GET", `ingestions/${id}/extra`]]) {
+    const name = `${prefix}/${suffix}`;
+    const response = await methods[method](new NextRequest(`http://localhost:3000/api/${name}`, { method, headers: { host: "127.0.0.1:3000" } }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, 404);
+  }
+  assert.equal(upstream.mock.callCount(), 0);
+});

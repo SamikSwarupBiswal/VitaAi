@@ -100,6 +100,7 @@ test("workspace discloses incomplete totals and sorts unknowns last in both dire
       "./research-panel": { ResearchPanel: () => null },
       "./comparison-panel": { ComparisonPanel: () => null },
       "./source-detection-panel": { SourceDetectionPanel: () => null },
+      "./hubspot-ingestion-panel": { HubSpotIngestionPanel: () => null },
       "./hubspot-refresh-panel": { HubSpotRefreshPanel: () => null },
     }, "\nexports.contentForAcceptance = WorkspaceContent;");
     const tree = workspace.contentForAcceptance({ accountDirectory: true, persona: "executive" });

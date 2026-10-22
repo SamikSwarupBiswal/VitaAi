@@ -5,10 +5,11 @@ export type IngestionReadiness = components["schemas"]["IngestionReadiness"];
 export type IngestionRun = components["schemas"]["IngestionRun"];
 export type IngestionRecoveryReadiness = components["schemas"]["IngestionRecoveryReadiness"];
 export type IngestionObjectType = IngestionRun["object_type"];
-const accountPath = (id: string) => `integrations/hubspot/accounts/${encodeURIComponent(id)}/ingestions`;
-const recordPath = (id: string) => `integrations/hubspot/ingestions/${encodeURIComponent(id)}`;
+export const accountPath = (id: string) => `integrations/hubspot/accounts/${encodeURIComponent(id)}/ingestions`;
+export const recordPath = (id: string) => `integrations/hubspot/ingestions/${encodeURIComponent(id)}`;
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const time = (value: string | null | undefined) => value == null || Number.isFinite(Date.parse(value));
+const time = (value: unknown) => typeof value === "string" && /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value));
+const optionalTime = (value: unknown) => value == null || time(value);
 
 function scope(view: AccountView, record: { organization_id: string; account_id: string }) {
   if (record.organization_id !== view.account.organization_id || record.account_id !== view.account.id) {
@@ -24,7 +25,7 @@ export function checkIngestion(view: AccountView, run: IngestionRun) {
     || !Number.isSafeInteger(run.sequence) || run.sequence < 1 || !Number.isSafeInteger(run.revision) || run.revision < 1
     || !["contacts", "deals", "notes", "tasks"].includes(run.object_type)
     || !["pending", "succeeded", "failed", "interrupted"].includes(run.status)
-    || ![run.started_at, run.worker_deadline_at, run.finished_at].every(time)
+    || ![run.started_at, run.worker_deadline_at].every(time) || !optionalTime(run.finished_at)
     || !Array.isArray(run.objects) || run.objects.length > 20) throw new Error("Invalid saved ingestion record.");
   for (const item of run.objects) {
     if (!/^[1-9][0-9]{0,19}$/.test(item.object_id) || !time(item.created_at) || !time(item.updated_at)
@@ -32,6 +33,13 @@ export function checkIngestion(view: AccountView, run: IngestionRun) {
       || Object.values(item.properties).some(value => value !== null && (typeof value !== "string" || value.length > 8000))
       || !Array.isArray(item.association_types) || !item.association_types.length || item.association_types.length > 20) {
       throw new Error("Invalid saved associated object.");
+    }
+    for (const association of item.association_types) {
+      if (!["HUBSPOT_DEFINED", "USER_DEFINED", "INTEGRATOR_DEFINED"].includes(association.category)
+        || !Number.isSafeInteger(association.type_id) || association.type_id < 1
+        || (association.label !== null && (typeof association.label !== "string" || association.label.length > 200))) {
+        throw new Error("Invalid saved association.");
+      }
     }
   }
   return run;
@@ -50,7 +58,8 @@ export async function readIngestionReadiness(view: AccountView, signal: AbortSig
   if (ready.account_revision !== view.account.revision || !Number.isSafeInteger(ready.configuration_revision)
     || !/^[a-f0-9]{64}$/.test(ready.configuration_hash) || typeof ready.can_start !== "boolean"
     || typeof ready.connector_configured !== "boolean" || typeof ready.ingestion_enabled !== "boolean"
-    || (ready.pending_run_id != null && !uuid.test(ready.pending_run_id)) || !time(ready.cooldown_until)) {
+    || ready.configuration_revision < 1
+    || (ready.pending_run_id != null && !uuid.test(ready.pending_run_id)) || !optionalTime(ready.cooldown_until)) {
     throw new Error("Ingestion readiness binding changed.");
   }
   return ready;
