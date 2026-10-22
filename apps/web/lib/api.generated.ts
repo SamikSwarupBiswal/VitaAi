@@ -734,6 +734,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/ingestions/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion Readiness */
+        get: operations["ingestion_readiness_api_integrations_hubspot_accounts__account_id__ingestions_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/ingestions/{record_id}/recovery-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion Recovery Readiness */
+        get: operations["ingestion_recovery_readiness_api_integrations_hubspot_ingestions__record_id__recovery_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/ingestions/{record_id}": {
         parameters: {
             query?: never;
@@ -2838,6 +2872,43 @@ export interface components {
             /** Error Code */
             error_code?: string | null;
         };
+        /** IngestionReadiness */
+        IngestionReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Configuration Revision */
+            configuration_revision: number;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Connector Configured */
+            connector_configured: boolean;
+            /** Ingestion Enabled */
+            ingestion_enabled: boolean;
+            /** Can Start */
+            can_start: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "ready" | "administrator_required" | "hubspot_unconfigured" | "hubspot_ingestion_disabled" | "company_mapping_unavailable" | "ingestion_pending" | "ingestion_cooldown";
+            /** Pending Run Id */
+            pending_run_id?: string | null;
+            /** Cooldown Until */
+            cooldown_until?: string | null;
+        };
         /** IngestionRecovery */
         IngestionRecovery: {
             /**
@@ -2856,6 +2927,25 @@ export interface components {
              */
             expected_worker_deadline_at: string;
         };
+        /** IngestionRecoveryReadiness */
+        IngestionRecoveryReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            run: components["schemas"]["IngestionRun"];
+            /** Account Revision */
+            account_revision: number;
+            /** Eligible */
+            eligible: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "eligible" | "administrator_required" | "not_pending" | "worker_active";
+        };
         /** IngestionRequest */
         IngestionRequest: {
             /**
@@ -2866,6 +2956,10 @@ export interface components {
             schema_version: "1";
             /** Expected Account Revision */
             expected_account_revision: number;
+            /** Expected Configuration Revision */
+            expected_configuration_revision: number;
+            /** Expected Configuration Hash */
+            expected_configuration_hash: string;
             /**
              * Object Type
              * @enum {string}
@@ -2902,6 +2996,8 @@ export interface components {
             company_id: string;
             /** Configuration Revision */
             configuration_revision: number;
+            /** Configuration Hash */
+            configuration_hash?: string | null;
             /**
              * Object Type
              * @enum {string}
@@ -6708,6 +6804,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestionRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestion_readiness_api_integrations_hubspot_accounts__account_id__ingestions_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestion_recovery_readiness_api_integrations_hubspot_ingestions__record_id__recovery_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionRecoveryReadiness"];
                 };
             };
             /** @description Validation Error */

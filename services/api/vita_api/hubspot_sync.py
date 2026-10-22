@@ -42,7 +42,9 @@ from .hubspot_changes import (
 )
 from .hubspot_ingestion import (
     Ingestion,
+    IngestionReadiness,
     IngestionRecovery,
+    IngestionRecoveryReadiness,
     IngestionRequest,
     IngestionRun,
 )
@@ -365,9 +367,17 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     def ingest(account_id: UUID, body: IngestionRequest, actor: Current, operation: Service):
         return Ingestion(operation).start(account_id, body)
 
+    @router.get("/accounts/{account_id}/ingestions/readiness", response_model=IngestionReadiness)
+    def ingestion_readiness(account_id: UUID, actor: Current, operation: Service):
+        return Ingestion(operation).readiness(account_id)
+
     @router.get("/accounts/{account_id}/ingestions", response_model=list[IngestionRun])
     def ingestion_history(account_id: UUID, actor: Current, operation: Service):
         return Ingestion(operation).history(account_id)
+
+    @router.get("/ingestions/{record_id}/recovery-readiness", response_model=IngestionRecoveryReadiness)
+    def ingestion_recovery_readiness(record_id: UUID, actor: Current, operation: Service):
+        return Ingestion(operation).recovery_readiness(record_id)
 
     @router.get("/ingestions/{record_id}", response_model=IngestionRun)
     def ingestion_record(record_id: UUID, actor: Current, operation: Service):

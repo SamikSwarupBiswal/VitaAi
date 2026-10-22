@@ -1,5 +1,7 @@
 """Synthetic associated staging tests, with temporary SQLite and injected HTTP."""
 import copy
+import hashlib
+import json
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -29,7 +31,16 @@ ACCOUNT = str(sample_records(datetime.now(UTC))[0][0].id)
 HEADERS = {"X-VitaAi-Request": "1", "Origin": "http://127.0.0.1:3000"}
 PREFIX = "/api/integrations/hubspot"
 PATH = PREFIX + "/accounts/" + ACCOUNT + "/ingestions"
-BODY = {"expected_account_revision": 1, "object_type": "contacts"}
+READINESS_PATH = PATH + "/readiness"
+
+
+def configuration_hash(config):
+    binding = {"portal_id": config.hubspot_portal_id, "company_id": config.hubspot_company_map.get(ACCOUNT, ""),
+        "configuration_revision": config.hubspot_configuration_revision, "mapping_hash": HubSpot(config).mapping_hash}
+    return hashlib.sha256(json.dumps({"organization_id": config.hubspot_organization_id, **binding},
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 ASSOCIATION = {"toObjectId": 789, "associationTypes": [
     {"category": "HUBSPOT_DEFINED", "typeId": 280, "label": None}]}
 OBJECT = {"id": "789", "archived": False, "createdAt": "2026-09-01T00:00:00Z",
@@ -40,6 +51,10 @@ def settings(**changes):
     return Settings(_env_file=None, auth_mode="session", hubspot_enabled=True, hubspot_ingestion_enabled=True,
         hubspot_access_token="synthetic-token-only", hubspot_organization_id=SAMPLE_ORG,
         hubspot_portal_id="456", hubspot_company_map={ACCOUNT: "123"}, **changes)
+
+
+BODY = {"expected_account_revision": 1, "expected_configuration_revision": 1,
+    "expected_configuration_hash": configuration_hash(settings()), "object_type": "contacts"}
 
 
 class TransportTests(unittest.TestCase):
@@ -125,6 +140,58 @@ class ApiTests(unittest.TestCase):
 
     def start(self, **changes):
         return self.client.post(PATH, headers=HEADERS, json={**BODY, **changes})
+
+    def test_readiness_is_network_free_and_start_binds_displayed_configuration(self):
+        readiness = self.client.get(READINESS_PATH).json()
+        self.assertEqual((readiness["account_id"], readiness["account_revision"], readiness["can_start"],
+                          readiness["reason"]), (ACCOUNT, 1, True, "ready"))
+        self.assertEqual((readiness["configuration_revision"], readiness["configuration_hash"], self.calls),
+                         (1, BODY["expected_configuration_hash"], []))
+        for changed in ({"expected_configuration_revision": 2}, {"expected_configuration_hash": "0" * 64}):
+            self.assertEqual(self.start(**changed).status_code, 409)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.start().status_code, 200)
+        count = len(self.calls)
+        after = self.client.get(READINESS_PATH).json()
+        self.assertEqual((after["can_start"], after["reason"], after["pending_run_id"]),
+                         (False, "ingestion_cooldown", None))
+        self.assertEqual(len(self.calls), count)
+
+    def test_pending_readiness_and_recovery_readiness_survive_disabled_remapping(self):
+        with patch.object(AssociatedReader, "read", side_effect=RuntimeError("synthetic worker loss")), self.assertRaises(RuntimeError):
+            self.start()
+        pending = self.client.get(READINESS_PATH).json()
+        self.assertEqual((pending["reason"], pending["can_start"]), ("ingestion_pending", False))
+        self.assertIsNotNone(pending["pending_run_id"])
+        self.assertEqual(pending["pending_run_id"], self.client.get(PATH).json()[0]["id"])
+        record_id = pending["pending_run_id"]
+        disabled = self.settings.model_copy(update={"hubspot_ingestion_enabled": False, "hubspot_company_map": {}})
+        app = create_app(disabled, hubspot_transport=httpx.MockTransport(lambda _: self.fail("Unexpected network")))
+        readiness_path = PREFIX + "/ingestions/" + record_id + "/recovery-readiness"
+        real = datetime
+        with TestClient(app) as client, patch("vita_api.hubspot_ingestion.datetime") as clock:
+            client.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            clock.now.side_effect = lambda *_: real.now(UTC) + timedelta(minutes=3)
+            response = client.get(readiness_path)
+            self.assertEqual(response.status_code, 200, response.text)
+            saved = response.json()
+            self.assertEqual((saved["run"]["id"], saved["eligible"], saved["reason"]),
+                             (record_id, True, "eligible"))
+            self.assertEqual(self.calls, [])
+
+    def test_legacy_hashless_history_is_readable_but_starts_a_new_baseline(self):
+        first = self.start().json()
+        with self.app.state.store.engine.begin() as connection:
+            legacy = {key: value for key, value in first.items() if key != "configuration_hash"}
+            connection.execute(update(ingestions).where(ingestions.c.id == first["id"]).values(payload=legacy))
+        saved = self.client.get(PREFIX + "/ingestions/" + first["id"]).json()
+        self.assertIsNone(saved["configuration_hash"])
+        real = datetime
+        with patch("vita_api.hubspot_ingestion.datetime") as clock:
+            clock.now.side_effect = lambda *_: real.now(UTC) + timedelta(seconds=61)
+            second = self.start().json()
+        self.assertEqual((second["status"], second["disposition"], second["previous_run_id"]),
+                         ("succeeded", "baseline", None))
 
     def operation(self, settings_override=None):
         return Ingestion(HubSpotSync(self.app.state.store,

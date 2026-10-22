@@ -22,6 +22,7 @@ from sqlalchemy import (
 
 from .governance import PolicyDenied
 from .hubspot import HubSpot, HubSpotContract, HubSpotFailure
+from .hubspot_refresh import RefreshAuthorizations
 from .storage import accounts
 
 ObjectType = Literal["contacts", "deals", "notes", "tasks"]
@@ -59,6 +60,8 @@ class AssociatedObject(HubSpotContract):
 
 class IngestionRequest(HubSpotContract):
     expected_account_revision: int = Field(strict=True, ge=1)
+    expected_configuration_revision: int = Field(strict=True, ge=1)
+    expected_configuration_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     object_type: ObjectType
 
 
@@ -71,6 +74,7 @@ class IngestionRun(HubSpotContract):
     portal_id: str
     company_id: str
     configuration_revision: int
+    configuration_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     object_type: ObjectType
     sequence: int
     revision: int = 1
@@ -90,6 +94,28 @@ class IngestionRecovery(HubSpotContract):
     expected_revision: int = Field(strict=True, ge=1)
     expected_account_revision: int = Field(strict=True, ge=1)
     expected_worker_deadline_at: AwareDatetime
+
+
+class IngestionReadiness(HubSpotContract):
+    organization_id: str
+    account_id: UUID
+    account_revision: int
+    configuration_revision: int
+    configuration_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    connector_configured: bool
+    ingestion_enabled: bool
+    can_start: bool
+    reason: Literal["ready", "administrator_required", "hubspot_unconfigured", "hubspot_ingestion_disabled",
+                    "company_mapping_unavailable", "ingestion_pending", "ingestion_cooldown"]
+    pending_run_id: UUID | None = None
+    cooldown_until: AwareDatetime | None = None
+
+
+class IngestionRecoveryReadiness(HubSpotContract):
+    run: IngestionRun
+    account_revision: int
+    eligible: bool
+    reason: Literal["eligible", "administrator_required", "not_pending", "worker_active"]
 
 
 class AssociatedReader(HubSpot):
@@ -196,6 +222,58 @@ class Ingestion:
                 ingestions.c.organization_id == actor.organization_id, ingestions.c.account_id == str(account_id))
                 .order_by(ingestions.c.sequence.desc()).limit(20)).scalars()]
 
+    def readiness(self, account_id):
+        with self.operation.transaction() as (connection, actor):
+            account = self.operation.account(connection, actor, account_id, require_mapping=False)
+            settings = self.operation.connector.settings
+            _, digest = RefreshAuthorizations(self.operation).binding(account_id)
+            scope = (ingestions.c.organization_id == actor.organization_id,
+                     ingestions.c.account_id == str(account_id))
+            pending = connection.execute(select(ingestions.c.id).where(
+                *scope, ingestions.c.status == "pending").order_by(ingestions.c.sequence.desc()).limit(1)).scalar()
+            latest = connection.execute(select(ingestions.c.payload).where(*scope)
+                .order_by(ingestions.c.sequence.desc()).limit(1)).scalar()
+            now = datetime.now(UTC)
+            cooldown_until = None
+            if latest:
+                last_started = IngestionRun.model_validate(latest).started_at + timedelta(seconds=60)
+                if last_started > now:
+                    cooldown_until = last_started
+            if pending:
+                reason = "ingestion_pending"
+            elif actor.role != "admin":
+                reason = "administrator_required"
+            elif not self.operation.connector.configured:
+                reason = "hubspot_unconfigured"
+            elif not settings.hubspot_ingestion_enabled:
+                reason = "hubspot_ingestion_disabled"
+            elif str(account_id) not in settings.hubspot_company_map:
+                reason = "company_mapping_unavailable"
+            elif cooldown_until:
+                reason = "ingestion_cooldown"
+            else:
+                reason = "ready"
+            return IngestionReadiness(organization_id=actor.organization_id, account_id=account_id,
+                account_revision=account.revision, configuration_revision=settings.hubspot_configuration_revision,
+                configuration_hash=digest, connector_configured=self.operation.connector.configured,
+                ingestion_enabled=settings.hubspot_ingestion_enabled, can_start=reason == "ready", reason=reason,
+                pending_run_id=pending, cooldown_until=cooldown_until)
+
+    def recovery_readiness(self, record_id):
+        with self.operation.transaction() as (connection, actor):
+            run = self.read_run(connection, actor, record_id)
+            account = self.operation.account(connection, actor, run.account_id, require_mapping=False)
+            if actor.role != "admin":
+                reason = "administrator_required"
+            elif run.status != "pending":
+                reason = "not_pending"
+            elif datetime.now(UTC) < run.worker_deadline_at:
+                reason = "worker_active"
+            else:
+                reason = "eligible"
+            return IngestionRecoveryReadiness(run=run, account_revision=account.revision,
+                eligible=reason == "eligible", reason=reason)
+
     def save(self, connection, run):
         changed = run.model_copy(update={"revision": run.revision + 1})
         if connection.execute(update(ingestions).where(ingestions.c.id == str(run.id), ingestions.c.status == "pending",
@@ -223,6 +301,11 @@ class Ingestion:
             raise PolicyDenied("hubspot_ingestion_unconfigured", 503)
         with op.transaction(write=True) as (connection, actor):
             account = op.account(connection, actor, account_id, body.expected_account_revision)
+            _, configuration_hash = RefreshAuthorizations(op).binding(account_id)
+            if (op.connector.settings != settings
+                    or settings.hubspot_configuration_revision != body.expected_configuration_revision
+                    or configuration_hash != body.expected_configuration_hash):
+                raise PolicyDenied("ingestion_configuration_changed", 409)
             scope = (ingestions.c.organization_id == actor.organization_id, ingestions.c.account_id == str(account_id))
             if connection.execute(select(ingestions.c.id).where(*scope, ingestions.c.status == "pending").limit(1)).first():
                 raise PolicyDenied("ingestion_pending", 409)
@@ -242,6 +325,7 @@ class Ingestion:
                 configuration_revision=settings.hubspot_configuration_revision, object_type=body.object_type,
                 sequence=previous.sequence + 1 if previous else 1, started_at=now,
                 worker_deadline_at=now + timedelta(minutes=2))
+            run.configuration_hash = configuration_hash
             connection.execute(ingestions.insert().values(id=str(run.id), organization_id=run.organization_id,
                 account_id=str(account_id), sequence=run.sequence, status="pending", payload=run.model_dump(mode="json")))
 
@@ -271,8 +355,10 @@ class Ingestion:
             if error:
                 run.status, run.error_code = "failed", error
             else:
-                compatible = prior and (prior.portal_id, prior.company_id, prior.configuration_revision) == (
-                    run.portal_id, run.company_id, run.configuration_revision)
+                compatible = (prior and prior.configuration_hash is not None
+                    and prior.configuration_hash == run.configuration_hash
+                    and (prior.portal_id, prior.company_id, prior.configuration_revision) == (
+                        run.portal_id, run.company_id, run.configuration_revision))
                 if compatible:
                     old = {item.object_id: item for item in prior.objects}
                     for item in objects:
