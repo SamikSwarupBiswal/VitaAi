@@ -235,6 +235,38 @@ class NarrativeTests(unittest.TestCase):
             self.assertEqual((result["status"], result["error_code"]), ("failed", code))
             self.assertIsNone(result["output"])
 
+    def test_ambiguous_json_fields_and_multiple_choices_are_rejected_without_retry(self):
+        before = self.client.get(f"/api/accounts/{ACCOUNT}").json()
+        valid = json.dumps(self.output())
+        hypothesis = json.dumps(self.output()["hypotheses"][0])
+        duplicate = '{"hypotheses":[],"hypotheses":' + json.dumps(self.output()["hypotheses"]) + ',"caveats":[]}'
+        nested = '{"hypotheses":[' + hypothesis.replace('{', '{"interpretation":"discarded text",', 1) + '],"caveats":[]}'
+        escaped = valid.replace('"caveats":', '"caveats":[],"\\u0063aveats":')
+        high_surrogate = valid.replace('"caveats": [', '"caveats": ["\\ud800",')
+        low_surrogate = valid.replace('"caveats": [', '"caveats": ["\\udfff",')
+        def choice(content):
+            return {"finish_reason": "stop", "message": {"content": content}}
+        for choices in [[choice(duplicate)], [choice(nested)], [choice(escaped)],
+                        [choice(valid), choice(valid)], [choice(valid), choice("{")],
+                        [choice(high_surrogate)], [choice(low_surrogate)]]:
+            with self.subTest(choices=choices):
+                with self.store.engine.begin() as connection:
+                    connection.execute(narratives.delete())
+                previous = len(self.calls)
+                self.model_response = httpx.Response(200, json={"model": MODEL, "id": "ambiguous-request",
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 7}, "choices": choices})
+                result = self.start().json()
+                self.assertEqual((result["status"], result["validation"], result["mode"]),
+                                 ("invalid_output", "rejected", "fallback"))
+                self.assertEqual(result["error_code"], "invalid_narrative_or_references")
+                self.assertIsNone(result["output"])
+                self.assertEqual((result["request_id"], result["input_tokens"], result["output_tokens"]),
+                                 ("ambiguous-request", 12, 7))
+                self.assertEqual(len(self.calls), previous + 1)
+                self.assertEqual(self.client.get(f'{PREFIX}/narratives/{result["id"]}').json(), result)
+                self.assertEqual(self.client.get(f"/api/accounts/{ACCOUNT}").json(), before)
+                self.assertEqual(self.client.get(self.path).json(), self.saved)
+
     def test_safe_transport_failures_have_no_retry_or_provider_body(self):
         for response in [httpx.Response(401, text="synthetic-model"), httpx.Response(302,
                 headers={"Location": "https://foreign.test"}), httpx.Response(200, content=b"x" * 131073)]:

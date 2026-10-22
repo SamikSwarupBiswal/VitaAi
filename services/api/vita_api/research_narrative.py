@@ -121,6 +121,13 @@ def context_binding(context):
     return context.model_dump(mode="json", exclude={"evaluated_at"})
 
 
+def unique_narrative_object(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("Duplicate narrative field")
+    return value
+
+
 def generate(catalog, config, run, *, before_request):
     start = perf_counter()
     try:
@@ -149,10 +156,15 @@ def generate(catalog, config, run, *, before_request):
         metadata_from_response(payload, run, "nebius")
         if run.response_model != run.expected_response_model:
             raise CatalogFailure("response_model_mismatch")
-        choice = payload["choices"][0]
+        choices = payload["choices"]
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError("Ambiguous narrative choices")
+        choice = choices[0]
         if choice.get("finish_reason") != "stop":
             raise CatalogFailure("incomplete_generation")
-        output = NarrativeOutput.model_validate_json(choice["message"]["content"])
+        content = choice["message"]["content"]
+        json.loads(content, object_pairs_hook=unique_narrative_object)
+        output = NarrativeOutput.model_validate_json(content)
         evidence = {item.id for item in context.internal.evidence}
         urls = {item.url for item in context.usable_sources}
         if any(not set(item.evidence_ids).issubset(evidence) or not set(item.source_urls).issubset(urls)
