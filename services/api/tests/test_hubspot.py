@@ -64,6 +64,27 @@ def configured(**changes):
 
 
 class HubSpotTransportTests(unittest.TestCase):
+    def test_duplicate_json_fields_reject_before_company_publication(self):
+        import json
+        company = json.dumps(COMPANY)
+        cases = [
+            (b'{"portalId":999,"portalId":456}', company.encode(), 1),
+            (b'{"portalId":999,"portal\\u0049d":456}', company.encode(), 1),
+            (b'{"portalId":456}', company.replace('"id": "123"', '"id":"999","id":"123"').encode(), 2),
+            (b'{"portalId":456}', company.replace('"name": "Test company"',
+                '"name":"First","name":"Test company"').encode(), 2),
+            (b'{"portalId":456}', company.replace('"name": "Test company"',
+                '"name":"First","na\\u006de":"Test company"').encode(), 2),
+        ]
+        for portal, record, expected_calls in cases:
+            calls = []
+            def respond(request, portal=portal, record=record, calls=calls):
+                calls.append(request)
+                return httpx.Response(200, content=portal if request.url.path.startswith('/account') else record)
+            with self.subTest(portal=portal, record=record), self.assertRaisesRegex(HubSpotFailure, '^invalid_response$'):
+                HubSpot(configured(), httpx.MockTransport(respond)).read_company('123', NOW)
+            self.assertEqual(len(calls), expected_calls)
+
     def test_escaped_invalid_unicode_rejects_but_valid_multilingual_text_survives(self):
         import json
         for value in ("\ud800", "\udfff", "বাংলা 😀"):

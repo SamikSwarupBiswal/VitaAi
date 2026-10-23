@@ -13,6 +13,13 @@ from .config import HubSpotProperty, Settings
 PREFIX = "/api/integrations/hubspot"
 
 
+def _unique_object(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("Duplicate JSON field")
+    return value
+
+
 class HubSpotContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["1"] = "1"
@@ -116,7 +123,7 @@ class HubSpot:
                     body.extend(chunk)
                     if len(body) > 65536:
                         raise HubSpotFailure("response_too_large")
-                data = json.loads(body)
+                data = json.loads(body, object_pairs_hook=_unique_object)
                 if not isinstance(data, dict):
                     raise HubSpotFailure("invalid_response")
                 # Escaped lone surrogates decode in Python but cannot be saved or returned as UTF-8.

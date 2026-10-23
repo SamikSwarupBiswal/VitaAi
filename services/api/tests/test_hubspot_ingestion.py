@@ -276,6 +276,39 @@ class ApiTests(unittest.TestCase):
                     self.assertEqual(result.objects[0].properties["firstname"], value)
         self.assertEqual(self.client.get("/api/accounts/" + ACCOUNT).json(), before)
 
+    def test_duplicate_json_fields_fail_without_partial_output_or_pending(self):
+        before = self.client.get("/api/accounts/" + ACCOUNT).json()
+        operation, real = self.operation(), datetime
+        page, record = json.dumps(self.page), json.dumps(self.record)
+        cases = [
+            ("portal", '{"portalId":999,"portalId":456}', 1),
+            ("page", page.replace('"toObjectId": 789', '"toObjectId":999,"toObjectId":789'), 2),
+            ("page", page.replace('"label": null', '"label":"First","label":null'), 2),
+            ("object", record.replace('"id": "789"', '"id":"999","id":"789"'), 3),
+            ("object", record.replace('"firstname": "Synthetic"',
+                '"firstname":"First","firstna\\u006de":"Synthetic"'), 3),
+        ]
+        for index, (boundary, malformed, expected_calls) in enumerate(cases):
+            calls = []
+            def respond(request, boundary=boundary, malformed=malformed, calls=calls):
+                calls.append(request)
+                current = "portal" if request.url.path.startswith("/account") else (
+                    "page" if "/associations/" in request.url.path else "object")
+                body = malformed if current == boundary else (
+                    '{"portalId":456}' if current == "portal" else page if current == "page" else record)
+                return httpx.Response(200, content=body.encode())
+            operation.operation.connector.transport = httpx.MockTransport(respond)
+            with self.subTest(boundary=boundary, index=index), patch("vita_api.hubspot_ingestion.datetime") as clock:
+                clock.now.side_effect = lambda *_, offset=index: real.now(UTC) + timedelta(seconds=61 * offset)
+                result = operation.start(ACCOUNT, IngestionRequest(**BODY))
+                self.assertEqual((result.status, result.error_code, result.objects, result.fingerprint),
+                                 ("failed", "invalid_response", [], None))
+                self.assertEqual(len(calls), expected_calls)
+                saved = self.client.get(PREFIX + "/ingestions/" + str(result.id))
+                self.assertEqual(saved.json(), result.model_dump(mode="json"))
+        self.assertIsNone(self.client.get(READINESS_PATH).json()["pending_run_id"])
+        self.assertEqual(self.client.get("/api/accounts/" + ACCOUNT).json(), before)
+
     def test_configuration_change_fences_next_get_and_publication(self):
         operation = self.operation()
         def change(request):
