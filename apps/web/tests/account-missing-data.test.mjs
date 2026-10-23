@@ -200,9 +200,10 @@ test("walkthrough rejects malformed and repeated context without reflecting it o
   }
 });
 
-test("brief drilldown clears filters and keeps exact account; refresh failures block navigation", () => {
+test("brief and full-pool pipeline drilldown clear filters and keep exact account; refresh failures block navigation", () => {
   for (const [loading, error, blocked] of [[false, null, false], [true, null, false], [false, "Refresh failed", false], [false, null, true]]) {
     const changes = [], routes = [], accounts = [view("A", 1, 1), view("B & C", 1, 1)];
+    accounts[0].assessment.growth_signal = true;
     const states = [{ accounts, as_of: "2026-10-23" }, null, loading, error, "A", "growth", "risk", true,
       false, null, {}, null, blocked]; let cursor = 0;
     const workspace = briefingWorkspace({ useEffect() {}, useCallback: fn => fn, useRef: initial => ({ current: initial }),
@@ -210,7 +211,13 @@ test("brief drilldown clears filters and keeps exact account; refresh failures b
         value => changes.push([i, value])]; } }, {
       useRouter: () => ({ replace: (...args) => routes.push(args) }), useSearchParams: () => new URLSearchParams(),
     });
-    const brief = walk(workspace.contentForAcceptance({ accountDirectory: false, persona: "seller" }))
+    const tree = workspace.contentForAcceptance({ accountDirectory: false, persona: "seller" });
+    if (!blocked) {
+      const integrationKeys = walk(tree).filter(n => n.props?.view?.account && n.key !== null).map(n => n.key);
+      assert.equal(integrationKeys.length, 6);
+      assert.equal(new Set(integrationKeys).size, integrationKeys.length, "integration siblings must preserve distinct React identities");
+    }
+    const brief = walk(tree)
       .find(n => n.type === workspace.briefForAcceptance);
     assert.equal(brief.props.unavailable, loading || !!error || blocked);
     brief.props.onSelect("B & C"); brief.props.onSelect("missing");
@@ -219,6 +226,17 @@ test("brief drilldown clears filters and keeps exact account; refresh failures b
       assert.ok(changes.some(([i, value]) => i === 4 && value === ""));
       assert.ok(changes.some(([i, value]) => i === 5 && value === "all"));
     } else assert.deepEqual(routes, []);
+    changes.length = 0; routes.length = 0;
+    const pipeline = walk(tree).find(n => n.props?.snapshots);
+    if (pipeline) {
+      pipeline.props.onSelect("B & C");
+      pipeline.props.onSelect("missing");
+      if (!loading && !error && !blocked) {
+        assert.deepEqual(routes, [["/?persona=seller&account=B%20%26%20C", { scroll: false }]]);
+        assert.ok(changes.some(([i, value]) => i === 4 && value === ""));
+        assert.ok(changes.some(([i, value]) => i === 5 && value === "all"));
+      } else assert.deepEqual(routes, []);
+    }
   }
 });
 
@@ -270,6 +288,61 @@ test("pipeline suppresses saved drafts after source revision or snapshot changes
       assert.doesNotMatch(html, /Original saved draft/);
       assert.match(html, /older account snapshot/);
     }
+  }
+});
+
+test("pipeline specialist findings retain failures, sources, conflicts and exact highlight navigation", () => {
+  const saved = { id: "saved", started_at: "2026-10-24", status: "partial", steps: [], caveats: [],
+    contexts: [{ account: { id: "a", name: "Selected account" }, evidence: [{ id: "fact", metric: "usage_change", value: -20,
+      fact: "<script>untrusted source</script>", source: "CRM", source_record: "record", observed_at: "2026-10-23", ingested_at: "2026-10-24", synthetic: true }] },
+      { account: { id: "b", name: "Full-pool opportunity" }, evidence: [] }],
+    portfolio_specialists: { account_count: 2, policy_version: "specialists-1", input_snapshots: { a: "hash-a", b: "hash-b" },
+      highest_risk: { account_id: "a", score: 60, account_revision: 2, snapshot_hash: "hash-a", evidence_ids: ["fact"] },
+      highest_opportunity: { account_id: "b", score: 80, account_revision: 1, snapshot_hash: "hash-b", evidence_ids: [] }, caveats: ["Rank unchanged"] },
+    recommendations: [{ account_id: "a", assessment: { snapshot_hash: "hash-a" }, action: { kind: "follow_up" },
+      governance: { status: "ready_for_preparation" }, communication: { status: "failed" },
+      specialists: { policy_version: "specialists-1", account_revision: 2, as_of: "2026-10-24", snapshot_hash: "hash-a", caveats: ["No factual confidence inferred"],
+        perspectives: [{ role: "engagement", status: "failed", missing_sources: ["contact_history"], model_run_id: "retained-run",
+          findings: [{ text: "Preparation only", evidence_ids: ["fact"] }] }, { role: "research", status: "missing_source", missing_sources: ["selected_external_context"],
+          findings: [{ text: "No search performed", evidence_ids: [] }] }],
+        disagreements: [{ kind: "conflicting_observations", roles: ["risk", "governance"], text: "Review both sources", evidence_ids: ["fact", "conflict"] }] } }] };
+  for (const snapshots of [{ a: "hash-a", b: "hash-b" }, { a: "hash-a", b: "changed" }, { a: "hash-a" }]) {
+    let cursor = 0;
+    const selected = [];
+    const state = ["attention", saved, false, null, false];
+    const pipeline = load("../components/pipeline-panel.tsx", { react: { useEffect() {}, useRef: initial => ({ current: initial }),
+      useState: initial => [state[cursor++] ?? initial, () => {}] }, "@/lib/api": api });
+    const tree = pipeline.PipelinePanel({ onSelect: id => selected.push(id), organizationId: "org", snapshots, configured: false });
+    const html = renderToStaticMarkup(tree);
+    if (snapshots.b !== "hash-b") {
+      assert.match(html, /older account snapshot/);
+      assert.doesNotMatch(html, /Specialist findings|Portfolio specialist highlights|Review both sources/);
+      continue;
+    }
+    assert.match(html, /engagement · failed/);
+    assert.match(html, /research · missing source/);
+    assert.match(html, /Missing sources: contact history/);
+    assert.match(html, /retained-run/);
+    assert.match(html, /fact, conflict/);
+    assert.match(html, /observed 2026-10-23.*ingested 2026-10-24/);
+    assert.match(html, /&lt;script&gt;untrusted source&lt;\/script&gt;/);
+    assert.doesNotMatch(html, /<script>/);
+    const highlightButton = walk(tree).find(n => n.type === "button" && n.props.children === "Full-pool opportunity");
+    highlightButton.props.onClick();
+    assert.deepEqual(selected, ["b"]);
+  }
+});
+
+test("pipeline legacy and empty specialist records show no invented findings", () => {
+  for (const portfolio_specialists of [null, { account_count: 0, policy_version: "specialists-1", input_snapshots: {}, highest_risk: null, highest_opportunity: null, caveats: [] }]) {
+    let cursor = 0;
+    const state = ["attention", { id: "old", steps: [], contexts: [], recommendations: [], caveats: [], portfolio_specialists }, false, null, false];
+    const pipeline = load("../components/pipeline-panel.tsx", { react: { useEffect() {}, useRef: initial => ({ current: initial }),
+      useState: initial => [state[cursor++] ?? initial, () => {}] }, "@/lib/api": api });
+    const html = renderToStaticMarkup(pipeline.PipelinePanel({ onSelect() {}, organizationId: "org", snapshots: {}, configured: false }));
+    if (portfolio_specialists) assert.match(html, /No input accounts/);
+    else assert.doesNotMatch(html, /Portfolio specialist highlights/);
+    assert.doesNotMatch(html, /Specialist findings/);
   }
 });
 

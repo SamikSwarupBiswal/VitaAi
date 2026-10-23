@@ -3967,6 +3967,7 @@ export interface components {
             steps: components["schemas"]["PipelineStep"][];
             /** Caveats */
             caveats: string[];
+            portfolio_specialists?: components["schemas"]["PortfolioSpecialists"] | null;
         };
         /** PipelineStep */
         PipelineStep: {
@@ -4182,6 +4183,52 @@ export interface components {
             growth_count: number;
             /** Accounts */
             accounts: components["schemas"]["AccountView"][];
+        };
+        /** PortfolioHighlight */
+        PortfolioHighlight: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Account Id */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /** Score */
+            score: number;
+            /** Evidence Ids */
+            evidence_ids: string[];
+        };
+        /** PortfolioSpecialists */
+        PortfolioSpecialists: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy Version
+             * @default specialists-1
+             * @constant
+             */
+            policy_version: "specialists-1";
+            /** Account Count */
+            account_count: number;
+            /** Recommendation Order */
+            recommendation_order: string[];
+            /** Input Snapshots */
+            input_snapshots: {
+                [key: string]: string;
+            };
+            highest_risk: components["schemas"]["PortfolioHighlight"] | null;
+            highest_opportunity: components["schemas"]["PortfolioHighlight"] | null;
+            /** Caveats */
+            caveats: string[];
         };
         /** PrepareRequest */
         PrepareRequest: {
@@ -4555,6 +4602,7 @@ export interface components {
             governance: components["schemas"]["GovernanceResult"];
             action: components["schemas"]["ActionProposal"];
             communication: components["schemas"]["CommunicationResult"];
+            specialists?: components["schemas"]["SpecialistReport"] | null;
         };
         /** RefreshAuthorization */
         RefreshAuthorization: {
@@ -5709,6 +5757,104 @@ export interface components {
             fields?: {
                 [key: string]: components["schemas"]["SourceField"];
             };
+        };
+        /** SpecialistDisagreement */
+        SpecialistDisagreement: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "conflicting_observations" | "competing_signals";
+            /** Roles */
+            roles: ("risk" | "growth" | "research" | "engagement" | "governance")[];
+            /** Text */
+            text: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+        };
+        /** SpecialistFinding */
+        SpecialistFinding: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Text */
+            text: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+        };
+        /** SpecialistPerspective */
+        SpecialistPerspective: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "risk" | "growth" | "research" | "engagement" | "governance";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "deterministic" | "missing_source" | "deterministic_template" | "model_validated" | "blocked" | "unconfigured" | "failed" | "invalid_output";
+            /** Findings */
+            findings: components["schemas"]["SpecialistFinding"][];
+            /** Missing Sources */
+            missing_sources?: string[];
+            /** Model Run Id */
+            model_run_id?: string | null;
+        };
+        /** SpecialistReport */
+        SpecialistReport: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy Version
+             * @default specialists-1
+             * @constant
+             */
+            policy_version: "specialists-1";
+            /** Organization Id */
+            organization_id: string;
+            /** Account Id */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /** Perspectives */
+            perspectives: components["schemas"]["SpecialistPerspective"][];
+            /** Disagreements */
+            disagreements: components["schemas"]["SpecialistDisagreement"][];
+            /** Caveats */
+            caveats: string[];
+            /**
+             * External Execution
+             * @default false
+             * @constant
+             */
+            external_execution: false;
         };
         /** SubmitRequest */
         SubmitRequest: {

@@ -13,7 +13,8 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
   const [useModel, setUseModel] = useState(false);
   const requestSequence = useRef(0);
   const storageKey = `vitaai-pipeline:${organizationId}`;
-  const stale = run && run.recommendations.some(item => snapshots[item.account_id] !== item.assessment.snapshot_hash);
+  const stale = run && (run.recommendations.some(item => snapshots[item.account_id] !== item.assessment.snapshot_hash)
+    || Object.entries(run.portfolio_specialists?.input_snapshots ?? {}).some(([id, hash]) => snapshots[id] !== hash));
   useEffect(() => {
     let active = true;
     const sequence = ++requestSequence.current;
@@ -48,6 +49,15 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
     {stale && <p role="status" className="caveat">Saved preparation belongs to an older account snapshot. Prepare a new run to view current drafts.</p>}
     {run && !stale && <div aria-live="polite"><p>{run.steps.map(step => `${step.role} (${step.processed})`).join(" → ")}</p>
       <details className="preparation-provenance"><summary>Preparation provenance</summary><p>{run.id} / {run.started_at} / {run.status}</p></details>
+      {run.portfolio_specialists && <details><summary>Portfolio specialist highlights</summary>
+        <p>{run.portfolio_specialists.account_count} retained input accounts · {run.portfolio_specialists.policy_version}. Recommendation order is unchanged.</p>
+        {([ ["Highest baseline risk", run.portfolio_specialists.highest_risk],
+          ["Highest baseline opportunity", run.portfolio_specialists.highest_opportunity] ] as const).map(([label, highlight]) => <div key={label}>
+          <p>{label}: {highlight ? <><button onClick={() => onSelect(highlight.account_id)}>{run.contexts.find(c => c.account.id === highlight.account_id)?.account.name ?? highlight.account_id}</button>
+            {" "}{highlight.score}/100 · revision {highlight.account_revision} · {highlight.snapshot_hash}<br />Evidence: {highlight.evidence_ids.join(", ") || "None; missing data does not establish safety or opportunity"}</> : "No input accounts"}</p>
+        </div>)}
+        <p className="caveat">{run.portfolio_specialists.caveats.join(" ")}</p>
+      </details>}
       <ol>{run.recommendations.map(item => <li key={item.account_id}>
         <button onClick={() => onSelect(item.account_id)}>{run.contexts.find(c => c.account.id === item.account_id)?.account.name}</button>
         <p>{item.action.kind.replaceAll("_", " ")} · {item.governance.status.replaceAll("_", " ")}</p>
@@ -59,6 +69,25 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
         {item.communication.model_run && <p>{item.communication.model_run.provider} / {item.communication.model_run.model} / {item.communication.model_run.validation}
           {item.communication.model_run.error_code && ` / ${item.communication.model_run.error_code}`}</p>}
         {item.communication.drafts && <p className="caveat">{item.communication.drafts.caveats.join(" ")}</p>}
+        {item.specialists ? <details><summary>Specialist findings</summary>
+          <p>{item.specialists.policy_version} · account revision {item.specialists.account_revision} · assessment {item.specialists.as_of} · {item.specialists.snapshot_hash}</p>
+          <p className="caveat">{item.specialists.caveats.join(" ")}</p>
+          {item.specialists.perspectives.map(perspective => <section key={perspective.role} aria-label={`${perspective.role} specialist`}>
+            <h3>{perspective.role} · {perspective.status.replaceAll("_", " ")}</h3>
+            {(perspective.missing_sources?.length ?? 0) > 0 && <p>Missing sources: {perspective.missing_sources?.join(", ").replaceAll("_", " ")}</p>}
+            {perspective.model_run_id && <p>Retained communication run: {perspective.model_run_id}; no additional inference.</p>}
+            <ul>{perspective.findings.map((finding, index) => <li key={index}>{finding.text}<br />Evidence: {finding.evidence_ids.join(", ") || "None for this limitation"}</li>)}</ul>
+          </section>)}
+          <h3>Disagreement and competing signals</h3>
+          {item.specialists.disagreements.length ? <ul>{item.specialists.disagreements.map((finding, index) => <li key={index}>
+            {finding.kind.replaceAll("_", " ")} · {finding.roles.join(", ")}: {finding.text}<br />Evidence: {finding.evidence_ids.join(", ")}
+          </li>)}</ul> : <p>No conflict detected by these bounded rules. This does not certify agreement or factual truth.</p>}
+          <details><summary>Retained source observations</summary>
+            {run.contexts.find(c => c.account.id === item.account_id)?.evidence.map(fact => <p key={fact.id}>
+              {fact.id} · {fact.metric}: {fact.value} · {fact.fact}<br />{fact.source} / {fact.source_record} · observed {fact.observed_at} · ingested {fact.ingested_at} · {fact.synthetic ? "Synthetic" : "Selected source observation"}
+            </p>)}
+          </details>
+        </details> : <p>Specialist findings were not recorded in this saved run.</p>}
       </li>)}</ol><p>{run.caveats.join(" ")}</p></div>}
   </details>;
 }

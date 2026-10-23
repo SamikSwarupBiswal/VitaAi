@@ -18,6 +18,12 @@ from .contracts import (
 )
 from .models import AdvisoryProvider
 from .scoring import assess
+from .specialists import (
+    PortfolioSpecialists,
+    SpecialistReport,
+    account_specialists,
+    portfolio_specialists,
+)
 
 Intent = Literal["attention", "risk", "growth", "renewal", "manual_review", "monitor"]
 Role = Literal["ingestion", "health", "opportunity", "governance", "action", "communication"]
@@ -87,6 +93,7 @@ class Recommendation(Contract):
     governance: GovernanceResult
     action: ActionProposal
     communication: CommunicationResult
+    specialists: SpecialistReport | None = None
 
 
 class PipelineStep(Contract):
@@ -107,6 +114,7 @@ class PipelineRun(Contract):
     recommendations: list[Recommendation]
     steps: list[PipelineStep]
     caveats: list[str]
+    portfolio_specialists: PortfolioSpecialists | None = None
 
 
 def ingest(organization_id: str, account: Account, facts: list[Evidence]) -> SignalContext:
@@ -274,15 +282,18 @@ class Pipeline:
         for rank, view in enumerate(selected[:request.limit], start=1):
             policy = governance[view.account.id]
             action = action_role(view, policy, intent)
+            communication = self.communicate(view, action, policy, use_model, request.communication_mode)
             recommendations.append(Recommendation(
                 account_id=view.account.id, rank=rank, assessment=view.assessment,
                 health=health[view.account.id], opportunity=opportunity[view.account.id], governance=policy,
-                action=action, communication=self.communicate(view, action, policy, use_model, request.communication_mode),
+                action=action, communication=communication,
+                specialists=account_specialists(view, action, communication),
             ))
         partial = use_model and any(r.communication.status != "model_validated" for r in recommendations)
         return PipelineRun(
             id=str(uuid4()), organization_id=organization_id, actor_id=actor_id, started_at=started_at,
             as_of=as_of, request=request, contexts=contexts, recommendations=recommendations,
+            portfolio_specialists=portfolio_specialists(views, [r.account_id for r in recommendations]),
             status="partial" if partial else "model_validated" if use_model and recommendations else "deterministic",
             steps=[PipelineStep(role=role, processed=len(contexts) if index < 4 else len(recommendations),
                                 status="partial" if role == "communication" and partial else "completed")
