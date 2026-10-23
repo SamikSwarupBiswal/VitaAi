@@ -46,6 +46,7 @@ export default async function WalkthroughPage({ searchParams }: {
     <details><summary>If the journey stops</summary>
       <p>Refresh current state after an uncertain response. Inspect stale evidence recovery in Review, review decisions in Approval, and claims or reconciliation in Execution. Refresh failure keeps work paused. A viewer can inspect records but cannot prepare or execute; seller presentation never grants reviewer authority.</p>
     </details>
+    <p><Link href="/tester-guide">Local simulation tester guide and feedback template</Link></p>
     <Link href={`/?${sellerQuery}`}>Return to seller workspace</Link>
   </main>;
 }
