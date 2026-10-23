@@ -18,11 +18,13 @@ function load(relative, mocks = {}, extra = "") {
   target.filename = filename;
   target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target);
-  target.require = name => name in mocks ? mocks[name] : normal(name);
+  target.require = name => name in mocks ? name === "react" ? { useLayoutEffect() {}, ...mocks[name] } : mocks[name]
+    : name === "@/lib/pipeline-delta" ? delta : normal(name);
   target._compile(compiled + extra, filename);
   return target.exports;
 }
 
+const delta = load("../lib/pipeline-delta.ts");
 const api = load("../lib/api.ts");
 const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");

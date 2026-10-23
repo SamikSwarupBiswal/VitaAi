@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type PipelineRequest, type PipelineRun } from "@/lib/api";
+import { comparePipelineRuns } from "@/lib/pipeline-delta";
 
 export function PipelinePanel({ onSelect, organizationId, snapshots, configured, expanded = false }: {
   onSelect: (id: string) => void; organizationId: string; snapshots: Record<string, string>; configured: boolean; expanded?: boolean;
@@ -88,6 +89,64 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
             </p>)}
           </details>
         </details> : <p>Specialist findings were not recorded in this saved run.</p>}
-      </li>)}</ol><p>{run.caveats.join(" ")}</p></div>}
+      </li>)}</ol><p>{run.caveats.join(" ")}</p>
+      <SavedRunComparison key={run.id} current={run} />
+    </div>}
+  </details>;
+}
+
+const savedRunId = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
+
+export function SavedRunComparison({ current }: { current: PipelineRun }) {
+  const [baselineId, setBaselineId] = useState("");
+  const [result, setResult] = useState<ReturnType<typeof comparePipelineRuns> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const active = useRef({ mounted: false, input: "", busy: false, sequence: 0 });
+  const controller = useRef<AbortController | null>(null);
+  const currentRef = useRef<PipelineRun | null>(current);
+  useLayoutEffect(() => { currentRef.current = current; return () => { currentRef.current = null; controller.current?.abort(); }; }, [current]);
+  useEffect(() => { const binding = active.current; binding.mounted = true;
+    return () => { binding.mounted = false; controller.current?.abort(); }; }, []);
+  async function inspect() {
+    const binding = active.current;
+    if (!binding.mounted || binding.busy || binding.input !== baselineId || currentRef.current !== current
+      || !savedRunId.test(baselineId) || baselineId === current.id) return;
+    const sequence = ++binding.sequence;
+    binding.busy = true; setBusy(true); setError(null); setResult(null);
+    const request = new AbortController(); controller.current = request;
+    const matches = () => binding.mounted && !request.signal.aborted && binding.sequence === sequence
+      && binding.input === baselineId && currentRef.current === current;
+    try {
+      const baseline = await api<PipelineRun>(`pipeline/${encodeURIComponent(baselineId)}`, { signal: request.signal });
+      if (!matches()) return;
+      if (baseline.id !== baselineId) throw new Error("Saved baseline identity does not match the requested run.");
+      setResult(comparePipelineRuns(baseline, current));
+    } catch (failure) {
+      if (matches()) setError(failure instanceof Error ? failure.message : "Saved baseline unavailable.");
+    } finally { if (matches()) { binding.busy = false; setBusy(false); } }
+  }
+  return <details><summary>Compare saved recommendations</summary>
+    <p>Displayed run {current.id} · {current.started_at}. Enter an older saved pipeline run ID. Inspection reads history only.</p>
+    <label>Baseline run ID <input aria-label="Baseline pipeline run ID" value={baselineId} maxLength={36} onChange={event => {
+      active.current.input = event.target.value; active.current.sequence++; active.current.busy = false;
+      controller.current?.abort(); setBaselineId(event.target.value); setBusy(false); setResult(null); setError(null);
+    }} /></label>
+    <button onClick={inspect} disabled={busy || !savedRunId.test(baselineId) || baselineId === current.id}>{busy ? "Inspecting baseline..." : "Compare saved baseline"}</button>
+    {error && <p role="alert">{error}</p>}
+    {result && <div aria-live="polite"><p>Baseline {result.beforeId} · {result.beforeAt} · assessment {result.beforeAsOf}<br />Displayed {result.afterId} · {result.afterAt} · assessment {result.afterAsOf}</p>
+      {result.caveats.map(text => <p className="caveat" key={text}>{text}</p>)}
+      {!result.rows.length && <p>Both selected results are empty. No recommendation changes can be established.</p>}
+      <ul>{result.rows.map(row => <li key={row.accountId}>
+        <h3>{row.afterContext?.account.name ?? row.beforeContext?.account.name ?? row.accountId} · {row.kind.replaceAll("_", " ")}</h3>
+        {row.caveats.map(text => <p className="caveat" key={text}>{text}</p>)}
+        {([ ["Baseline", row.before, row.beforeContext], ["Displayed", row.after, row.afterContext] ] as const).map(([label, recommendation, context]) => <div key={label}>
+          <p>{label}: {recommendation ? <>rank {recommendation.rank} · {recommendation.action.kind.replaceAll("_", " ")} · risk {recommendation.assessment.risk} / opportunity {recommendation.assessment.opportunity} / confidence {recommendation.assessment.confidence}%</> : context ? "Outside selected result" : "Outside retained input"}</p>
+          {context && <p>Account revision {context.account.revision} · annual value {context.account.annual_value ?? "Unknown"} · renewal {context.account.renewal_date ?? "Unknown"}</p>}
+          {recommendation && <p>{recommendation.assessment.policy_version} · {recommendation.assessment.as_of} · {recommendation.assessment.snapshot_hash}<br />{recommendation.assessment.caveats.join(" ")}</p>}
+          <details><summary>{label} retained evidence and factors</summary><pre>{JSON.stringify({ account: context?.account ?? null, evidence: context?.evidence ?? [], factors: recommendation?.assessment.factors ?? null }, null, 2)}</pre></details>
+        </div>)}
+      </li>)}</ul>
+    </div>}
   </details>;
 }
