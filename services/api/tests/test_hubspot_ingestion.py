@@ -1,7 +1,8 @@
-"""Synthetic associated staging tests, with temporary SQLite and injected HTTP."""
+"""Synthetic staging tests with isolated SQLite/PostgreSQL and injected HTTP."""
 import copy
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -9,10 +10,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 from unittest.mock import patch
+from uuid import uuid4
 
 import httpx
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update
+from sqlalchemy import create_engine, select, update
+from sqlalchemy.engine import make_url
+from sqlalchemy.schema import CreateSchema, DropSchema
 
 from vita_api.app import create_app
 from vita_api.config import Settings
@@ -137,18 +141,31 @@ class TransportTests(unittest.TestCase):
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.settings = settings(database_url=f"sqlite:///{Path(self.temp.name) / 'ingestion.sqlite'}")
+        self.addCleanup(self.temp.cleanup)
+        self.pg_admin = None
+        database_url = f"sqlite:///{Path(self.temp.name) / 'ingestion.sqlite'}"
+        if os.environ.get("VITAAI_POSTGRES_TEST_URL"):
+            self.pg_admin = create_engine(os.environ["VITAAI_POSTGRES_TEST_URL"])
+            self.addCleanup(self.pg_admin.dispose)
+            self.schema = "vitaai_ingestion_" + uuid4().hex
+            with self.pg_admin.begin() as connection:
+                connection.execute(CreateSchema(self.schema))
+            self.addCleanup(self.drop_postgres_schema)
+            database_url = make_url(os.environ["VITAAI_POSTGRES_TEST_URL"]).update_query_dict({
+                "options": "-csearch_path=" + self.schema}).render_as_string(hide_password=False)
+        self.settings = settings(database_url=database_url)
         self.record, self.page = copy.deepcopy(OBJECT), {"results": [copy.deepcopy(ASSOCIATION)]}
         self.calls, self.callback = [], None
         self.app = create_app(self.settings, hubspot_transport=httpx.MockTransport(self.respond))
         self.client = TestClient(self.app).__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
         self.identity = Identity(self.app.state.store.engine)
         self.admin = self.identity.create_user("admin", "synthetic-password-long", SAMPLE_ORG, "admin")
         self.login("admin")
 
-    def tearDown(self):
-        self.client.__exit__(None, None, None)
-        self.temp.cleanup()
+    def drop_postgres_schema(self):
+        with self.pg_admin.begin() as connection:
+            connection.execute(DropSchema(self.schema, cascade=True))
 
     def login(self, name):
         self.client.cookies.clear()
