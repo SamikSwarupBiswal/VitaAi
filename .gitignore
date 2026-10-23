@@ -12,3 +12,4 @@ __pycache__/
 *.db-wal
 *.tsbuildinfo
 .local/
+*.[mM][dD]
