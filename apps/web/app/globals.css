@@ -99,6 +99,13 @@ details dd { overflow-wrap: anywhere; font-size: 12px; }
 .analysis-result p { overflow-wrap: anywhere; }
 .loading, .empty { padding: 28px 0; color: var(--muted); }
 .data-stamp { font-size: 11px; margin-top: 22px; color: var(--muted); }
+.portfolio-brief { border-top: 1px solid var(--border); margin: 24px 0; padding-top: 20px; }
+.portfolio-brief > p, .portfolio-brief li > p { margin-top: 8px; }
+.portfolio-brief ol { padding-left: 24px; }
+.portfolio-brief ol > li { padding: 16px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.portfolio-brief .account-link { max-width: none; font-weight: 600; }
+.portfolio-brief details { margin-top: 12px; font-size: 13px; }
+.portfolio-brief summary { cursor: pointer; }
 .error-banner { color: var(--risk); padding: 14px 0; }
 .signin { max-width: 380px; margin: 12vh auto; padding: 24px; }
 .signin form, .signin label { display: grid; gap: 12px; margin-top: 20px; }

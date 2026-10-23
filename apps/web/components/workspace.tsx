@@ -25,6 +25,44 @@ export function Workspace({ accountDirectory = false }: { accountDirectory?: boo
 }
 
 type Persona = "executive" | "seller" | "operations";
+
+function PortfolioBriefing({ portfolio, persona, provider, runs, unavailable, onSelect }: {
+  portfolio: Portfolio; persona: Persona; provider: ProviderStatus | null;
+  runs: Record<string, ModelRun>; unavailable: boolean; onSelect: (id: string) => void;
+}) {
+  return <section className="portfolio-brief" aria-label={`${persona === "seller" ? "Seller" : "Executive"} briefing`}>
+    <h2>{persona === "seller" ? "Your work brief" : "Portfolio briefing"}</h2>
+    <p className="muted">Assessment date {portfolio.as_of}. Priorities follow server risk order across all accounts.</p>
+    <p className="caveat">{portfolio.mode === "local_sample" ? "Synthetic sample" : portfolio.mode === "mixed" ? "Mixed synthetic and HubSpot sources" : "HubSpot sources"}. Recommendations are proposals; review evidence before acting.</p>
+    {unavailable ? <p role="status">Briefing paused while portfolio data is refreshing or unavailable. Refresh successfully to inspect current priorities.</p>
+      : <>{!provider?.configured && <p className="caveat">Model unavailable or unconfigured. This brief uses deterministic assessments.</p>}
+        {provider?.status === "failed" && <p className="caveat">Provider reported a failure. No generated briefing is shown.</p>}
+        {!portfolio.accounts.length && <p>No accounts available. No priorities can be established.</p>}
+        <ol>{portfolio.accounts.slice(0, 5).map(view => {
+          const { account, assessment } = view;
+          const run = runs[account.id] || view.latest_run;
+          const evidence = view.evidence.filter(item => item.account_id === account.id && item.organization_id === portfolio.organization_id);
+          return <li key={account.id}>
+            <button className="account-link" onClick={() => onSelect(account.id)}>{account.name} — inspect account evidence</button>
+            <p>{assessment.recommendation}</p>
+            <p className="caveat">Risk {assessment.risk} / opportunity {assessment.opportunity} / confidence {assessment.confidence}%. {assessment.requires_review ? "Evidence review required." : "Deterministic assessment; human review required."}</p>
+            <p className="caveat">{view.source?.kind === "hubspot" ? "HubSpot" : account.synthetic ? "Synthetic sample" : "Source unavailable"} / account revision {account.revision} / assessment {assessment.as_of}</p>
+            {account.annual_value === null && <p className="caveat">Annual value unknown.</p>}
+            {account.renewal_date === null && <p className="caveat">Renewal date unknown.</p>}
+            {assessment.caveats.map(caveat => <p className="caveat" key={caveat}>{caveat}</p>)}
+            <details><summary>Assessment sources and snapshot</summary>
+              <p className="caveat">Snapshot {assessment.snapshot_hash}</p>
+              {!evidence.length && <p>No account evidence available.</p>}
+              <ul>{evidence.map(item => <li key={item.id}>{item.fact}<p className="caveat">{item.source} / record {item.source_record} / observed {item.observed_at} / evidence {item.id}{assessment.factors.some(factor => factor.evidence_id === item.id) ? " / used by assessment" : " / not used by assessment"}</p></li>)}</ul>
+            </details>
+            {run && <p className="caveat">Latest analysis: {run.status.replaceAll("_", " ")}{run.snapshot_hash !== assessment.snapshot_hash ? " / older snapshot; excluded from brief" : " / advisory; not used to rank priorities"}.</p>}
+          </li>;
+        })}</ol>
+        {portfolio.accounts.length > 5 && <p className="caveat">Showing the first 5 of {portfolio.accounts.length} accounts. The table contains the full portfolio.</p>}
+      </>}
+  </section>;
+}
+
 const perspectives = [
   { id: "executive", label: "Executive", description: "Review portfolio priorities, score factors and source evidence." },
   { id: "seller", label: "Seller", description: "Prepare account conversations from the six-role intelligence pipeline." },
@@ -162,6 +200,11 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
     router.replace(`${accountDirectory ? "/accounts" : "/"}?persona=${persona}&account=${encodeURIComponent(id)}`, { scroll: false });
   }
 
+  function openBriefAccount(id: string) {
+    if (loading || error || authorityBlocked || !portfolio?.accounts.some(view => view.account.id === id)) return;
+    setQuery(""); setFilter("all"); selectAccount(id);
+  }
+
   function toggleTheme() {
     const next = !dark;
     setDark(next);
@@ -210,6 +253,8 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
           <div><dt>Need attention</dt><dd className="risk-text">{portfolio.attention_count}</dd></div>
           <div><dt>Growth signals</dt><dd className="growth-text">{portfolio.growth_count}</dd></div></dl>}
         {!!portfolio?.annual_value_missing_count && <p className="caveat">{portfolio.annual_value_missing_count} account{portfolio.annual_value_missing_count === 1 ? " is" : "s are"} missing annual value. The total includes known values only.</p>}
+        {portfolio && !accountDirectory && persona !== "operations" && <PortfolioBriefing portfolio={portfolio} persona={persona}
+          provider={provider} runs={runs} unavailable={loading || !!error || authorityBlocked} onSelect={openBriefAccount} />}
         <div className="table-toolbar"><div className="filters" role="group" aria-label="Account filters">
           {[["all", "All accounts"], ["attention", "Needs attention"], ["growth", "Growth"]].map(([key, label]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""}
             onClick={() => { setFilter(key); setAnalysisError(null); }}>{label}</button>)}</div>

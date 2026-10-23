@@ -32,6 +32,77 @@ const view = (id, value, renewal) => ({
     recommendation: "Review missing data", snapshot_hash: id }, evidence: [], latest_run: null,
 });
 
+function briefingWorkspace(hooks = {}, navigation = {}) {
+  return load("../components/workspace.tsx", {
+    react: hooks, "next/navigation": navigation, "next/link": { __esModule: true, default: ({ children }) => children },
+    "@/lib/api": api, "./account-table": table, "./account-detail": detail,
+    ...Object.fromEntries(["pipeline-panel", "session-gate", "hubspot-panel", "research-panel", "comparison-panel",
+      "source-detection-panel", "hubspot-ingestion-panel", "hubspot-refresh-panel"].map(name => ["./" + name, {}])),
+  }, "\nexports.briefForAcceptance = PortfolioBriefing; exports.contentForAcceptance = WorkspaceContent;");
+}
+const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"
+  ? [node, ...walk(node.props?.children)] : [];
+
+test("brief preserves server order, snapshot evidence, caveats and Unknowns without mutating input", () => {
+  const workspace = briefingWorkspace(), accounts = Array.from({ length: 6 }, (_, i) => {
+    const item = view(`Account ${i}`, null, null);
+    return { ...item, account: { ...item.account, organization_id: "org", synthetic: true, renewal_date: null },
+      assessment: { ...item.assessment, as_of: "2026-10-23", risk: i, requires_review: true,
+        caveats: ["Excluded stale evidence: stale", "<script>untrusted</script>"], factors: [{ evidence_id: "used" }] },
+      evidence: [{ id: "used", account_id: item.account.id, organization_id: "org", fact: "Usage declined",
+        source: "CRM", source_record: "original", observed_at: "2026-10-22T00:00:00Z" },
+      { id: "stale", account_id: item.account.id, organization_id: "org", fact: "Older observation", observed_at: "2026-08-01" },
+      { id: "foreign", account_id: item.account.id, organization_id: "other", fact: "Foreign private text" }],
+      latest_run: { status: "failed", snapshot_hash: "old" } };
+  });
+  const portfolio = { accounts, organization_id: "org", mode: "local_sample", as_of: "2026-10-23" };
+  const before = structuredClone(portfolio), selected = [];
+  for (const persona of ["executive", "seller"]) {
+    const tree = workspace.briefForAcceptance({ portfolio, persona, provider: { configured: true, status: "failed" },
+      runs: {}, unavailable: false, onSelect: id => selected.push(id) });
+    const html = renderToStaticMarkup(tree);
+    assert.match(html, /Showing the first 5 of 6/); assert.ok(html.indexOf("Account 0") < html.indexOf("Account 4"));
+    assert.doesNotMatch(html, /Account 5|Foreign private text|<script>/);
+    for (const text of ["Annual value unknown", "Renewal date unknown", "Excluded stale evidence", "observed 2026-10-22",
+      "evidence used / used by assessment", "evidence stale / not used by assessment", "older snapshot", "Provider reported a failure",
+      "Snapshot Account 0", "Synthetic sample", "&lt;script&gt;"]) assert.ok(html.includes(text), text);
+    walk(tree).filter(n => n.type === "button")[3].props.onClick();
+  }
+  assert.deepEqual(selected, ["Account 3", "Account 3"]); assert.deepEqual(portfolio, before);
+});
+
+test("brief empty and unavailable states offer no priorities", () => {
+  const workspace = briefingWorkspace(), portfolio = { accounts: [view("Hidden priority", 1, 1)], as_of: "2026-10-23" };
+  const paused = workspace.briefForAcceptance({ portfolio, persona: "seller", runs: {}, provider: null, unavailable: true, onSelect() {} });
+  assert.match(renderToStaticMarkup(paused), /Briefing paused/); assert.doesNotMatch(renderToStaticMarkup(paused), /Hidden priority/);
+  assert.equal(walk(paused).filter(n => n.type === "button").length, 0);
+  const empty = renderToStaticMarkup(workspace.briefForAcceptance({ portfolio: { ...portfolio, accounts: [] }, persona: "executive",
+    runs: {}, provider: null, unavailable: false, onSelect() {} }));
+  assert.match(empty, /No accounts available/); assert.match(empty, /Model unavailable or unconfigured/);
+});
+
+test("brief drilldown clears filters and keeps exact account; refresh failures block navigation", () => {
+  for (const [loading, error, blocked] of [[false, null, false], [true, null, false], [false, "Refresh failed", false], [false, null, true]]) {
+    const changes = [], routes = [], accounts = [view("A", 1, 1), view("B & C", 1, 1)];
+    const states = [{ accounts, as_of: "2026-10-23" }, null, loading, error, "A", "growth", "risk", true,
+      false, null, {}, null, blocked]; let cursor = 0;
+    const workspace = briefingWorkspace({ useEffect() {}, useCallback: fn => fn, useRef: initial => ({ current: initial }),
+      useMemo: fn => fn(), useState(initial) { const i = cursor++; return [i < states.length ? states[i] : initial,
+        value => changes.push([i, value])]; } }, {
+      useRouter: () => ({ replace: (...args) => routes.push(args) }), useSearchParams: () => new URLSearchParams(),
+    });
+    const brief = walk(workspace.contentForAcceptance({ accountDirectory: false, persona: "seller" }))
+      .find(n => n.type === workspace.briefForAcceptance);
+    assert.equal(brief.props.unavailable, loading || !!error || blocked);
+    brief.props.onSelect("B & C"); brief.props.onSelect("missing");
+    if (!loading && !error && !blocked) {
+      assert.deepEqual(routes, [["/?persona=seller&account=B%20%26%20C", { scroll: false }]]);
+      assert.ok(changes.some(([i, value]) => i === 4 && value === ""));
+      assert.ok(changes.some(([i, value]) => i === 5 && value === "all"));
+    } else assert.deepEqual(routes, []);
+  }
+});
+
 test("account displays distinguish missing value and renewal from actual zero", () => {
   assert.equal(api.currency(null), "Unknown");
   assert.equal(api.currency(0), "$0");
