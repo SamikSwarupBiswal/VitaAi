@@ -19,7 +19,8 @@ function load(relative, mocks = {}, extra = "") {
   target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target);
   target.require = name => name in mocks ? name === "react" ? { useLayoutEffect() {}, ...mocks[name] } : mocks[name]
-    : name === "@/lib/pipeline-delta" ? delta : normal(name);
+    : name === "@/lib/pipeline-delta" ? delta
+      : name === "./seller-priorities" ? load("../components/seller-priorities.tsx") : normal(name);
   target._compile(compiled + extra, filename);
   return target.exports;
 }

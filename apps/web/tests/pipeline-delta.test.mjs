@@ -10,7 +10,8 @@ const { renderToStaticMarkup } = require("react-dom/server");
 function load(relative, mocks = {}) {
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const target = new Module(filename); target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename));
-  const normal = target.require.bind(target); target.require = name => mocks[name] ?? normal(name);
+  const normal = target.require.bind(target); target.require = name => mocks[name]
+    ?? (name === "./seller-priorities" ? load("../components/seller-priorities.tsx") : normal(name));
   target._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: {
     module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
   } }).outputText, filename); return target.exports;
@@ -26,6 +27,68 @@ const run = (id = firstId, started_at = "2026-10-24T00:00:00Z") => ({ id, organi
     caveats: ["Missing source"], factors: [{ metric: "usage_change", value: null, evidence_id: null }] } }],
 });
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object" ? [node, ...walk(node.props?.children)] : [];
+
+test("seller priorities preserve server order, exact navigation, source dates, Unknowns and failures", () => {
+  const { SellerPriorities } = load("../components/seller-priorities.tsx"), saved = run();
+  saved.contexts[0].evidence[0] = { ...saved.contexts[0].evidence[0], source: "CRM", source_record: "retained-record",
+    ingested_at: "2026-10-23T01:00:00Z", synthetic: false };
+  saved.recommendations = [7, 2, 9].map((rank, i) => ({ ...saved.recommendations[0], account_id: `account-${i}`, rank,
+    action: { kind: i === 0 ? "manual_review" : "follow_up", rationale: "Review retained observation", evidence_ids: i ? ["fact"] : [] },
+    governance: { status: i === 0 ? "review_required" : "ready_for_preparation", caveats: ["Original policy caveat"] },
+    communication: { status: "failed" } }));
+  saved.contexts = saved.recommendations.map((item, i) => ({ ...saved.contexts[0],
+    account: { ...saved.contexts[0].account, id: item.account_id, name: `Account ${i} <script>` } }));
+  const original = structuredClone(saved), selected = [];
+  const tree = SellerPriorities({ run: saved, onSelect: id => selected.push(id) }), html = renderToStaticMarkup(tree);
+  assert.match(html, /Now · rank 7.*Next · rank 2.*Later · rank 9/);
+  assert.match(html, /annual value Unknown.*renewal Unknown/);
+  assert.match(html, /Communication: failed/); assert.match(html, /Evidence review required before preparation/);
+  assert.match(html, /Original policy caveat/); assert.match(html, /observed 2026-10-23T00:00:00Z.*ingested 2026-10-23T01:00:00Z/);
+  assert.match(html, /Context only; not cited by this action/);
+  assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>/);
+  walk(tree).filter(node => node.type === "button").forEach(node => node.props.onClick());
+  assert.deepEqual(selected, saved.recommendations.map(item => item.account_id));
+  assert.deepEqual(walk(tree).filter(node => node.type === "a").map(node => node.props.href),
+    selected.map(account => `/missions?account=${account}`));
+  assert.deepEqual(saved, original);
+});
+
+test("empty seller priorities invent no work; missing context has no navigation", () => {
+  const { SellerPriorities } = load("../components/seller-priorities.tsx"), saved = run();
+  saved.recommendations[0].governance = { status: "review_required", caveats: [] };
+  saved.recommendations[0].communication = { status: "blocked" };
+  saved.recommendations[0].action.evidence_ids = [];
+  saved.contexts = [];
+  const tree = SellerPriorities({ run: saved, onSelect() { assert.fail("No account context"); } });
+  assert.match(renderToStaticMarkup(tree), /Unknown account/);
+  assert.equal(walk(tree).filter(node => node.type === "a" || node.type === "button").length, 0);
+  saved.recommendations = [];
+  assert.match(renderToStaticMarkup(SellerPriorities({ run: saved, onSelect() {} })), /No recommendations selected/);
+});
+
+test("parent shows seller priorities only for current saved snapshots and hides them during a new run", async () => {
+  const saved = run(); saved.steps = []; saved.caveats = [];
+  saved.recommendations[0].action.evidence_ids = ["fact"];
+  saved.recommendations[0].governance = { status: "review_required", caveats: [] };
+  saved.recommendations[0].communication = { status: "blocked", evidence_ids: [] };
+  for (const [seller, hash] of [[true, "a".repeat(64)], [true, "changed"], [false, "a".repeat(64)]]) {
+    const state = ["attention", saved, false, null, false]; let cursor = 0, resolve, calls = 0;
+    const { PipelinePanel } = load("../components/pipeline-panel.tsx", { react: {
+      useEffect() {}, useLayoutEffect() {}, useRef: initial => ({ current: initial }),
+      useState(initial) { const i = cursor++; return [state[i] ?? initial, value => { state[i] = value; }]; },
+    }, "@/lib/api": { api() { calls++; return new Promise(done => { resolve = done; }); } }, "@/lib/pipeline-delta": helper });
+    const render = () => { cursor = 0; return PipelinePanel({ seller, organizationId: "org", snapshots: { account: hash }, configured: false, onSelect() {} }); };
+    let tree = render(), html = renderToStaticMarkup(tree);
+    assert.equal(html.includes('aria-label="Saved recommendation priorities"'), seller && hash === "a".repeat(64));
+    assert.equal(calls, 0);
+    if (!seller || hash === "changed") continue;
+    const pending = walk(tree).find(node => node.type === "button" && node.props.children === "Prepare recommendations").props.onClick();
+    assert.equal(calls, 1);
+    html = renderToStaticMarkup(render()); assert.doesNotMatch(html, /Saved recommendation priorities/);
+    resolve(saved); await pending;
+    assert.match(renderToStaticMarkup(render()), /Saved recommendation priorities/);
+  }
+});
 
 test("saved comparison preserves exact history and distinguishes selection from account deletion", () => {
   const before = run(), after = run(secondId, "2026-10-24T01:00:00Z");

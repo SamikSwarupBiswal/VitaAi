@@ -363,7 +363,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         {selected && !authorityBlocked && <HubSpotIngestionPanel view={selected} key={`ingestion:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
         {portfolio && !authorityBlocked && <PipelinePanel onSelect={openBriefAccount} organizationId={portfolio.organization_id}
           snapshots={Object.fromEntries(portfolio.accounts.map(view => [view.account.id, view.assessment.snapshot_hash]))}
-          configured={provider?.configured || false} key={persona} expanded={persona === "seller"} />}
+          configured={provider?.configured || false} key={persona} expanded={persona === "seller"} seller={persona === "seller"} />}
       </div>
       {selected && !authorityBlocked && <AccountDetail view={selected} provider={provider} busy={busyAccount !== null} onAnalyze={analyze}
         run={runs[selected.account.id] || null} error={analysisError} />}
