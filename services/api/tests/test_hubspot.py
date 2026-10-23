@@ -683,6 +683,76 @@ class HubSpotApiTests(unittest.TestCase):
         path = f'/api/integrations/hubspot/detections/{changed["id"]}/mission'
         return baseline, changed, plan.json(), path, body
 
+    def test_signal_to_verified_receipt_and_manual_outcome(self):
+        import json
+        baseline, changed, plan, selection_path, selection_body=self.source_mission_fixture()
+        self.assertEqual(baseline['status'],'baseline')
+        self.assertEqual(changed['status'],'changed')
+        def post(client,path,body):
+            response=client.post(path,headers=HEADERS,json=body)
+            self.assertEqual(response.status_code,200,response.text)
+            return response.json()
+        selected=post(self.client,selection_path,selection_body)
+        mission_id=selected['selection']['mission_id']
+        settings=self.settings.model_copy(update={'hubspot_write_enabled':True})
+        provider_calls=[]
+        saved={}
+        readback_available=False
+        def transport(request):
+            provider_calls.append((request.method,request.url.path))
+            if request.url.path=='/account-info/v3/details':
+                return httpx.Response(200,json={'portalId':456})
+            if request.url.path=='/crm/objects/2026-09/companies/123':
+                return httpx.Response(200,json={'id':'123','archived':False})
+            if request.method=='POST':
+                self.assertEqual(request.url.path,'/crm/objects/2026-09/tasks')
+                saved.update(json.loads(request.content))
+                return httpx.Response(201,json={'id':'789'})
+            self.assertEqual(request.url.path,'/crm/objects/2026-09/tasks/789')
+            if not readback_available:
+                return httpx.Response(503)
+            return httpx.Response(200,json={'id':'789','archived':False,'properties':saved['properties'],
+                'associations':{'companies':{'results':[{'id':'123','type':'task_to_company'}]}}})
+        app=create_app(settings,hubspot_transport=httpx.MockTransport(transport))
+        token=self.client.cookies.get('vitaai_session')
+        with TestClient(app) as client:
+            client.cookies.set('vitaai_session',token)
+            before=client.get('/api/accounts/'+ACCOUNT_ID).json()
+            mission=client.get('/api/missions/'+mission_id).json()
+            action=post(client,f'/api/missions/{mission_id}/prepare',{'expected_revision':mission['revision'],
+                'alternative_id':plan['selected_alternative_id'],'connector_id':'hubspot-live','mode':'live',
+                'payload':{'kind':'hubspot_task_create','title':'Synthetic source follow-up','body':'Exact changed evidence\n Ω ',
+                'due_at':(datetime.now(UTC)+timedelta(days=1)).replace(microsecond=0).isoformat()}})
+            action=post(client,f'/api/actions/{action["id"]}/submit',{'expected_revision':action['revision'],'binding_hash':action['binding_hash']})
+            decision=post(client,f'/api/actions/{action["id"]}/review',{'expected_revision':action['revision'],'binding_hash':action['binding_hash'],'decision':'approved'})
+            execute={'expected_revision':action['revision'],'decision_id':decision['id'],'idempotency_key':'synthetic-joined-journey'}
+            execution=post(client,f'/api/actions/{action["id"]}/execute',execute)
+            self.assertEqual(execution['status'],'result_unknown')
+            mission=client.get('/api/missions/'+mission_id).json()
+            denied=client.post(f'/api/missions/{mission_id}/outcomes',headers=HEADERS,json={
+                'expected_revision':mission['revision'],'receipt_id':execution['receipt_id'],'kind':'follow_up_required',
+                'basis':'manual_report','evidence_ids':[item['id'] for item in before['evidence']],'note':'Synthetic report'})
+            self.assertEqual(denied.status_code,409,denied.text)
+            readback_available=True
+            execution=post(client,f'/api/executions/{execution["id"]}/reconcile',{'expected_revision':execution['revision']})
+            self.assertEqual(execution['status'],'succeeded')
+            receipt=client.get('/api/receipts/'+execution['receipt_id']).json()
+            self.assertEqual(receipt['verification'],'verified')
+            self.assertEqual(saved,json.loads(action['provider_request']))
+            self.assertEqual(post(client,f'/api/actions/{action["id"]}/execute',execute),execution)
+            self.assertEqual(sum(method=='POST' for method,_ in provider_calls),1)
+            mission=client.get('/api/missions/'+mission_id).json()
+            report=post(client,f'/api/missions/{mission_id}/outcomes',{'expected_revision':mission['revision'],
+                'receipt_id':receipt['id'],'kind':'follow_up_required','basis':'manual_report','evidence_ids':[item['id'] for item in before['evidence']],
+                'note':'Synthetic local test; no customer contact or business result claimed'})
+            self.assertEqual(client.get('/api/accounts/'+ACCOUNT_ID).json(),before)
+        with TestClient(create_app(settings,hubspot_transport=httpx.MockTransport(lambda _:self.fail('No provider read on reload')))) as restarted:
+            restarted.cookies.set('vitaai_session',token)
+            self.assertEqual(restarted.get('/api/receipts/'+receipt['id']).json(),receipt)
+            self.assertEqual(restarted.get(selection_path).json(),selected['selection'])
+            self.assertEqual(restarted.get('/api/missions/'+mission_id).json()['status'],'completed')
+            self.assertEqual(restarted.get(f'/api/missions/{mission_id}/outcomes').json(),[report])
+
     def test_source_event_selection_creates_one_unprepared_mission_without_authority(self):
         _, changed, plan, path, body = self.source_mission_fixture()
         before = self.client.get(f"/api/accounts/{ACCOUNT_ID}").json()
