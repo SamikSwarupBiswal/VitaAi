@@ -397,6 +397,12 @@ class MicrosoftTests(unittest.TestCase):
             self.assertEqual(client.cookies.get(COOKIE), None)
 
     def test_http_fresh_review_is_required_for_exact_live_unsent_draft(self):
+        self.http_reviewed_draft()
+
+    def test_http_unknown_draft_reconciliation_outcome_survives_reconstruction(self):
+        self.http_reviewed_draft(recover_unknown=True)
+
+    def http_reviewed_draft(self, *, recover_unknown=False):
         self.configure()
         settings = self.settings.model_copy(update={"database_url": self.store.engine.url.render_as_string(hide_password=False)})
         app = create_app(settings, microsoft_transport=httpx.MockTransport(self.respond), microsoft_client_factory=self.factory)
@@ -406,6 +412,7 @@ class MicrosoftTests(unittest.TestCase):
             client.post(PREFIX + "/connect", headers=headers)
             self.assertEqual(client.get(PREFIX + "/callback", params={"state": self.flow["state"], "code": "test-code"}, follow_redirects=False).status_code, 303)
             view = next(v for v in client.get("/api/portfolio").json()["accounts"] if v["account"]["id"] == self.account.id)
+            before_account = client.get(f'/api/accounts/{self.account.id}').json()
 
             def post(path, body):
                 response = client.post(path, headers=headers, json=body)
@@ -435,12 +442,65 @@ class MicrosoftTests(unittest.TestCase):
             self.assertTrue(ready["actions"][0]["can_write"])
             decision = post(f'/api/actions/{action["id"]}/review', {"expected_revision": action["revision"],
                 "binding_hash": action["binding_hash"], "decision": "approved"})
-            execution = post(f'/api/actions/{action["id"]}/execute', {"expected_revision": action["revision"],
-                "decision_id": decision["id"], "idempotency_key": "http-draft"})
+            execute = {"expected_revision": action["revision"],
+                "decision_id": decision["id"], "idempotency_key": "http-draft"}
+            if recover_unknown:
+                self.read_error = httpx.Response(503, json={"error": "synthetic-readback-unavailable"})
+            execution = post(f'/api/actions/{action["id"]}/execute', execute)
+            if recover_unknown:
+                self.assertEqual(execution["status"], "result_unknown")
+                unknown = client.get(f'/api/receipts/{execution["receipt_id"]}').json()
+                self.assertEqual((unknown["result"], unknown["verification"], unknown["provider_resource_id"]),
+                                 ("result_unknown", "unavailable", "message=="))
+                mission = client.get(f'/api/missions/{mission["id"]}').json()
+                outcome = {"expected_revision": mission["revision"], "receipt_id": unknown["id"],
+                    "kind": "follow_up_required", "basis": "manual_report",
+                    "evidence_ids": [item["id"] for item in before_account["evidence"]],
+                    "note": "Synthetic local report; no customer contact or business effect claimed"}
+                denied = client.post(f'/api/missions/{mission["id"]}/outcomes', headers=headers, json=outcome)
+                self.assertEqual(denied.status_code, 409, denied.text)
+                self.assertEqual(denied.json()["detail"]["code"], "outcome_not_available")
+                self.assertEqual(client.get(f'/api/missions/{mission["id"]}/outcomes').json(), [])
+                self.assertEqual(post(f'/api/actions/{action["id"]}/execute', execute), execution)
+                self.read_error = None
+                call_count = len(self.calls)
+                execution = post(f'/api/executions/{execution["id"]}/reconcile',
+                                 {"expected_revision": execution["revision"]})
+                self.assertTrue(self.calls[call_count:])
+                self.assertTrue(all(request.method == "GET" for request in self.calls[call_count:]))
+                self.assertEqual(client.get(f'/api/receipts/{unknown["id"]}').json(), unknown)
+                self.assertNotEqual(execution["receipt_id"], unknown["id"])
             self.assertEqual(execution["status"], "succeeded")
             receipt = client.get(f'/api/receipts/{execution["receipt_id"]}').json()
             self.assertEqual((receipt["verification"], receipt["mode"]), ("verified", "live"))
             self.assertEqual(self.saved, json.loads(action["provider_request"]))
+            if not recover_unknown:
+                return
+            self.assertEqual(post(f'/api/actions/{action["id"]}/execute', execute), execution)
+            self.assertEqual(sum(request.method == "POST" for request in self.calls), 1)
+            mission = client.get(f'/api/missions/{mission["id"]}').json()
+            report = post(f'/api/missions/{mission["id"]}/outcomes',
+                          {**outcome, "expected_revision": mission["revision"], "receipt_id": receipt["id"]})
+            self.assertEqual((report["report"]["basis"], report["report"]["kind"]),
+                             ("manual_report", "follow_up_required"))
+            self.assertEqual(client.get(f'/api/accounts/{self.account.id}').json(), before_account)
+
+        def deny_network(*args, **kwargs):
+            self.fail("Reconstructed saved-record reads must not contact Microsoft")
+
+        restarted_app = create_app(settings, microsoft_transport=httpx.MockTransport(deny_network),
+                                   microsoft_client_factory=deny_network)
+        with TestClient(restarted_app) as restarted:
+            restarted.cookies.set("vitaai_session", self.review_token)
+            for retained in (unknown, receipt):
+                response = restarted.get(f'/api/receipts/{retained["id"]}')
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), retained)
+            self.assertEqual(restarted.get(f'/api/executions/{execution["id"]}').json(), execution)
+            self.assertEqual(restarted.get(f'/api/actions/{action["id"]}').json(), action)
+            self.assertEqual(restarted.get(f'/api/missions/{mission["id"]}/outcomes').json(), [report])
+            self.assertEqual(restarted.get(f'/api/missions/{mission["id"]}').json()["status"], "completed")
+            self.assertEqual(restarted.get(f'/api/accounts/{self.account.id}').json(), before_account)
 
     def test_disabled_configuration_scope_role_and_session_expiry(self):
         self.configure()
