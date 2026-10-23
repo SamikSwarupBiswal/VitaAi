@@ -4917,6 +4917,8 @@ export interface components {
             domain: string;
             /** Publisher Domains */
             publisher_domains?: string[];
+            /** Company Aliases */
+            company_aliases?: string[];
         };
         /** ResearchTopic */
         ResearchTopic: {

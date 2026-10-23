@@ -242,6 +242,7 @@ function ResearchRecord({ run, readiness, now }: { run: ResearchRun; readiness: 
     <p>Run {run.id} · {run.provider} · requested {run.requested_mode} · returned {run.mode} / {run.status}.</p>
     <p>Original account revision {run.account_revision}; target {run.target.company_name} / {run.target.domain}.</p>
     <p>Declared publisher domains: {run.target.publisher_domains?.join(", ") || "None"}. Company mentions remain unverified.</p>
+    <p>Declared company name aliases: {run.target.company_aliases?.join(", ") || "None"}. These do not verify identity.</p>
     <p>Started {run.started_at}; finished {run.finished_at || "Pending"}; context expires {run.expires_at || "No context window"}.</p>
     <p>Run revision {run.revision}; worker deadline {run.worker_deadline_at || "Unavailable (legacy record)"}.</p>
     {run.recovery && <p>Finalized as interrupted by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous run revision {run.recovery.previous_revision}; reason {run.recovery.reason}. This records finalization, not provider completion.</p>}

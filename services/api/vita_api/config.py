@@ -42,6 +42,16 @@ class ResearchTarget(BaseModel):
     company_name: str = Field(min_length=1, max_length=160, pattern=r"^[\w .,&'()-]+$")
     domain: ResearchDomain
     publisher_domains: list[ResearchDomain] = Field(default_factory=list, max_length=5)
+    company_aliases: list[Annotated[str, Field(min_length=3, max_length=160, pattern=r"^[\w .,&'()-]+$")]] = Field(
+        default_factory=list, max_length=5)
+
+    @field_validator("company_aliases")
+    @classmethod
+    def canonical_aliases(cls, value):
+        aliases = {" ".join(item.casefold().split()) for item in value}
+        if any(len(item) < 3 or not any(char.isalnum() for char in item) for item in aliases):
+            raise ValueError("Company aliases require a name of at least three characters")
+        return sorted(aliases)
 
     @field_validator("publisher_domains")
     @classmethod

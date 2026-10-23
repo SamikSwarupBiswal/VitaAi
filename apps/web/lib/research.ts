@@ -92,7 +92,8 @@ export function researchSourceLink(value: string, domain: string) {
 export function researchContext(run: ResearchRun, readiness: ResearchReadiness | null, now: number | null) {
   if (!readiness || run.account_revision !== readiness.account_revision || !readiness.target
     || run.target.company_name !== readiness.target.company_name || run.target.domain !== readiness.target.domain
-    || JSON.stringify(run.target.publisher_domains ?? []) !== JSON.stringify(readiness.target.publisher_domains ?? [])) {
+    || JSON.stringify(run.target.publisher_domains ?? []) !== JSON.stringify(readiness.target.publisher_domains ?? [])
+    || JSON.stringify(run.target.company_aliases ?? []) !== JSON.stringify(readiness.target.company_aliases ?? [])) {
     return "Historical revision or target; current context is not established.";
   }
   if (now === null || !run.expires_at || !Number.isFinite(Date.parse(run.expires_at)) || now >= Date.parse(run.expires_at)) {

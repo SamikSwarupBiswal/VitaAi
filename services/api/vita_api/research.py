@@ -141,13 +141,14 @@ def publication(value, fetched):
 def source_match(url: str, title: str, text: str, target: ResearchTarget):
     if source_url(url, target.domain):
         return "configured_domain"
-    name = " ".join(target.company_name.casefold().split())
-    if not any(char.isalnum() for char in name):
-        return None
     if any(source_url(url, domain) for domain in target.publisher_domains):
-        pattern = r"(?<!\w)" + re.escape(name) + r"(?!\w)"
-        if any(re.search(pattern, " ".join(value.casefold().split())) for value in (title, text)):
-            return "configured_publisher_company_mention"
+        for declared_name in [target.company_name, *target.company_aliases]:
+            name = " ".join(declared_name.casefold().split())
+            if not any(char.isalnum() for char in name):
+                continue
+            pattern = r"(?<!\w)" + re.escape(name) + r"(?!\w)"
+            if any(re.search(pattern, " ".join(value.casefold().split())) for value in (title, text)):
+                return "configured_publisher_company_mention"
     return None
 
 

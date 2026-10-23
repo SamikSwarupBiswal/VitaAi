@@ -51,6 +51,30 @@ def settings(**changes):
 
 
 class ResearchTransportTests(unittest.TestCase):
+    def test_declared_aliases_match_only_whole_names_on_declared_publishers(self):
+        target = ResearchTarget(**TARGET, publisher_domains=["publisher.test"],
+            company_aliases=[" Example  Co ", "EXAMPLE CO", "Example Holdings"])
+        self.assertEqual(target.company_aliases, ["example co", "example holdings"])
+        calls = []
+        def respond(request):
+            calls.append(request)
+            self.assertEqual(json.loads(request.content)["query"], "Example Company company news")
+            return httpx.Response(200, json={"results": [
+                {**ITEM, "url": "https://publisher.test/alias", "title": "EXAMPLE Co update"},
+                {**ITEM, "url": "https://publisher.test/text", "content": "About Example Holdings today"},
+                {**ITEM, "url": "https://publisher.test/substring", "title": "Example Cooperative update"},
+                {**ITEM, "url": "https://undeclared.test/alias", "title": "Example Co update"},
+                {**ITEM, "url": "https://publisher.test/example-co", "title": "Other company"},
+            ]})
+        result = Research(settings(), httpx.MockTransport(respond)).search(target)
+        self.assertEqual([item.url for item in result], ["https://publisher.test/alias", "https://publisher.test/text"])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(all(item.match == "configured_publisher_company_mention"
+                            and item.factual_confidence == "unverified" for item in result))
+        for aliases in [["*"], ["   "], ["ab"], ["---"], ["https://other.test"], ["Alias " + str(i) for i in range(6)]]:
+            with self.subTest(aliases=aliases), self.assertRaises(ValidationError):
+                ResearchTarget(**TARGET, company_aliases=aliases)
+
     def test_declared_publishers_require_a_full_company_mention_and_keep_provenance(self):
         target = ResearchTarget(**TARGET, publisher_domains=["publisher.test", "publisher.test"])
         calls = []
@@ -191,7 +215,7 @@ class ResearchApiTests(unittest.TestCase):
         before = self.client.get("/api/portfolio").json()
         ready = self.client.get(path)
         self.assertEqual(ready.status_code, 200)
-        self.assertEqual(ready.json()["target"], {**TARGET, "publisher_domains": []})
+        self.assertEqual(ready.json()["target"], {**TARGET, "publisher_domains": [], "company_aliases": []})
         self.assertEqual(ready.json()["account_revision"], 1)
         self.assertTrue(ready.json()["can_start"])
         self.assertEqual(ready.json()["live_status"], "configured_unverified")
@@ -340,6 +364,22 @@ class ResearchContextTests(unittest.TestCase):
     tearDown = ResearchApiTests.tearDown
     login = ResearchApiTests.login
     search = ResearchApiTests.search
+
+    def test_alias_removal_invalidates_context_without_rewriting_saved_target(self):
+        target = ResearchTarget(**TARGET, publisher_domains=["publisher.test"], company_aliases=["Example Co"])
+        config = self.settings.model_copy(update={"research_account_map": {ACCOUNT: target}})
+        article = {**ITEM, "url": "https://publisher.test/alias", "title": "Example Co update",
+                   "published_date": (datetime.now(UTC) - timedelta(days=1)).isoformat()}
+        connector = Research(config, httpx.MockTransport(lambda _: httpx.Response(200, json={"results": [article]})))
+        service = ResearchService(self.app.state.store, connector, self.client.cookies.get("vitaai_session"))
+        run = service.start(ACCOUNT, ResearchRequest(expected_account_revision=1, mode="live"))
+        before = self.client.get("/api/portfolio").json()
+        self.assertEqual(service.context(run.id).status, "usable")
+        connector.settings.research_account_map[ACCOUNT] = ResearchTarget(**TARGET, publisher_domains=["publisher.test"])
+        self.assertEqual(service.context(run.id).status, "target_changed")
+        self.assertEqual(service.get(run.id), run)
+        self.assertEqual(service.get(run.id).target.company_aliases, ["example co"])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
 
     def test_publisher_context_rechecks_saved_match_and_current_configuration(self):
         target = ResearchTarget(**TARGET, publisher_domains=["publisher.test"])
