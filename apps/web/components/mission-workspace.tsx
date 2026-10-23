@@ -104,6 +104,42 @@ function MicrosoftConnection({ invalidate, changed, blocked = false }: { invalid
   </section>;
 }
 
+function MissionPriorities({ account, missions, selectedId, select }: {
+  account: AccountView; missions: Mission[]; selectedId: string | null;
+  select: (accountId: string, mission: string) => void;
+}) {
+  const unfinished = missions.filter(item => item.account_id === account.account.id
+    && item.organization_id === account.account.organization_id && !["completed", "superseded"].includes(item.status));
+  const next = unfinished.find(item => item.id !== selectedId);
+  function guidance(mission: Mission) {
+    if (mission.status === "reconciliation_required") return "Uncertain result: inspect Execution and request reviewer reconciliation. Do not repeat the write.";
+    if (mission.status === "executing") return "Execution is active. Refresh saved state; do not dispatch again.";
+    if (mission.status === "execution_failed") return "Inspect the failed claim in Execution before choosing a permitted retry or manual follow-up.";
+    if (mission.status === "executed" || mission.status === "outcome_recorded") return "Inspect receipts and record the separate business outcome in Outcome.";
+    if (mission.evidence.account_revision !== account.account.revision
+      || mission.evidence.snapshot_hash !== account.assessment.snapshot_hash || mission.evidence.as_of !== account.assessment.as_of) {
+      return "Evidence has changed. Inspect Review for recovery; existing approval is not current authority.";
+    }
+    if (mission.status === "awaiting_review") return "Awaiting an authenticated reviewer in Approval.";
+    if (mission.status === "rejected" || mission.status === "revision_required") return "Inspect the review decision in Approval and revise permitted preparation before fresh review.";
+    if (mission.status === "approved") return "Inspect Approval and Execution for current authorization and dependencies before acting.";
+    return "Review evidence and continue saved preparation. No action is authorized by this priority.";
+  }
+  return <section aria-label="Seller mission priorities" className="portfolio-brief">
+    <h2>Now / Next / Later</h2>
+    <p>Saved unfinished work for {account.account.name}, newest first. These are navigation suggestions; opening a mission rechecks its current state.</p>
+    {!unfinished.length && <p>No unfinished missions for this account. Completed and replaced work stays in history; planning a new mission is explicit.</p>}
+    <ol>{unfinished.map((mission, index) => <li key={mission.id}>
+      <strong>{index === 0 ? "Now" : index === 1 ? "Next" : "Later"}</strong>{" — "}
+      <button onClick={() => select(mission.account_id, mission.id)}>Inspect {mission.template} · {mission.id.slice(0, 8)}</button>
+      <p>{mission.status.replaceAll("_", " ")} / revision {mission.revision} / created {mission.created_at}</p>
+      <p className="caveat">{guidance(mission)}</p>
+    </li>)}</ol>
+    {next && <button onClick={() => select(next.account_id, next.id)}>Open next unfinished mission</button>}
+    {!next && !!unfinished.length && <p>No other unfinished mission for this account.</p>}
+  </section>;
+}
+
 function MissionDirectory() {
   const params = useSearchParams();
   const router = useRouter();
@@ -136,7 +172,7 @@ function MissionDirectory() {
   const selected = loaded?.missions.find(item => item.id === selectedId);
   const accountId = requestedAccount || selected?.account_id || loaded?.portfolio.accounts[0]?.account.id;
   const account = loaded?.portfolio.accounts.find(item => item.account.id === accountId);
-  const current = loaded?.generation === generation && !connectionBusy;
+  const current = loaded?.generation === generation && !connectionBusy && !error;
   function refresh(message?: string) { setError(null); setNotice(message || null); setGeneration(value => value + 1); }
   function select(accountId: string, mission?: string) {
     const next = new URLSearchParams({ account: accountId });
@@ -167,6 +203,7 @@ function MissionDirectory() {
         </nav></details>
       </aside>
       <section className="mission-main" aria-label="Mission workspace">
+        {account && <MissionPriorities account={account} missions={loaded.missions} selectedId={selectedId} select={select} />}
         {selectedId ? (!selected || selected.account_id !== accountId ? <p role="alert">Mission unavailable for this account. Select a saved mission.</p>
           : <MissionLoader key={`${selected.id}:${generation}`} id={selected.id} configured={loaded.provider.configured} refresh={refresh} />)
           : account && <NewMission key={`${accountId}:${generation}`} account={account} configured={loaded.provider.configured}

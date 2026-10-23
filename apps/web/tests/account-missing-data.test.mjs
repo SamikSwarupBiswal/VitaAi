@@ -81,6 +81,17 @@ test("brief empty and unavailable states offer no priorities", () => {
   assert.match(empty, /No accounts available/); assert.match(empty, /Model unavailable or unconfigured/);
 });
 
+test("seller brief links the exact account to saved missions without creating work", () => {
+  const workspace = briefingWorkspace(), account = view("B & C", 1, 1);
+  const props = { portfolio: { accounts: [account], as_of: "2026-10-23" }, runs: {}, provider: null,
+    unavailable: false, onSelect() {} };
+  const seller = workspace.briefForAcceptance({ ...props, persona: "seller" });
+  const links = walk(seller).filter(n => n.props?.href);
+  assert.deepEqual(links.map(n => n.props.href), ["/missions?account=B+%26+C"]);
+  assert.equal(walk(workspace.briefForAcceptance({ ...props, persona: "executive" })).filter(n => n.props?.href).length, 0);
+  assert.equal(walk(workspace.briefForAcceptance({ ...props, persona: "seller", unavailable: true })).filter(n => n.props?.href).length, 0);
+});
+
 test("brief drilldown clears filters and keeps exact account; refresh failures block navigation", () => {
   for (const [loading, error, blocked] of [[false, null, false], [true, null, false], [false, "Refresh failed", false], [false, null, true]]) {
     const changes = [], routes = [], accounts = [view("A", 1, 1), view("B & C", 1, 1)];

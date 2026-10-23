@@ -44,6 +44,7 @@ function PortfolioBriefing({ portfolio, persona, provider, runs, unavailable, on
           const evidence = view.evidence.filter(item => item.account_id === account.id && item.organization_id === portfolio.organization_id);
           return <li key={account.id}>
             <button className="account-link" onClick={() => onSelect(account.id)}>{account.name} — inspect account evidence</button>
+            {persona === "seller" && <p><Link href={`/missions?${new URLSearchParams({ account: account.id })}`}>Inspect saved missions for {account.name}</Link></p>}
             <p>{assessment.recommendation}</p>
             <p className="caveat">Risk {assessment.risk} / opportunity {assessment.opportunity} / confidence {assessment.confidence}%. {assessment.requires_review ? "Evidence review required." : "Deterministic assessment; human review required."}</p>
             <p className="caveat">{view.source?.kind === "hubspot" ? "HubSpot" : account.synthetic ? "Synthetic sample" : "Source unavailable"} / account revision {account.revision} / assessment {assessment.as_of}</p>

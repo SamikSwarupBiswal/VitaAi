@@ -52,7 +52,7 @@ function harness(role = "reviewer", step = "Execution") {
   const components = load("../components/mission-workspace.tsx", { react: hooks, "@/lib/api": { api }, "@/lib/workflow": workflow,
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) },
     "next/navigation": { useSearchParams: () => new URLSearchParams({ step }), useRouter: () => ({ replace() {} }) },
-  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission;");
+  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission; exports.priorities=MissionPriorities;");
   function render(component, props) {
     cursor = 0; const tree = component(props), pending = effects; effects = []; pending.forEach(fn => fn()); return tree;
   }
@@ -61,6 +61,44 @@ function harness(role = "reviewer", step = "Execution") {
     unmount() { cleanups.forEach(fn => fn?.()); } };
 }
 const button = (tree, label) => walk(tree, n => n.type === "button" && [n.props.children].flat().join("") === label)[0];
+
+test("seller priorities exclude terminal and foreign work and hand off to the exact unfinished mission", () => {
+  const app = harness("seller"), account = data().account;
+  account.assessment.as_of = "2026-10-23";
+  const mission = (id, status, extra = {}) => ({ id, status, account_id: "account", organization_id: "org",
+    template: "account-action-1", revision: 3, created_at: "2026-10-23T01:00:00Z",
+    evidence: { account_revision: 1, snapshot_hash: "snapshot", as_of: "2026-10-23" }, ...extra });
+  const missions = [mission("done", "completed"), mission("replaced", "superseded"),
+    mission("foreign", "draft", { organization_id: "other" }), mission("other-account", "draft", { account_id: "other" }),
+    mission("unknown", "reconciliation_required"), mission("prepare", "draft"), mission("later", "awaiting_review")];
+  const before = structuredClone(missions), selected = [];
+  const tree = app.components.priorities({ account, missions, selectedId: "unknown", select: (...args) => selected.push(args) });
+  const html = renderToStaticMarkup(tree);
+  assert.doesNotMatch(html, /foreign|other-account|replaced|>done/);
+  assert.match(html, /Now/); assert.match(html, /Next/); assert.match(html, /Later/);
+  assert.match(html, /Uncertain result/); assert.match(html, /Awaiting an authenticated reviewer/);
+  button(tree, "Open next unfinished mission").props.onClick();
+  assert.deepEqual(selected, [["account", "prepare"]]); assert.deepEqual(missions, before);
+  assert.equal(app.requests.length, 0);
+  const completed = app.components.priorities({ account, missions, selectedId: "done", select: (...args) => selected.push(args) });
+  button(completed, "Open next unfinished mission").props.onClick();
+  assert.deepEqual(selected[1], ["account", "unknown"]);
+});
+
+test("seller mission guidance preserves stale, active and failed blockers and empty queues", () => {
+  const app = harness(), account = data().account;
+  const mission = { id: "only", account_id: "account", organization_id: "org", template: "account-note-1", revision: 1,
+    evidence: { account_revision: 0, snapshot_hash: "old", as_of: "old" } };
+  for (const [status, expected] of [["draft", /Evidence has changed/], ["executing", /Execution is active/],
+    ["execution_failed", /failed claim/], ["executed", /separate business outcome/]]) {
+    const tree = app.components.priorities({ account, missions: [{ ...mission, status }], selectedId: "only", select() {} });
+    assert.match(renderToStaticMarkup(tree), expected);
+    assert.equal(button(tree, "Open next unfinished mission"), undefined);
+  }
+  const empty = app.components.priorities({ account, missions: [{ ...mission, status: "completed" }], selectedId: "only", select() {} });
+  assert.match(renderToStaticMarkup(empty), /No unfinished missions/);
+  assert.equal(walk(empty, n => n.type === "button").length, 0);
+});
 
 function microsoftData() {
   const value = data(), payload = { kind: "outlook_draft_create", to: ["one@example.com", "two@example.com"], subject: " Exact Ω ", body_text: "Body\n Ω " };
