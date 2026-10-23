@@ -51,6 +51,7 @@ function harness(role = "reviewer", step = "Execution") {
   const workflow = load("../lib/workflow.ts", { "./api": { api } });
   const components = load("../components/mission-workspace.tsx", { react: hooks, "@/lib/api": { api }, "@/lib/workflow": workflow,
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) },
+    "./coaching-panel": { CoachingPanel: () => null },
     "next/navigation": { useSearchParams: () => new URLSearchParams({ step }), useRouter: () => ({ replace() {} }) },
   }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission; exports.priorities=MissionPriorities;");
   function render(component, props) {

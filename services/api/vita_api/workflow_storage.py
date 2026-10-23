@@ -52,6 +52,11 @@ receipts = record("workflow_receipts", Column("execution_id", String(80), nullab
 outcomes = record("workflow_outcomes", Column("mission_id", String(80), nullable=False),
                   Column("receipt_id", String(80), nullable=True), reference("mission_id", "workflow_missions"),
                   reference("receipt_id", "workflow_receipts"))
+coaching_reviews = record("workflow_coaching_reviews", Column("mission_id", String(80), nullable=False),
+                          Column("outcome_id", String(80), nullable=False),
+                          reference("mission_id", "workflow_missions"), reference("outcome_id", "workflow_outcomes"),
+                          UniqueConstraint("organization_id", "mission_id", "revision"))
+
 audits = record("workflow_audits", Column("mission_id", String(80), nullable=True),
                 Column("sequence", Integer, nullable=False), reference("mission_id", "workflow_missions"),
                 UniqueConstraint("organization_id", "sequence"))

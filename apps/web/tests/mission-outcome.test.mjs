@@ -27,7 +27,7 @@ test("stale partial success permits identified follow-up and retains role/uncert
   const target = new Module(filename); target.filename = filename;
   target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target);
-  target.require = name => name === 'react' ? hooks : name === './session-gate' ? {useSession: () => ({actor:{role}})}
+  target.require = name => name === './coaching-panel' ? {CoachingPanel: () => null} : name === 'react' ? hooks : name === './session-gate' ? {useSession: () => ({actor:{role}})}
     : name === 'next/navigation' ? {useSearchParams: () => new URLSearchParams({step:'Outcome'}),useRouter:()=>({})}
     : name === '@/lib/workflow' ? {steps:['Review','Evidence','Outreach','CRM Note','Approval','Execution','Outcome']}
     : name.startsWith('@/') || name.startsWith('next/') ? {} : normal(name);

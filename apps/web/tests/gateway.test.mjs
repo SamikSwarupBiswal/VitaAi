@@ -17,6 +17,20 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("coaching permits only canonical mission GET/POST without implicit HEAD or extra paths", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json([]));
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports), base = "missions/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8/coaching-reviews";
+  for (const [method, name, status] of [["GET", base, 200], ["POST", base, 200], ["HEAD", base, 404],
+    ["GET", base + "/extra", 404], ["POST", base + "/extra", 404], ["POST", "missions/invalid/coaching-reviews", 404]]) {
+    const response = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method,
+      headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000" }, ...(method === "POST" ? { body: "{}" } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 2);
+});
+
 test("mapped connection and seed preview allow only their explicit GET and POST pairs", async t => {
   const base = "integrations/hubspot/accounts/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
   const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {

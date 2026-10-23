@@ -26,6 +26,8 @@ from .workflow import Workflow
 from .workflow_contracts import (
     ActionPreview,
     AuditEvent,
+    CoachingRequest,
+    CoachingReview,
     ExecuteRequest,
     Execution,
     Mission,
@@ -218,6 +220,14 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
     @router.get("/api/missions/{mission_id}/outcomes", response_model=list[Outcome])
     def list_outcomes(mission_id: UUID, actor: Current, workflow: Service):
         return workflow.list_outcomes(actor.id, mission_id)
+
+    @router.get("/api/missions/{mission_id}/coaching-reviews", response_model=list[CoachingReview])
+    def list_coaching_reviews(mission_id: UUID, actor: Current, workflow: Service):
+        return workflow.list_coaching_reviews(actor.id, mission_id)
+
+    @router.post("/api/missions/{mission_id}/coaching-reviews", response_model=CoachingReview)
+    def review_coaching(mission_id: UUID, body: CoachingRequest, actor: Current, workflow: Service):
+        return workflow.review_coaching(actor.id, mission_id, body)
 
     @router.post("/api/executions/{execution_id}/retry", response_model=Execution)
     def retry(execution_id: UUID, body: ExecuteRequest, actor: Current, workflow: Service):

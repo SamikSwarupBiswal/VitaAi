@@ -385,7 +385,7 @@ test("source completion after navigation refreshes mounted workspace and mission
   target.require = name => name === "react" ? { useState(initial) { const i = cursor++; states[i] ??= initial;
     return [states[i], fn => { states[i] = typeof fn === "function" ? fn(states[i]) : fn; }]; }, useEffect: fn => effects.push(fn) }
     : name === "next/navigation" ? { useSearchParams: () => new URLSearchParams(), useRouter: () => ({}) }
-    : name.startsWith("@/") || name === "./session-gate" ? {} : normal(name);
+    : name.startsWith("@/") || name === "./session-gate" || name === "./coaching-panel" ? {} : normal(name);
   target._compile(output + "\nexports.directoryForAcceptance = MissionDirectory;", filename);
   globalThis.window = { addEventListener: (name, fn) => { events[name] = fn; }, removeEventListener: name => { delete events[name]; } };
   target.exports.directoryForAcceptance(); const cleanup = effects[0]();

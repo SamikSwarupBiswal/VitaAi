@@ -436,6 +436,26 @@ class Outcome(Record):
     supersedes_id: UUID | None = None
 
 
+class CoachingRequest(WorkflowContract):
+    expected_revision: Annotated[StrictInt, Field(ge=0)]
+    expected_mission_revision: Revision
+    outcome_id: UUID
+    expected_outcome_revision: Revision
+    status: Literal["reviewed", "revision_required"]
+    note: Text
+
+
+class CoachingReview(Record):
+    mission_id: UUID
+    mission_revision: Revision
+    outcome_id: UUID
+    outcome_revision: Revision
+    reviewer_id: Reference
+    status: Literal["reviewed", "revision_required"]
+    note: Text
+    supersedes_id: UUID | None = None
+
+
 class AuditEvent(Record):
     sequence: Revision
     entity_id: UUID

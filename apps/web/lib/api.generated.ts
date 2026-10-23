@@ -699,6 +699,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/missions/{mission_id}/coaching-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Coaching Reviews */
+        get: operations["list_coaching_reviews_api_missions__mission_id__coaching_reviews_get"];
+        put?: never;
+        /** Review Coaching */
+        post: operations["review_coaching_api_missions__mission_id__coaching_reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{execution_id}/retry": {
         parameters: {
             query?: never;
@@ -2063,6 +2081,86 @@ export interface components {
              * @default false
              */
             byok_allowed: boolean;
+        };
+        /** CoachingRequest */
+        CoachingRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Mission Revision */
+            expected_mission_revision: number;
+            /**
+             * Outcome Id
+             * Format: uuid
+             */
+            outcome_id: string;
+            /** Expected Outcome Revision */
+            expected_outcome_revision: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "reviewed" | "revision_required";
+            /** Note */
+            note: string;
+        };
+        /** CoachingReview */
+        CoachingReview: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /**
+             * Mission Id
+             * Format: uuid
+             */
+            mission_id: string;
+            /** Mission Revision */
+            mission_revision: number;
+            /**
+             * Outcome Id
+             * Format: uuid
+             */
+            outcome_id: string;
+            /** Outcome Revision */
+            outcome_revision: number;
+            /** Reviewer Id */
+            reviewer_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "reviewed" | "revision_required";
+            /** Note */
+            note: string;
+            /** Supersedes Id */
+            supersedes_id?: string | null;
         };
         /** CommunicationDrafts */
         CommunicationDrafts: {
@@ -6976,6 +7074,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Outcome"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_coaching_reviews_api_missions__mission_id__coaching_reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoachingReview"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_coaching_api_missions__mission_id__coaching_reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoachingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoachingReview"];
                 };
             };
             /** @description Validation Error */

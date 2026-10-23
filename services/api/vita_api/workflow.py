@@ -43,6 +43,8 @@ from .workflow_contracts import (
     ActionPreview,
     Alternative,
     AuditEvent,
+    CoachingRequest,
+    CoachingReview,
     DestinationBinding,
     ExecuteRequest,
     Execution,
@@ -64,6 +66,7 @@ from .workflow_storage import (
     actions,
     audits,
     claims,
+    coaching_reviews,
     decisions,
     missions,
     outcomes,
@@ -1092,6 +1095,41 @@ class Workflow:
         with self._transaction(actor_id, write=False) as (connection, actor):
             self._get(connection, actor, missions, mission_id, Mission)
             return self._outcomes(connection, actor, mission_id)
+
+    def _coaching_reviews(self, connection, actor, mission_id):
+        values = connection.execute(select(coaching_reviews.c.payload).where(
+            coaching_reviews.c.organization_id == actor.organization_id,
+            coaching_reviews.c.mission_id == str(mission_id)).order_by(coaching_reviews.c.revision)).scalars()
+        return [CoachingReview.model_validate(value) for value in values]
+
+    def list_coaching_reviews(self, actor_id, mission_id):
+        with self._transaction(actor_id, write=False) as (connection, actor):
+            self._get(connection, actor, missions, mission_id, Mission)
+            return self._coaching_reviews(connection, actor, mission_id)
+
+    def review_coaching(self, actor_id, mission_id, body: CoachingRequest) -> CoachingReview:
+        with self._transaction(actor_id, review=True) as (connection, actor):
+            mission = self._get(connection, actor, missions, mission_id, Mission)
+            self._version(mission, body.expected_mission_revision)
+            history = self._outcomes(connection, actor, mission.id)
+            latest = history[-1] if history else None
+            if mission.status != "completed" or latest is None:
+                raise PolicyDenied("coaching_outcome_required", 409)
+            if latest.id != body.outcome_id or latest.revision != body.expected_outcome_revision:
+                raise PolicyDenied("coaching_outcome_changed", 409)
+            reviews = self._coaching_reviews(connection, actor, mission.id)
+            previous = reviews[-1] if reviews else None
+            if body.expected_revision != (previous.revision if previous else 0):
+                raise PolicyDenied("coaching_review_changed", 409)
+            review = CoachingReview(**self._base(actor, revision=body.expected_revision + 1),
+                mission_id=mission.id, mission_revision=mission.revision, outcome_id=latest.id,
+                outcome_revision=latest.revision, reviewer_id=actor.id, status=body.status, note=body.note,
+                supersedes_id=previous.id if previous else None)
+            self._put(connection, coaching_reviews, review, new=True, mission_id=str(mission.id),
+                      outcome_id=str(latest.id))
+            self._audit(connection, actor, review, "coaching_review_recorded", mission_id=mission.id,
+                        before=previous.status if previous else None)
+            return review
 
     def _read(self, actor_id, table, entity_id, contract):
         with self._transaction(actor_id, write=False) as (connection, actor):

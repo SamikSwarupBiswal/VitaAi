@@ -7,6 +7,7 @@ import { api, type AccountView, type ModelRun, type Portfolio, type ProviderStat
 import { currentDecision, kindLabel, postWorkflow, readMission, steps, type Action, type Decision,
   type Mission, type MissionData, type OutcomeRequest, type Payload, type Plan, type PlanRequest, type Step } from "@/lib/workflow";
 import { useSession } from "./session-gate";
+import { CoachingPanel } from "./coaching-panel";
 import type { components } from "@/lib/api.generated";
 
 function useOperation() {
@@ -484,7 +485,8 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
                 <dt>Receipt ID</dt><dd>{record.id}</dd></dl></details>)}
           </article>;
         })}</>}
-      {step === "Outcome" && <OutcomeForm data={data} disabled={op.blocked || !writer || superseded} save={body => mutate(`missions/${mission.id}/outcomes`, body)} />}
+      {step === "Outcome" && <><OutcomeForm data={data} disabled={op.blocked || !writer || superseded} save={body => mutate(`missions/${mission.id}/outcomes`, body)} />
+        <CoachingPanel data={data} blocked={op.blocked} refresh={refresh} /></>}
     </section>
     <details className="mission-audit"><summary>Audit trail · {audit.length} events</summary><ol>{audit.map(event => <li key={event.id}>
       {event.sequence}. {event.event_kind} · {event.previous_state || "Created"} → {event.new_state}<br /><small>{event.created_at} / actor {event.actor_id} / entity {event.entity_id}</small>

@@ -17,9 +17,9 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const analyzePath = /^accounts\/[a-f0-9-]{36}\/analyze$/;
   const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
-  const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes))?)?|actions/${uuid}(?:/(?:history|decisions|executions))?|executions/${uuid}|receipts/${uuid})$`);
-  const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|supersede|outcomes))?|actions/${uuid}/(?:submit|review|renew-review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
-  const workflowPath = request.method === "GET" ? workflowRead.test(joined) : workflowWrite.test(joined);
+  const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes|coaching-reviews))?)?|actions/${uuid}(?:/(?:history|decisions|executions))?|executions/${uuid}|receipts/${uuid})$`);
+  const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|supersede|outcomes|coaching-reviews))?|actions/${uuid}/(?:submit|review|renew-review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
+  const workflowPath = request.method === "GET" ? workflowRead.test(joined) : request.method === "POST" && workflowWrite.test(joined);
   const hubspotPath = request.method === "GET"
     ? new RegExp(`^integrations/hubspot(?:/(?:runs|observations|sources|detections)/${uuid}|/refresh-occurrences/${uuid}(?:/recovery-readiness)?|/ingestions/${uuid}(?:/recovery-readiness)?|/detections/${uuid}/mission|/accounts/${uuid}/(?:preview|connection-readiness|execution-readiness|detections|refresh-schedule|refresh-occurrences|ingestions(?:/readiness)?))?$`).test(joined)
     : request.method === "POST" && new RegExp(`^integrations/hubspot/(?:accounts/${uuid}/(?:sync|probe|seed-preview|promote|restore-sample|detect-changes|refresh-schedule(?:/revoke)?|ingestions)|refresh-occurrences/${uuid}/recover|ingestions/${uuid}/recover|detections/${uuid}/mission)$`).test(joined);
