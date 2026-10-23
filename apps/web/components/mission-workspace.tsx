@@ -182,6 +182,7 @@ function MissionDirectory() {
   return <main className="mission-shell">
     <header className="mission-heading"><div><Link href={`/?persona=seller${account ? `&account=${account.account.id}` : ""}`}>← Portfolio</Link>
       <h1>Governed missions</h1><p className="muted">Evidence → reviewed action → recorded follow-up</p></div>
+      <Link href={`/walkthrough?${new URLSearchParams({ ...(accountId ? { account: accountId } : {}), ...(selectedId ? { mission: selectedId } : {}) })}`}>Mission walkthrough</Link>
       <button onClick={() => refresh()}>Refresh current state</button></header>
     <p className="mission-disclosure">Preparation defaults to simulation. Live work requires server configuration, explicit selection and exact authenticated approval. Outlook creates unsent drafts only. Provider creation does not establish a business outcome.</p>
     <MicrosoftConnection key={generation} blocked={connectionBusy} invalidate={() => setConnectionBusy(true)} changed={message => { setConnectionBusy(false); refresh(message); }} />

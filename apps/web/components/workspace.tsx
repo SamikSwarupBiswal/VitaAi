@@ -87,6 +87,7 @@ function Entry() {
     <p className="muted">Account intelligence / local foundation</p>
     <h1>Find the next conversation in your customer signals.</h1>
     <p>Review evidence, understand deterministic priorities, and prepare your next step with NVIDIA Nemotron on Nebius.</p>
+    <Link href="/walkthrough">Read the product walkthrough</Link>
     <nav aria-label="Choose a workspace perspective" className="persona-entry">
       {perspectives.map(item => <Link key={item.id} href={`/?persona=${item.id}`}><strong>{item.label}</strong><span>{item.description}</span><span>Open {item.label.toLowerCase()} workspace →</span></Link>)}
     </nav>
@@ -239,6 +240,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         <Link href={`/${selectedQuery}`} className={!accountDirectory ? "active" : ""} aria-current={!accountDirectory ? "page" : undefined}><PieChart size={20} />Portfolio</Link>
         <Link href={`/accounts${selectedQuery}`} className={accountDirectory ? "active" : ""} aria-current={accountDirectory ? "page" : undefined}><Building2 size={20} />Accounts</Link>
         <Link href={`/missions${selected ? `?account=${encodeURIComponent(selected.account.id)}` : ""}`}>Missions</Link>
+        <Link href={`/walkthrough${selected ? `?account=${encodeURIComponent(selected.account.id)}` : ""}`}>Walkthrough</Link>
       </nav><footer><p><Settings size={18} />Local workspace</p><p><Code2 size={18} />Local development</p></footer>
     </aside>
     <div className="workspace-body"><header className="topbar"><span>Workspace <span className="slash">/</span> <strong>{title}</strong></span>

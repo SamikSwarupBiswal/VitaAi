@@ -92,6 +92,37 @@ test("seller brief links the exact account to saved missions without creating wo
   assert.equal(walk(workspace.briefForAcceptance({ ...props, persona: "seller", unavailable: true })).filter(n => n.props?.href).length, 0);
 });
 
+test("walkthrough preserves valid account and mission context across all seven read-only step links", async () => {
+  const page = load("../app/walkthrough/page.tsx", { "next/link": { __esModule: true, default: ({ children }) => children } }).default;
+  const account = "11111111-1111-4111-8111-111111111111", mission = "22222222-2222-4222-8222-222222222222";
+  const tree = await page({ searchParams: Promise.resolve({ account, mission }) });
+  const links = walk(tree).filter(n => n.props?.href).map(n => n.props.href);
+  const stepLinks = links.filter(href => href.includes("&step="));
+  assert.equal(stepLinks.length, 7);
+  assert.deepEqual(stepLinks.map(href => new URL(href, "http://localhost").searchParams.get("step")),
+    ["Review", "Evidence", "Outreach", "CRM Note", "Approval", "Execution", "Outcome"]);
+  for (const href of stepLinks) {
+    const query = new URL(href, "http://localhost").searchParams;
+    assert.equal(query.get("account"), account); assert.equal(query.get("mission"), mission);
+  }
+  const html = renderToStaticMarkup(tree);
+  for (const text of ["simulation", "unknown result", "current admin or reviewer", "business outcome", "does not verify"]) assert.ok(html.includes(text), text);
+  assert.equal(walk(tree).filter(n => n.type === "button" || n.type === "form").length, 0);
+});
+
+test("walkthrough rejects malformed and repeated context without reflecting it or selecting a fallback", async () => {
+  const page = load("../app/walkthrough/page.tsx", { "next/link": { __esModule: true, default: ({ children }) => children } }).default;
+  for (const context of [{ account: "<script>bad</script>", mission: "invalid" }, { account: ["one", "two"] },
+    { mission: "22222222-2222-4222-8222-222222222222" }, {}]) {
+    const tree = await page({ searchParams: Promise.resolve(context) }), html = renderToStaticMarkup(tree);
+    const hrefs = walk(tree).filter(n => n.props?.href).map(n => n.props.href);
+    assert.doesNotMatch(html, /<script>|&lt;script&gt;/);
+    assert.ok(hrefs.includes("/missions")); assert.ok(hrefs.includes("/?persona=seller"));
+    assert.equal(hrefs.some(href => href.includes("account=") || href.includes("step=")), false);
+    if (Object.keys(context).length) assert.match(html, /context is invalid or missing/);
+  }
+});
+
 test("brief drilldown clears filters and keeps exact account; refresh failures block navigation", () => {
   for (const [loading, error, blocked] of [[false, null, false], [true, null, false], [false, "Refresh failed", false], [false, null, true]]) {
     const changes = [], routes = [], accounts = [view("A", 1, 1), view("B & C", 1, 1)];
