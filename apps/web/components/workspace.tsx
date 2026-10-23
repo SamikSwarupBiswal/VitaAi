@@ -8,7 +8,8 @@ import { api, currency, type AnalyzeRequest, type ModelRun, type Portfolio, type
 import { AccountDetail } from "./account-detail";
 import { AccountTable, type SortKey } from "./account-table";
 import { PipelinePanel } from "./pipeline-panel";
-import { SessionGate } from "./session-gate";
+import { SessionGate, useSession } from "./session-gate";
+import type { Mission } from "@/lib/workflow";
 import { HubSpotPanel } from "./hubspot-panel";
 import { ResearchPanel } from "./research-panel";
 import { ComparisonPanel } from "./comparison-panel";
@@ -60,6 +61,59 @@ function PortfolioBriefing({ portfolio, persona, provider, runs, unavailable, on
           </li>;
         })}</ol>
         {portfolio.accounts.length > 5 && <p className="caveat">Showing the first 5 of {portfolio.accounts.length} accounts. The table contains the full portfolio.</p>}
+      </>}
+  </section>;
+}
+
+function OperationsMissions({ portfolio }: { portfolio: Portfolio }) {
+  const actor = useSession()?.actor;
+  const [generation, setGeneration] = useState(0);
+  const [result, setResult] = useState<{ generation: number; missions: Mission[]; error?: string } | null>(null);
+  useEffect(() => {
+    const refresh = () => setGeneration(value => value + 1);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("vitaai-workflow-changed", refresh);
+    return () => { window.removeEventListener("focus", refresh); window.removeEventListener("vitaai-workflow-changed", refresh); };
+  }, []);
+  useEffect(() => {
+    if (!actor || actor.organization_id !== portfolio.organization_id) return;
+    const controller = new AbortController();
+    api<Mission[]>("missions", { signal: controller.signal }).then(missions => {
+      if (!controller.signal.aborted) setResult({ generation, missions });
+    }).catch(() => {
+      if (!controller.signal.aborted) setResult({ generation, missions: [], error: "Mission attention is unavailable. Refresh to inspect saved work." });
+    });
+    return () => controller.abort();
+  }, [actor, portfolio.organization_id, generation]);
+  const inspectionStep = (status: Mission["status"]) => ["awaiting_review", "rejected", "revision_required"].includes(status) ? "Approval"
+    : ["approved", "executing", "execution_failed", "reconciliation_required"].includes(status) ? "Execution"
+      : ["executed", "outcome_recorded"].includes(status) ? "Outcome" : null;
+  const current = result?.generation === generation ? result : null;
+  const attention = current?.missions.filter(mission => mission.organization_id === portfolio.organization_id
+    && portfolio.accounts.some(view => view.account.id === mission.account_id && view.account.organization_id === mission.organization_id)
+    && inspectionStep(mission.status)) || [];
+  return <section className="portfolio-brief" aria-label="Operations mission attention">
+    <h2>Saved work needing inspection</h2>
+    <p className="caveat">Mission lifecycle records in server newest-first order. This is not a connector health check or execution permission. Assessment date {portfolio.as_of}.</p>
+    {!actor || actor.organization_id !== portfolio.organization_id ? <p>Session identity in this organization is required to inspect saved mission attention.</p>
+      : <><button onClick={() => setGeneration(value => value + 1)}>Refresh mission attention</button>
+        {!current ? <p role="status">Loading current mission attention...</p>
+          : current.error ? <p role="alert">{current.error}</p>
+            : !attention.length ? <p>No saved review, execution or outcome attention in the current portfolio. This does not establish integration health.</p>
+              : <ul>{attention.map(mission => {
+                const view = portfolio.accounts.find(item => item.account.id === mission.account_id)!;
+                const stale = mission.evidence.account_revision !== view.account.revision
+                  || mission.evidence.snapshot_hash !== view.assessment.snapshot_hash || mission.evidence.as_of !== view.assessment.as_of;
+                return <li key={mission.id}>
+                  <Link href={`/missions?${new URLSearchParams({ account: mission.account_id, mission: mission.id, step: inspectionStep(mission.status)! })}`}>
+                    {view.account.name} — inspect {inspectionStep(mission.status)}</Link>
+                  <p>{mission.status.replaceAll("_", " ")} / mission revision {mission.revision} / created {mission.created_at}</p>
+                  <p className="caveat">Mission {mission.id} / account revision {view.account.revision}{stale ? " / historical evidence binding; inspect recovery before further work" : " / current snapshot binding; destination rechecks authorization"}</p>
+                  {mission.status === "reconciliation_required" && <p className="caveat">Uncertain result: reviewer reconciliation is required. Do not repeat the write.</p>}
+                  {mission.status === "executing" && <p className="caveat">Execution is active. Inspect saved state without redispatch.</p>}
+                  {["executed", "outcome_recorded"].includes(mission.status) && <p className="caveat">Receipt and business outcome are separate; inspect the saved human report.</p>}
+                </li>;
+              })}</ul>}
       </>}
   </section>;
 }
@@ -269,6 +323,8 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
           : <AccountTable rows={rows} selectedId={selected?.account.id} onSelect={selectAccount} sort={sort} descending={descending} onSort={key => { setDescending(sort === key ? !descending : key !== "name"); setSort(key); }} />}
         {portfolio && <p className="data-stamp">{portfolio.mode === "mixed" ? "Mixed HubSpot and synthetic sources" : portfolio.mode === "hubspot" ? "HubSpot source" : "Sample CRM"} / assessment {portfolio.as_of}</p>}
         {portfolio && persona === "operations" && <p className="data-stamp">Model: {provider?.configured ? "Configured; inspect individual runs for validation." : "Unconfigured."} Evidence assessment: {portfolio.as_of}. External execution unavailable.</p>}
+        {portfolio && persona === "operations" && !loading && !error && !authorityBlocked && <OperationsMissions portfolio={portfolio}
+          key={`operations:${portfolio.organization_id}:${sourceGeneration}`} />}
         {selected && <HubSpotPanel view={selected} key={`${selected.account.id}:${selected.account.revision}:${sourceGeneration}`}
           blocked={authorityBlocked} onInvalidate={() => { setSourcePending(true); invalidateAuthority(); }} onRefresh={refreshSource} />}
         {selected && !authorityBlocked && <ComparisonPanel view={selected} key={`${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}

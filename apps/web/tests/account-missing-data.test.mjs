@@ -32,16 +32,72 @@ const view = (id, value, renewal) => ({
     recommendation: "Review missing data", snapshot_hash: id }, evidence: [], latest_run: null,
 });
 
-function briefingWorkspace(hooks = {}, navigation = {}) {
+function briefingWorkspace(hooks = {}, navigation = {}, session = null, apiOverride = api) {
   return load("../components/workspace.tsx", {
     react: hooks, "next/navigation": navigation, "next/link": { __esModule: true, default: ({ children }) => children },
-    "@/lib/api": api, "./account-table": table, "./account-detail": detail,
+    "@/lib/api": apiOverride, "./account-table": table, "./account-detail": detail,
     ...Object.fromEntries(["pipeline-panel", "session-gate", "hubspot-panel", "research-panel", "comparison-panel",
       "source-detection-panel", "hubspot-ingestion-panel", "hubspot-refresh-panel"].map(name => ["./" + name, {}])),
-  }, "\nexports.briefForAcceptance = PortfolioBriefing; exports.contentForAcceptance = WorkspaceContent;");
+    "./session-gate": { useSession: () => session },
+  }, "\nexports.briefForAcceptance = PortfolioBriefing; exports.contentForAcceptance = WorkspaceContent; exports.operationsForAcceptance = OperationsMissions;");
 }
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"
   ? [node, ...walk(node.props?.children)] : [];
+
+test("operations inspects scoped saved attention with exact links; refresh failure and obsolete reads cannot show success", async t => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, "window"), listeners = new Map();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    addEventListener(name, handler) { listeners.set(name, handler); }, removeEventListener(name) { listeners.delete(name); },
+  } });
+  t.after(() => { if (prior) Object.defineProperty(globalThis, "window", prior); else delete globalThis.window; });
+  const slots = [], cleanups = [], requests = []; let cursor = 0, effects = [];
+  const hooks = {
+    useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial;
+      return [slots[i], value => { slots[i] = typeof value === "function" ? value(slots[i]) : value; }]; },
+    useEffect(callback, deps) { const i = cursor++; if (!(i in slots) || deps.some((value, index) => value !== slots[i][index])) {
+      slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = callback(); });
+    } },
+  };
+  const workspace = briefingWorkspace(hooks, {}, { actor: { id: "actor", organization_id: "org", role: "viewer" } },
+    { ...api, api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) });
+  const account = view("account", 1, 1); account.account.organization_id = "org"; account.assessment.as_of = "2026-10-23";
+  const portfolio = { accounts: [account], organization_id: "org", as_of: "2026-10-23" };
+  const render = () => { cursor = 0; const tree = workspace.operationsForAcceptance({ portfolio });
+    const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+  const mission = (id, status, extra = {}) => ({ id, status, account_id: "account", organization_id: "org", revision: 2,
+    created_at: "2026-10-23T00:00:00Z", evidence: { account_revision: 0, snapshot_hash: "old", as_of: "old" }, ...extra });
+  assert.match(renderToStaticMarkup(render()), /Loading current mission attention/);
+  assert.equal(requests[0].url, "missions"); assert.equal(requests[0].init.method, undefined);
+  requests[0].resolve([mission("unknown", "reconciliation_required"), mission("review", "awaiting_review"),
+    mission("outcome", "executed"), mission("done", "completed"), mission("draft", "draft"),
+    mission("foreign", "execution_failed", { organization_id: "other" }), mission("missing", "executing", { account_id: "missing" })]);
+  await flush(); let tree = render(), html = renderToStaticMarkup(tree);
+  assert.match(html, /Uncertain result/); assert.match(html, /historical evidence binding/); assert.match(html, /business outcome are separate/);
+  const links = walk(tree).filter(node => node.props?.href).map(node => node.props.href);
+  assert.deepEqual(links.map(href => new URL(href, "http://localhost").searchParams.get("mission")), ["unknown", "review", "outcome"]);
+  assert.deepEqual(links.map(href => new URL(href, "http://localhost").searchParams.get("step")), ["Execution", "Approval", "Outcome"]);
+  listeners.get("focus")(); assert.match(renderToStaticMarkup(render()), /Loading current mission attention/);
+  assert.equal(requests[0].init.signal.aborted, true);
+  listeners.get("vitaai-workflow-changed")(); render(); assert.equal(requests[1].init.signal.aborted, true);
+  requests[1].resolve([mission("obsolete", "awaiting_review")]); requests[2].reject(new Error("private server detail")); await flush();
+  html = renderToStaticMarkup(render()); assert.match(html, /Mission attention is unavailable/);
+  assert.doesNotMatch(html, /obsolete|private server detail|inspect Approval/);
+  walk(render()).find(node => node.type === "button").props.onClick(); render(); requests[3].resolve([]); await flush();
+  assert.match(renderToStaticMarkup(render()), /No saved review, execution or outcome attention/);
+  cleanups.forEach(fn => fn?.());
+});
+
+test("operations sample mode offers no private mission request", () => {
+  let requested = false;
+  const workspace = briefingWorkspace({ useState: initial => [initial, () => {}], useEffect: callback => callback() }, {},
+    { actor: null }, { ...api, api() { requested = true; } });
+  const prior = globalThis.window; globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  try {
+    const html = renderToStaticMarkup(workspace.operationsForAcceptance({ portfolio: { organization_id: "org", accounts: [] } }));
+    assert.match(html, /Session identity/); assert.equal(requested, false);
+  } finally { if (prior === undefined) delete globalThis.window; else globalThis.window = prior; }
+});
 
 test("brief preserves server order, snapshot evidence, caveats and Unknowns without mutating input", () => {
   const workspace = briefingWorkspace(), accounts = Array.from({ length: 6 }, (_, i) => {
