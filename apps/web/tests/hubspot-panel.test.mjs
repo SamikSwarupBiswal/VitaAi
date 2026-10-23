@@ -66,6 +66,31 @@ async function showPreview(app) {
   app.requests.shift().resolve(observation); await pending;
 }
 
+test("saved source change brief preserves Unknown, zero, original dates and unchanged comparisons without inference", () => {
+  const brief = load("../components/hubspot-panel.tsx", { react: {}, "@/lib/api": {}, "@/lib/hubspot": {}, "./session-gate": {} },
+    "\nexports.changeBrief = SourceChangeBrief;").changeBrief;
+  const before = { ...account.account, revision: 2, name: "Earlier", industry: "Software", annual_value: null, renewal_date: null };
+  const after = { ...before, revision: 3, name: "<script>Selected</script>", annual_value: 0 };
+  const history = { account_id: "a", previous_account: before, account: after, previous_evidence: [], evidence: [],
+    selection: { kind: "hubspot", selected_at: "2026-10-18T01:00:00Z", provider_updated_at: "2026-10-16T00:00:00Z" } };
+  const original = structuredClone(history), html = renderToStaticMarkup(brief({ history }));
+  assert.match(html, /revision 2 → 3/); assert.match(html, /2 displayed fields changed/);
+  assert.match(html, /<td>Unknown<\/td><td>0<\/td><td>Changed/);
+  assert.match(html, /Renewal date<\/th><td>Unknown<\/td><td>Unknown<\/td><td>Unchanged/);
+  assert.match(html, /&lt;script&gt;Selected/); assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /2026-10-18T01:00:00Z/); assert.match(html, /2026-10-16T00:00:00Z/);
+  assert.match(html, /not metric measurement times/); assert.match(html, /not a like-for-like trend or business outcome/);
+  assert.deepEqual(history, original);
+  const unchanged = renderToStaticMarkup(brief({ history: { ...history, account: { ...before, revision: 3 },
+    selection: { ...history.selection, kind: "local_sample", provider_updated_at: null } } }));
+  assert.match(unchanged, /No displayed account fields changed/); assert.match(unchanged, /original synthetic sample/);
+  assert.match(unchanged, /provider updated Unknown/);
+  for (const previous of [undefined, { ...before, id: "other" }, { ...before, organization_id: "other" }]) {
+    const unavailable = renderToStaticMarkup(brief({ history: { ...history, previous_account: previous } }));
+    assert.match(unavailable, /No comparable retained account pair/); assert.doesNotMatch(unavailable, /Selected|<table>/);
+  }
+});
+
 const probeReady = { organization_id: "org", account_id: "a", account_revision: 3,
   configuration_hash: "a".repeat(64), can_probe: true, reason: "ready" };
 const probeResult = { ...probeReady, id: "probe-one", actor_id: "actor", portal_id: "12", company_id: "34",

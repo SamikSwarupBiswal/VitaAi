@@ -185,7 +185,33 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
         <button disabled={disabled}>Load source version</button></form>
       {history && <details open><summary>{history.selection.kind} · revision {history.selection.account_revision} · {history.selection.selected_at}</summary>
         <p>Selected by {history.selection.actor_id}; version {history.selection.id}. This is historical state, not current execution authority.</p>
+        <SourceChangeBrief history={history} />
         <pre>{JSON.stringify(history, null, 2)}</pre></details>}
     </section>
   </details>;
+}
+
+function SourceChangeBrief({ history }: { history: SourceVersion }) {
+  const before = history.previous_account, after = history.account;
+  if (!before || before.id !== history.account_id || after.id !== history.account_id
+    || before.organization_id !== after.organization_id) return <p>No comparable retained account pair is available.</p>;
+  const fields = [
+    ["Name", before.name, after.name],
+    ["Industry", before.industry, after.industry],
+    ["Annual contract value (USD/year)", before.annual_value, after.annual_value],
+    ["Renewal date", before.renewal_date, after.renewal_date],
+  ] as const;
+  const changed = fields.filter(([, previous, selected]) => previous !== selected).length;
+  return <section aria-label="Saved source change brief">
+    <h3>Saved source change brief</h3>
+    <p>Account revision {before.revision} → {after.revision}. {changed ? `${changed} displayed field${changed === 1 ? "" : "s"} changed.` : "No displayed account fields changed."}</p>
+    <p className="caveat">Source selection: {history.selection.kind === "hubspot" ? "HubSpot" : "original synthetic sample"}. Selected {history.selection.selected_at}; provider updated {history.selection.provider_updated_at || "Unknown"}. These dates are not metric measurement times.</p>
+    <p className="caveat">This compares retained records across a source selection, not a like-for-like trend or business outcome. Missing values remain Unknown; original evidence and observation dates are in the retained record below.</p>
+    <table><caption>Saved account fields before and after selection</caption><thead><tr>
+      <th scope="col">Field</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Comparison</th>
+    </tr></thead><tbody>{fields.map(([label, previous, selected]) => <tr key={label}>
+      <th scope="row">{label}</th><td>{previous ?? "Unknown"}</td><td>{selected ?? "Unknown"}</td>
+      <td>{previous === selected ? "Unchanged" : "Changed"}</td>
+    </tr>)}</tbody></table>
+  </section>;
 }
