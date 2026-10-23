@@ -39,7 +39,7 @@ function briefingWorkspace(hooks = {}, navigation = {}, session = null, apiOverr
     ...Object.fromEntries(["pipeline-panel", "session-gate", "hubspot-panel", "research-panel", "comparison-panel",
       "source-detection-panel", "hubspot-ingestion-panel", "hubspot-refresh-panel"].map(name => ["./" + name, {}])),
     "./session-gate": { useSession: () => session },
-  }, "\nexports.briefForAcceptance = PortfolioBriefing; exports.contentForAcceptance = WorkspaceContent; exports.operationsForAcceptance = OperationsMissions;");
+  }, "\nexports.briefForAcceptance = PortfolioBriefing; exports.contentForAcceptance = WorkspaceContent; exports.operationsForAcceptance = OperationsMissions; exports.managerForAcceptance = ManagerWorkSummary;");
 }
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"
   ? [node, ...walk(node.props?.children)] : [];
@@ -65,7 +65,7 @@ test("operations inspects scoped saved attention with exact links; refresh failu
   const render = () => { cursor = 0; const tree = workspace.operationsForAcceptance({ portfolio });
     const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
-  const mission = (id, status, extra = {}) => ({ id, status, account_id: "account", organization_id: "org", revision: 2,
+  const mission = (id, status, extra = {}) => ({ id, status, owner_id: "saved-owner", account_id: "account", organization_id: "org", revision: 2,
     created_at: "2026-10-23T00:00:00Z", evidence: { account_revision: 0, snapshot_hash: "old", as_of: "old" }, ...extra });
   assert.match(renderToStaticMarkup(render()), /Loading current mission attention/);
   assert.equal(requests[0].url, "missions"); assert.equal(requests[0].init.method, undefined);
@@ -97,6 +97,27 @@ test("operations sample mode offers no private mission request", () => {
     const html = renderToStaticMarkup(workspace.operationsForAcceptance({ portfolio: { organization_id: "org", accounts: [] } }));
     assert.match(html, /Session identity/); assert.equal(requested, false);
   } finally { if (prior === undefined) delete globalThis.window; else globalThis.window = prior; }
+});
+
+test("manager summary counts exact owner lifecycle records and links only actual completed missions", () => {
+  const workspace = briefingWorkspace(), account = view("account", 1, 1); account.account.organization_id = "org";
+  const portfolio = { organization_id: "org", accounts: [account] };
+  const mission = (id, status, owner_id = "owner <one>", extra = {}) => ({ id, status, owner_id,
+    account_id: "account", organization_id: "org", revision: 2, created_at: "2026-10-23T00:00:00Z", ...extra });
+  const missions = [mission("complete", "completed"), mission("unknown", "reconciliation_required"),
+    mission("rejected", "rejected"), mission("review", "awaiting_review", "owner-two"), mission("replaced", "superseded"),
+    mission("private", "completed", "foreign-owner", { organization_id: "foreign" }),
+    mission("absent", "completed", "missing-owner", { account_id: "absent" })];
+  const original = structuredClone(missions), tree = workspace.managerForAcceptance({ portfolio, missions });
+  const html = renderToStaticMarkup(tree), hrefs = walk(tree).filter(n => n.props?.href).map(n => n.props.href);
+  assert.deepEqual(hrefs, ["/missions?account=account&mission=complete&step=Outcome"]);
+  for (const text of ["completed: 1", "reconciliation required: 1", "rejected: 1", "awaiting review: 1", "superseded: 1",
+    "Owner owner &lt;one&gt;", "Creation is not completion time", "not a verified seller directory", "does not independently verify"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /foreign-owner|missing-owner|<one>/);
+  assert.equal(walk(tree).some(n => n.type === "button" || n.type === "form"), false);
+  assert.deepEqual(missions, original);
+  const empty = renderToStaticMarkup(workspace.managerForAcceptance({ portfolio, missions: [] }));
+  assert.match(empty, /No saved missions for current portfolio accounts/);
 });
 
 test("brief preserves server order, snapshot evidence, caveats and Unknowns without mutating input", () => {

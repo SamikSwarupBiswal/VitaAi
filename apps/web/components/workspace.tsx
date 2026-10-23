@@ -114,8 +114,37 @@ function OperationsMissions({ portfolio }: { portfolio: Portfolio }) {
                   {["executed", "outcome_recorded"].includes(mission.status) && <p className="caveat">Receipt and business outcome are separate; inspect the saved human report.</p>}
                 </li>;
               })}</ul>}
+        {current && !current.error && <ManagerWorkSummary portfolio={portfolio} missions={current.missions} />}
       </>}
   </section>;
+}
+
+function ManagerWorkSummary({ portfolio, missions }: { portfolio: Portfolio; missions: Mission[] }) {
+  const scoped = missions.filter(mission => mission.organization_id === portfolio.organization_id
+    && portfolio.accounts.some(view => view.account.id === mission.account_id && view.account.organization_id === mission.organization_id));
+  const owners = [...new Set(scoped.map(mission => mission.owner_id))].sort();
+  return <details><summary>Manager review · saved work by owner</summary>
+    <p>Server owner IDs identify these saved missions; they are not a verified seller directory or performance ranking. Counts describe workflow records, not customer impact or coaching effectiveness.</p>
+    {!scoped.length && <p>No saved missions for current portfolio accounts.</p>}
+    {owners.map(owner => {
+      const records = scoped.filter(mission => mission.owner_id === owner);
+      const counts = new Map<string, number>();
+      records.forEach(mission => counts.set(mission.status, (counts.get(mission.status) || 0) + 1));
+      return <section key={owner} aria-label={`Saved work for owner ${owner}`}>
+        <h3>Owner {owner}</h3><p>{records.length} saved mission{records.length === 1 ? "" : "s"}.</p>
+        <ul>{[...counts].sort(([left], [right]) => left.localeCompare(right)).map(([status, count]) =>
+          <li key={status}>{status.replaceAll("_", " ")}: {count}</li>)}</ul>
+        <h4>Recorded completions</h4>
+        {!records.some(mission => mission.status === "completed") && <p>No completed mission recorded for this owner in the current portfolio.</p>}
+        <ul>{records.filter(mission => mission.status === "completed").map(mission => <li key={mission.id}>
+          <Link href={`/missions?${new URLSearchParams({ account: mission.account_id, mission: mission.id, step: "Outcome" })}`}>
+            {portfolio.accounts.find(view => view.account.id === mission.account_id)!.account.name} — inspect recorded outcome</Link>
+          <p>Mission {mission.id} / revision {mission.revision} / created {mission.created_at}. Creation is not completion time.</p>
+        </li>)}</ul>
+      </section>;
+    })}
+    <p className="caveat">Outcome links load original human reports, corrections, receipts and provenance in the mission workspace. Completed status alone does not independently verify a reported business result. Coaching review and assignments remain unavailable here.</p>
+  </details>;
 }
 
 const perspectives = [
