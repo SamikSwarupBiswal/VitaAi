@@ -17,7 +17,7 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
-test("mapped connection probe allows only explicit GET readiness and POST probe", async t => {
+test("mapped connection and seed preview allow only their explicit GET and POST pairs", async t => {
   const base = "integrations/hubspot/accounts/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
   const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
     assert.equal(init.headers.Cookie, "vitaai_session=opaque-session");
@@ -28,7 +28,9 @@ test("mapped connection probe allows only explicit GET readiness and POST probe"
   const methods = autoImplementMethods(route.exports);
   for (const [method, suffix, status] of [["GET", "connection-readiness", 200], ["POST", "probe", 200],
     ["GET", "probe", 404], ["POST", "connection-readiness", 404], ["HEAD", "connection-readiness", 404],
-    ["HEAD", "probe", 404], ["POST", "probe/extra", 404], ["GET", "connection-readiness/extra", 404]]) {
+    ["HEAD", "probe", 404], ["POST", "probe/extra", 404], ["GET", "connection-readiness/extra", 404],
+    ["POST", "seed-preview", 200], ["GET", "seed-preview", 404], ["HEAD", "seed-preview", 404],
+    ["POST", "seed-preview/extra", 404]]) {
     const name = `${base}/${suffix}`;
     const response = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method,
       headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", cookie: "vitaai_session=opaque-session" },
@@ -36,7 +38,7 @@ test("mapped connection probe allows only explicit GET readiness and POST probe"
     }), { params: Promise.resolve({ path: name.split("/") }) });
     assert.equal(response.status, status);
   }
-  assert.equal(upstream.mock.callCount(), 2);
+  assert.equal(upstream.mock.callCount(), 3);
 });
 
 test("scheduled staging forwards only seven explicit method/path pairs, never implicit HEAD", async t => {

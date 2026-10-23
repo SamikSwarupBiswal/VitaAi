@@ -70,6 +70,56 @@ const probeReady = { organization_id: "org", account_id: "a", account_revision: 
   configuration_hash: "a".repeat(64), can_probe: true, reason: "ready" };
 const probeResult = { ...probeReady, id: "probe-one", actor_id: "actor", portal_id: "12", company_id: "34",
   started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:01Z", status: "succeeded", error_code: null };
+const seedResult = { ...probeReady, id: "seed-one", mode: "preview", execution_available: false,
+  method: "POST", path: "/crm/v3/objects/companies", portal_id: "12", created_at: "2026-10-23T00:00:00Z",
+  preview_hash: "c".repeat(64), companies: [{ name: "Synthetic <script>demo</script>", description: "Synthetic only" }] };
+
+test("seed preview is explicit, count bound, escaped and never uploads or refreshes source", async () => {
+  const app = harness(); await ready(app);
+  assert.equal(app.requests.length, 0);
+  const old = app.button("Preview synthetic companies (no upload)").props.onClick;
+  const select = walk(app.render(), node => node.type === "select")[0];
+  select.props.onChange({ target: { value: "3" } });
+  await old(); assert.equal(app.requests.length, 0);
+  const handler = app.button("Preview synthetic companies (no upload)").props.onClick;
+  const pending = handler();
+  assert.match(app.requests[0].url, /connection-readiness$/);
+  app.requests.shift().resolve({ ...probeReady, can_probe: false, reason: "probe_disabled" }); await flush();
+  const request = app.requests.shift();
+  assert.equal(request.url, "integrations/hubspot/accounts/a/seed-preview");
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", count: 3,
+    expected_account_revision: 3, expected_configuration_hash: probeReady.configuration_hash });
+  await handler(); assert.equal(app.requests.length, 0);
+  request.resolve({ ...seedResult, companies: Array.from({ length: 3 }, () => seedResult.companies[0]) }); await pending;
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /seed-one/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /seeding writes are unavailable/); assert.equal(app.invalidations(), 0);
+  assert.deepEqual(app.refreshes(), []); assert.equal(app.requests.length, 0);
+  walk(app.render(), node => node.type === "select")[0].props.onChange({ target: { value: "1" } });
+  assert.doesNotMatch(renderToStaticMarkup(app.render()), /seed-one/);
+});
+
+test("seed preview cancels before POST, rejects misbound results and denies nonadmins", async () => {
+  const cancelled = harness(); await ready(cancelled);
+  const pending = cancelled.button("Preview synthetic companies (no upload)").props.onClick();
+  const read = cancelled.requests.shift(); cancelled.unmount(); read.resolve(probeReady); await pending;
+  assert.equal(cancelled.requests.length, 0);
+  for (const change of [{ account_id: "foreign" }, { configuration_hash: "b".repeat(64) },
+    { execution_available: true }, { companies: [] }]) {
+    const app = harness(); await ready(app);
+    const pending = app.button("Preview synthetic companies (no upload)").props.onClick();
+    app.requests.shift().resolve(probeReady); await flush();
+    app.requests.shift().resolve({ ...seedResult, ...change }); await pending;
+    assert.match(renderToStaticMarkup(app.render()), /Synthetic preview unavailable/);
+    assert.doesNotMatch(renderToStaticMarkup(app.render()), /seed-one/);
+    assert.equal(app.requests.length, 0);
+  }
+  for (const role of ["viewer", "seller", "reviewer"]) {
+    const app = harness(role); await ready(app);
+    const button = app.button("Preview synthetic companies (no upload)"); assert.equal(button.props.disabled, true);
+    await button.props.onClick(); assert.equal(app.requests.length, 0);
+  }
+});
 async function inspectProbe(app, value = probeReady) {
   const pending = app.button("Inspect connection readiness").props.onClick();
   const request = app.requests.shift(); assert.equal(request.url, "integrations/hubspot/accounts/a/connection-readiness");

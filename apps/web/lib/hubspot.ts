@@ -4,6 +4,7 @@ import type { components } from "./api.generated";
 export type HubSpotStatus = components["schemas"]["HubSpotStatus"];
 export type HubSpotProbeReadiness = components["schemas"]["HubSpotProbeReadiness"];
 export type HubSpotProbeResult = components["schemas"]["HubSpotProbeResult"];
+export type HubSpotSeedPreview = components["schemas"]["SeedPreview"];
 export type HubSpotPreview = components["schemas"]["HubSpotPreview"];
 export type HubSpotObservation = components["schemas"]["HubSpotObservation"];
 export type HubSpotSyncRun = components["schemas"]["HubSpotSyncRun"];
@@ -19,7 +20,7 @@ type SyncRequest = components["schemas"]["HubSpotSyncRequest"];
 const prefix = "integrations/hubspot";
 export const accountPath = (id: string) => `${prefix}/accounts/${encodeURIComponent(id)}`;
 
-function checkProbeScope(view: AccountView, value: HubSpotProbeReadiness | HubSpotProbeResult) {
+function checkProbeScope(view: AccountView, value: HubSpotProbeReadiness | HubSpotProbeResult | HubSpotSeedPreview) {
   if (value.account_id !== view.account.id || value.organization_id !== view.account.organization_id
     || value.account_revision !== view.account.revision) throw new Error("Connection check context changed. Refresh current state.");
 }
@@ -45,6 +46,24 @@ export async function probeConnection(view: AccountView, ready: HubSpotProbeRead
 
 export function postHubSpot<T>(path: string, body: PromoteRequest | SyncRequest, signal: AbortSignal) {
   return api<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+}
+
+export async function previewSeed(view: AccountView, count: number, signal: AbortSignal) {
+  if (signal.aborted || !Number.isInteger(count) || count < 1 || count > 3) throw new Error("Choose 1 to 3 synthetic companies.");
+  const ready = await readProbeReadiness(view, signal);
+  if (signal.aborted) throw new Error("Preview cancelled.");
+  const body: components["schemas"]["SeedPreviewRequest"] = { schema_version: "1", count,
+    expected_account_revision: ready.account_revision, expected_configuration_hash: ready.configuration_hash };
+  const value = await api<HubSpotSeedPreview>(`${accountPath(view.account.id)}/seed-preview`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  });
+  checkProbeScope(view, value);
+  if (value.configuration_hash !== ready.configuration_hash || value.mode !== "preview" || value.execution_available !== false
+    || value.method !== "POST" || value.path !== "/crm/v3/objects/companies" || !Array.isArray(value.companies)
+    || value.companies.length !== count || value.companies.some(company => typeof company.name !== "string" || typeof company.description !== "string")) {
+    throw new Error("Synthetic preview binding changed. Request a new preview explicitly.");
+  }
+  return value;
 }
 
 export async function readPreview(view: AccountView, signal: AbortSignal) {

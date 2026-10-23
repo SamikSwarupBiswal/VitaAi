@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, currency, type AccountView } from "@/lib/api";
-import { accountPath, postHubSpot, probeConnection, readProbeReadiness, readPreview, readSource, type AccountSource, type HubSpotStatus,
+import { accountPath, postHubSpot, previewSeed, probeConnection, readProbeReadiness, readPreview, readSource, type AccountSource, type HubSpotStatus,
   type HubSpotProbeReadiness, type HubSpotProbeResult, type HubSpotSyncRun, type SourceVersion } from "@/lib/hubspot";
 import { useSession } from "./session-gate";
 
@@ -32,6 +32,10 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
   const [probeReady, setProbeReady] = useState<HubSpotProbeReadiness | null>(null);
   const probeReadyRef = useRef<HubSpotProbeReadiness | null>(null);
   const [probeResult, setProbeResult] = useState<HubSpotProbeResult | null>(null);
+  const [seedCount, setSeedCount] = useState(1);
+  const seedCountRef = useRef(1);
+  const seedSequence = useRef(0);
+  const [seedPreview, setSeedPreview] = useState<Awaited<ReturnType<typeof previewSeed>> | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
@@ -89,12 +93,25 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
     finally { locked.current = false; if (!signal.aborted) setBusy(false); }
   }
 
+  async function generateSeed(count: number) {
+    const signal = lifetime.current?.signal;
+    if (!admin || !status?.configured || !signal || signal.aborted || locked.current || settled || blocked || seedCountRef.current !== count) return;
+    const sequence = ++seedSequence.current;
+    locked.current = true; setBusy(true); setError(null); setSeedPreview(null);
+    try {
+      const value = await previewSeed(view, count, signal);
+      if (!signal.aborted && sequence === seedSequence.current) setSeedPreview(value);
+    } catch { if (!signal.aborted && sequence === seedSequence.current) setError("Synthetic preview unavailable. Nothing was uploaded; another preview requires an explicit click."); }
+    finally { locked.current = false; if (!signal.aborted) setBusy(false); }
+  }
+
   async function mutate(kind: "sync" | "promote" | "restore-sample") {
     const signal = lifetime.current?.signal;
     if (!admin || !signal || signal.aborted || locked.current || settled || blocked || (kind !== "restore-sample" && !status?.configured)) return;
     if (kind === "promote" && (!preview || preview.preview.expected_account_revision !== view.account.revision)) return;
     if (kind === "restore-sample" && view.source?.kind !== "hubspot") return;
-    locked.current = true; setBusy(true); setError(null); probeReadyRef.current = null; setProbeReady(null); setProbeResult(null); onInvalidate();
+    locked.current = true; setBusy(true); setError(null); probeReadyRef.current = null; setProbeReady(null); setProbeResult(null);
+    ++seedSequence.current; setSeedPreview(null); onInvalidate();
     let message: string;
     try {
       const body = kind === "promote" ? { schema_version: "1" as const, expected_account_revision: preview!.preview.expected_account_revision,
@@ -136,6 +153,17 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
         <button disabled={disabled || !admin || !probeReady.can_probe} onClick={() => testConnection(probeReady)}>Test mapped connection (read only)</button></>}
       {probeResult && <p role="status">Connection check {probeResult.id}: {probeResult.status}{probeResult.error_code ? ` / ${probeResult.error_code}` : ""}.
         {" "}Portal {probeResult.portal_id} / company {probeResult.company_id}; checked {probeResult.started_at} to {probeResult.finished_at}. Account revision {probeResult.account_revision}.</p>}
+    </section>
+    <section aria-label="Synthetic company seed preview">
+      <p>Preview synthetic company fields without uploading anything. This is not approval; seeding writes are unavailable and previews are not saved.</p>
+      <label>Synthetic companies<select value={seedCount} disabled={disabled || !admin} onChange={event => {
+        const count = Number(event.target.value); seedCountRef.current = count; setSeedCount(count);
+        ++seedSequence.current; setSeedPreview(null);
+      }}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>
+      <button disabled={disabled || !admin || !status?.configured} onClick={() => generateSeed(seedCount)}>Preview synthetic companies (no upload)</button>
+      {seedPreview && <details open><summary>Synthetic preview {seedPreview.id}</summary>
+        <p>Portal {seedPreview.portal_id}; created {seedPreview.created_at}. Account revision {seedPreview.account_revision}. Preview checksum {seedPreview.preview_hash}.</p>
+        <pre>{JSON.stringify(seedPreview.companies, null, 2)}</pre></details>}
     </section>
     {busy && <p role="status">Loading source records...</p>}
     {error && <p role="alert" className="error-banner">{error}</p>}
