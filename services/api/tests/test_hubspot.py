@@ -169,6 +169,65 @@ class HubSpotTransportTests(unittest.TestCase):
 
 
 class HubSpotApiTests(unittest.TestCase):
+    def test_seed_preview_is_bounded_synthetic_and_network_free(self):
+        path, ready, body = self.probe_fixture()
+        before = self.client.get("/api/portfolio").json()
+        for count in (1, 3):
+            response = self.client.post(path + "/seed-preview", headers=HEADERS, json={**body, "count": count})
+            self.assertEqual(response.status_code, 200, response.text)
+            preview = response.json()
+            self.assertEqual((preview["mode"], preview["execution_available"]), ("preview", False))
+            self.assertEqual((preview["organization_id"], preview["actor_id"], preview["account_id"]),
+                             (SAMPLE_ORG, self.admin.id, ACCOUNT_ID))
+            self.assertEqual(preview["account_revision"], ready["account_revision"])
+            self.assertEqual(preview["configuration_hash"], body["expected_configuration_hash"])
+            self.assertEqual((preview["portal_id"], preview["method"], preview["path"]),
+                             ("456", "POST", "/crm/v3/objects/companies"))
+            self.assertEqual(len(preview["companies"]), count)
+            self.assertEqual(len({company["name"] for company in preview["companies"]}), count)
+            self.assertRegex(preview["preview_hash"], r"^[a-f0-9]{64}$")
+            for company in preview["companies"]:
+                self.assertEqual(set(company), {"name", "description"})
+                self.assertIn("synthetic demo", company["name"])
+                self.assertIn(preview["id"], company["name"])
+                self.assertIn("No customer facts", company["description"])
+            self.assertNotIn("test-only-token", response.text)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        for table in (observations, sync_runs, source_versions, ingestions, authorizations,
+                      occurrences, actions, decisions, claims, plans, missions, audits):
+            self.assertEqual(self.rows(table), 0)
+        self.assertEqual(self.client.get(path + "/seed-preview").status_code, 405)
+        self.assertEqual(self.client.request("HEAD", path + "/seed-preview").status_code, 405)
+
+    def test_seed_preview_denies_invalid_stale_foreign_and_nonadmin_requests(self):
+        path, _, body = self.probe_fixture()
+        body = {**body, "count": 1}
+        for count in (0, 4, True, "1"):
+            response = self.client.post(path + "/seed-preview", headers=HEADERS, json={**body, "count": count})
+            self.assertEqual(response.status_code, 422, response.text)
+        for change in ({"expected_account_revision": 2}, {"expected_configuration_hash": "0" * 64}):
+            response = self.client.post(path + "/seed-preview", headers=HEADERS, json={**body, **change})
+            self.assertEqual(response.status_code, 409, response.text)
+        response = self.client.post(path + "/seed-preview", headers=HEADERS,
+                                    json={**body, "properties": {"name": "Customer supplied"}})
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.client.post(path + "/seed-preview", json=body).status_code, 403)
+        for role in ("seller", "reviewer", "viewer"):
+            self.identity.create_user(role + "-seed", "test-password-long", SAMPLE_ORG, role)
+            self.login(role + "-seed")
+            self.assertEqual(self.client.post(path + "/seed-preview", headers=HEADERS, json=body).status_code, 403)
+        self.identity.create_user("foreign-seed", "test-password-long", "foreign", "admin")
+        self.login("foreign-seed")
+        self.assertEqual(self.client.post(path + "/seed-preview", headers=HEADERS, json=body).status_code, 404)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post(path + "/seed-preview", headers=HEADERS, json=body).status_code, 401)
+        for changes, expected in (({"hubspot_enabled": False}, 409), ({"hubspot_company_map": {}}, 404)):
+            path, _, current = self.probe_fixture(**changes)
+            response = self.client.post(path + "/seed-preview", headers=HEADERS, json={**current, "count": 1})
+            self.assertEqual(response.status_code, expected, response.text)
+        self.assertEqual(self.calls, [])
+
     def probe_fixture(self, **changes):
         self.client.__exit__(None, None, None)
         self.settings = Settings.model_validate({**self.settings.model_dump(), "hubspot_probe_enabled": True, **changes})

@@ -750,6 +750,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/seed-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Preview */
+        post: operations["seed_preview_api_integrations_hubspot_accounts__account_id__seed_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/accounts/{account_id}/ingestions": {
         parameters: {
             query?: never;
@@ -5190,6 +5207,89 @@ export interface components {
             /** Opportunity Contribution */
             opportunity_contribution: number;
         };
+        /** SeedPreview */
+        SeedPreview: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Portal Id */
+            portal_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Mode
+             * @default preview
+             * @constant
+             */
+            mode: "preview";
+            /**
+             * Execution Available
+             * @default false
+             * @constant
+             */
+            execution_available: false;
+            /**
+             * Method
+             * @default POST
+             * @constant
+             */
+            method: "POST";
+            /**
+             * Path
+             * @default /crm/v3/objects/companies
+             * @constant
+             */
+            path: "/crm/v3/objects/companies";
+            /** Companies */
+            companies: components["schemas"]["SyntheticCompany"][];
+            /** Preview Hash */
+            preview_hash: string;
+            /**
+             * Policy
+             * @default synthetic-company-seed-preview-1
+             * @constant
+             */
+            policy: "synthetic-company-seed-preview-1";
+        };
+        /** SeedPreviewRequest */
+        SeedPreviewRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Configuration Hash */
+            expected_configuration_hash: string;
+            /** Count */
+            count: number;
+        };
         /** SessionView */
         SessionView: {
             /**
@@ -5544,6 +5644,13 @@ export interface components {
             expected_plan_revision: number;
             /** Alternative Id */
             alternative_id?: string | null;
+        };
+        /** SyntheticCompany */
+        SyntheticCompany: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
         };
         /** TaskPayload */
         TaskPayload: {
@@ -6970,6 +7077,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HubSpotProbeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_preview_api_integrations_hubspot_accounts__account_id__seed_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedPreview"];
                 };
             };
             /** @description Validation Error */

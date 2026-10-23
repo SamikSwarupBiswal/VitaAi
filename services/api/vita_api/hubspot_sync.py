@@ -70,6 +70,7 @@ from .hubspot_refresh import (
     RefreshRevokeRequest,
     RefreshScheduleView,
 )
+from .hubspot_seed import SeedPreview, SeedPreviewRequest, preview_seed
 from .identity import Actor, sessions, token_digest, users
 from .storage import accounts, selected_evidence, selected_source, source_versions
 
@@ -376,6 +377,10 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     @router.post("/accounts/{account_id}/probe", response_model=HubSpotProbeResult)
     def probe_connection(account_id: UUID, body: HubSpotProbeRequest, actor: Current, operation: Service):
         return HubSpotProbe(operation).run(account_id, body)
+
+    @router.post("/accounts/{account_id}/seed-preview", response_model=SeedPreview)
+    def seed_preview(account_id: UUID, body: SeedPreviewRequest, actor: Current, operation: Service):
+        return preview_seed(operation, account_id, body)
 
     @router.post("/accounts/{account_id}/ingestions", response_model=IngestionRun)
     def ingest(account_id: UUID, body: IngestionRequest, actor: Current, operation: Service):
