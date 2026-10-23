@@ -169,6 +169,160 @@ class HubSpotTransportTests(unittest.TestCase):
 
 
 class HubSpotApiTests(unittest.TestCase):
+    def probe_fixture(self, **changes):
+        self.client.__exit__(None, None, None)
+        self.settings = Settings.model_validate({**self.settings.model_dump(), "hubspot_probe_enabled": True, **changes})
+        self.app = create_app(self.settings, hubspot_transport=httpx.MockTransport(self.respond))
+        self.client = TestClient(self.app).__enter__()
+        self.identity = Identity(self.app.state.store.engine)
+        self.login()
+        path = f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}"
+        ready = self.client.get(path + "/connection-readiness")
+        self.assertEqual(ready.status_code, 200, ready.text)
+        body = {"expected_account_revision": ready.json()["account_revision"],
+            "expected_configuration_hash": ready.json()["configuration_hash"]}
+        return path, ready.json(), body
+
+    def test_probe_is_explicit_ephemeral_and_never_stages_or_normalizes(self):
+        path, ready, body = self.probe_fixture(hubspot_property_map=PROPERTY_MAP)
+        before = self.client.get("/api/portfolio").json()
+        self.assertTrue(ready["can_probe"])
+        self.assertEqual(self.calls, [])
+        result = self.client.post(path + "/probe", headers=HEADERS, json=body)
+        self.assertEqual(result.status_code, 200, result.text)
+        record = result.json()
+        self.assertEqual(record["status"], "succeeded")
+        self.assertIsNone(record["error_code"])
+        self.assertEqual(record["account_revision"], body["expected_account_revision"])
+        self.assertEqual(record["configuration_hash"], body["expected_configuration_hash"])
+        self.assertEqual(record["actor_id"], self.admin.id)
+        self.assertEqual((record["portal_id"], record["company_id"]), ("456", "123"))
+        self.assertLessEqual(record["started_at"], record["finished_at"])
+        self.assertNotIn("properties", record)
+        self.assertNotIn("test-only-token", result.text)
+        self.assertEqual([str(call.url) for call in self.calls], [
+            "https://api.hubapi.com/account-info/v3/details",
+            "https://api.hubapi.com/crm/v3/objects/companies/123?properties=name%2Cdomain%2Cindustry&archived=false"])
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+        with self.app.state.store.engine.connect() as connection:
+            for table in (observations, sync_runs, source_versions, ingestions, authorizations,
+                          occurrences, actions, decisions, claims):
+                self.assertEqual(connection.execute(select(func.count()).select_from(table)).scalar_one(), 0)
+        self.assertEqual(self.client.get(path + "/probe").status_code, 405)
+        self.assertEqual(self.client.request("HEAD", path + "/connection-readiness").status_code, 405)
+
+    def test_probe_default_gate_role_and_exact_scope_deny_without_network(self):
+        path = f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}"
+        ready = self.client.get(path + "/connection-readiness").json()
+        self.assertEqual(ready["reason"], "probe_disabled")
+        body = {"expected_account_revision": ready["account_revision"],
+            "expected_configuration_hash": ready["configuration_hash"]}
+        self.assertEqual(self.client.post(path + "/probe", headers=HEADERS, json=body).status_code, 409)
+        path, _, body = self.probe_fixture()
+        for changes, status in (({"expected_account_revision": 99}, 409),
+                                ({"expected_configuration_hash": "a" * 64}, 409),
+                                ({"expected_account_revision": True}, 422)):
+            self.assertEqual(self.client.post(path + "/probe", headers=HEADERS,
+                json={**body, **changes}).status_code, status)
+        foreign = self.identity.create_user("foreign-probe", "test-password-long", "foreign", "admin")
+        self.login(foreign.username)
+        self.assertEqual(self.client.get(path + "/connection-readiness").status_code, 404)
+        for role in ("viewer", "seller", "reviewer"):
+            self.identity.create_user(role + "-probe", "test-password-long", SAMPLE_ORG, role)
+            self.login(role + "-probe")
+            self.assertEqual(self.client.get(path + "/connection-readiness").json()["reason"], "admin_required")
+            self.assertEqual(self.client.post(path + "/probe", headers=HEADERS, json=body).status_code, 403)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post(path + "/probe", headers=HEADERS, json=body).status_code, 401)
+        self.assertEqual(self.calls, [])
+
+    def test_probe_safe_failures_have_no_retry_raw_body_or_staged_records(self):
+        path, _, body = self.probe_fixture()
+        for case, expected, count in (("portal", "portal_mismatch", 1),
+                ("timeout", "hubspot_timeout", 1), ("duplicate", "invalid_response", 1),
+                ("redirect", "hubspot_http_302", 1),
+                ("company", "company_identity_or_archive_mismatch", 2)):
+            calls = []
+            def respond(request, case=case, calls=calls):
+                calls.append(request)
+                if case == "timeout":
+                    raise httpx.ReadTimeout("test-only-token")
+                if request.url.path.startswith("/account"):
+                    if case == "duplicate":
+                        return httpx.Response(200, content=b'{"portalId":999,"portalId":456}')
+                    if case == "redirect":
+                        return httpx.Response(302, headers={"Location": "https://foreign.test"})
+                    return httpx.Response(200, json={"portalId": 999 if case == "portal" else 456})
+                return httpx.Response(200, json={**self.company, "id": "999"})
+            with self.subTest(case=case), TestClient(create_app(self.settings,
+                    hubspot_transport=httpx.MockTransport(respond))) as client:
+                client.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+                result = client.post(path + "/probe", headers=HEADERS, json=body)
+                self.assertEqual(result.status_code, 200, result.text)
+                self.assertEqual(result.json()["status"], "failed")
+                self.assertEqual(result.json()["error_code"], expected)
+                self.assertNotIn("test-only-token", result.text)
+                self.assertEqual(len(calls), count)
+        with self.app.state.store.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(func.count()).select_from(sync_runs)).scalar_one(), 0)
+
+    def test_probe_revalidates_session_before_second_get_and_publication(self):
+        path, _, body = self.probe_fixture()
+        for boundary, expected_calls in (("portal", 1), ("company", 2)):
+            self.login()
+            calls = []
+            def respond(request, boundary=boundary, calls=calls):
+                calls.append(request)
+                portal = request.url.path.startswith("/account")
+                if portal == (boundary == "portal"):
+                    self.identity.logout(self.client.cookies.get("vitaai_session"))
+                return httpx.Response(200, json={"portalId": 456} if portal else self.company)
+            with self.subTest(boundary=boundary), TestClient(create_app(self.settings,
+                    hubspot_transport=httpx.MockTransport(respond))) as client:
+                client.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+                result = client.post(path + "/probe", headers=HEADERS, json=body)
+                self.assertEqual(result.status_code, 401)
+                self.assertNotIn("succeeded", result.text)
+                self.assertEqual(len(calls), expected_calls)
+
+    def test_probe_fences_account_configuration_and_role_changes_during_get(self):
+        from vita_api.governance import PolicyDenied
+        from vita_api.hubspot_probe import HubSpotProbe, HubSpotProbeRequest
+        from vita_api.hubspot_sync import HubSpotSync
+        from vita_api.storage import accounts
+        _, _, body = self.probe_fixture()
+        for change in ("account", "configuration", "role"):
+            for boundary in ("portal", "company"):
+                self.login()
+                calls = []
+                connector = HubSpot(self.settings)
+                with self.app.state.store.engine.connect() as connection:
+                    original = connection.execute(select(accounts.c.payload).where(accounts.c.id == ACCOUNT_ID)).scalar_one()
+                def respond(request, change=change, boundary=boundary, calls=calls, connector=connector, original=original):
+                    calls.append(request)
+                    portal = request.url.path.startswith("/account")
+                    if portal == (boundary == "portal"):
+                        if change == "configuration":
+                            connector.settings.hubspot_configuration_revision += 1
+                        else:
+                            with self.app.state.store.engine.begin() as connection:
+                                if change == "account":
+                                    connection.execute(update(accounts).where(accounts.c.id == ACCOUNT_ID).values(
+                                        payload={**original, "revision": original["revision"] + 1}))
+                                else:
+                                    connection.execute(update(users).where(users.c.id == self.admin.id).values(role="viewer"))
+                    return httpx.Response(200, json={"portalId": 456} if portal else self.company)
+                connector.transport = httpx.MockTransport(respond)
+                operation = HubSpotSync(self.app.state.store, connector, self.client.cookies.get("vitaai_session"))
+                try:
+                    with self.subTest(change=change, boundary=boundary), self.assertRaises(PolicyDenied):
+                        HubSpotProbe(operation).run(ACCOUNT_ID, HubSpotProbeRequest(**body))
+                    self.assertEqual(len(calls), 1 if boundary == "portal" else 2)
+                finally:
+                    with self.app.state.store.engine.begin() as connection:
+                        connection.execute(update(accounts).where(accounts.c.id == ACCOUNT_ID).values(payload=original))
+                        connection.execute(update(users).where(users.c.id == self.admin.id).values(role="admin"))
+
     def test_refresh_scheduler_default_off_and_application_lifecycle(self):
         self.assertIsNone(self.app.state.refresh_scheduler.thread)
         settings = self.settings.model_copy(update={"hubspot_refresh_enabled": True,

@@ -716,6 +716,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/connection-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connection Readiness */
+        get: operations["connection_readiness_api_integrations_hubspot_accounts__account_id__connection_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/accounts/{account_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Probe Connection */
+        post: operations["probe_connection_api_integrations_hubspot_accounts__account_id__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/accounts/{account_id}/ingestions": {
         parameters: {
             query?: never;
@@ -2760,6 +2794,100 @@ export interface components {
             field_status: {
                 [key: string]: string;
             };
+        };
+        /** HubSpotProbeReadiness */
+        HubSpotProbeReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Can Probe */
+            can_probe: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "ready" | "probe_disabled" | "admin_required" | "unconfigured";
+        };
+        /** HubSpotProbeRequest */
+        HubSpotProbeRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Configuration Hash */
+            expected_configuration_hash: string;
+        };
+        /** HubSpotProbeResult */
+        HubSpotProbeResult: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Actor Id */
+            actor_id: string;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Portal Id */
+            portal_id: string;
+            /** Company Id */
+            company_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Finished At
+             * Format: date-time
+             */
+            finished_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "failed";
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Policy
+             * @default ephemeral-mapped-company-probe-1
+             * @constant
+             */
+            policy: "ephemeral-mapped-company-probe-1";
         };
         /** HubSpotPromoteRequest */
         HubSpotPromoteRequest: {
@@ -6776,6 +6904,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Execution"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connection_readiness_api_integrations_hubspot_accounts__account_id__connection_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HubSpotProbeReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_connection_api_integrations_hubspot_accounts__account_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HubSpotProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HubSpotProbeResult"];
                 };
             };
             /** @description Validation Error */

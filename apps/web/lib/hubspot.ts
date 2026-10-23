@@ -2,6 +2,8 @@ import { api, type AccountView } from "./api";
 import type { components } from "./api.generated";
 
 export type HubSpotStatus = components["schemas"]["HubSpotStatus"];
+export type HubSpotProbeReadiness = components["schemas"]["HubSpotProbeReadiness"];
+export type HubSpotProbeResult = components["schemas"]["HubSpotProbeResult"];
 export type HubSpotPreview = components["schemas"]["HubSpotPreview"];
 export type HubSpotObservation = components["schemas"]["HubSpotObservation"];
 export type HubSpotSyncRun = components["schemas"]["HubSpotSyncRun"];
@@ -16,6 +18,30 @@ type PromoteRequest = components["schemas"]["HubSpotPromoteRequest"];
 type SyncRequest = components["schemas"]["HubSpotSyncRequest"];
 const prefix = "integrations/hubspot";
 export const accountPath = (id: string) => `${prefix}/accounts/${encodeURIComponent(id)}`;
+
+function checkProbeScope(view: AccountView, value: HubSpotProbeReadiness | HubSpotProbeResult) {
+  if (value.account_id !== view.account.id || value.organization_id !== view.account.organization_id
+    || value.account_revision !== view.account.revision) throw new Error("Connection check context changed. Refresh current state.");
+}
+
+export async function readProbeReadiness(view: AccountView, signal: AbortSignal) {
+  const value = await api<HubSpotProbeReadiness>(`${accountPath(view.account.id)}/connection-readiness`, { signal });
+  checkProbeScope(view, value);
+  return value;
+}
+
+export async function probeConnection(view: AccountView, ready: HubSpotProbeReadiness, signal: AbortSignal) {
+  checkProbeScope(view, ready);
+  if (!ready.can_probe || signal.aborted) throw new Error("Inspect current connection readiness first.");
+  const body: components["schemas"]["HubSpotProbeRequest"] = { schema_version: "1",
+    expected_account_revision: ready.account_revision, expected_configuration_hash: ready.configuration_hash };
+  const value = await api<HubSpotProbeResult>(`${accountPath(view.account.id)}/probe`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  });
+  checkProbeScope(view, value);
+  if (value.configuration_hash !== ready.configuration_hash) throw new Error("Connection check configuration changed.");
+  return value;
+}
 
 export function postHubSpot<T>(path: string, body: PromoteRequest | SyncRequest, signal: AbortSignal) {
   return api<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });

@@ -54,6 +54,12 @@ from .hubspot_normalize import (
     HubSpotPromoteRequest,
     normalize,
 )
+from .hubspot_probe import (
+    HubSpotProbe,
+    HubSpotProbeReadiness,
+    HubSpotProbeRequest,
+    HubSpotProbeResult,
+)
 from .hubspot_refresh import (
     RefreshAuthorization,
     RefreshAuthorizations,
@@ -362,6 +368,14 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
 
     Current = Annotated[Actor, Depends(current)]
     Service = Annotated[HubSpotSync, Depends(service)]
+
+    @router.get("/accounts/{account_id}/connection-readiness", response_model=HubSpotProbeReadiness)
+    def connection_readiness(account_id: UUID, actor: Current, operation: Service):
+        return HubSpotProbe(operation).readiness(account_id)
+
+    @router.post("/accounts/{account_id}/probe", response_model=HubSpotProbeResult)
+    def probe_connection(account_id: UUID, body: HubSpotProbeRequest, actor: Current, operation: Service):
+        return HubSpotProbe(operation).run(account_id, body)
 
     @router.post("/accounts/{account_id}/ingestions", response_model=IngestionRun)
     def ingest(account_id: UUID, body: IngestionRequest, actor: Current, operation: Service):

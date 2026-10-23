@@ -66,6 +66,69 @@ async function showPreview(app) {
   app.requests.shift().resolve(observation); await pending;
 }
 
+const probeReady = { organization_id: "org", account_id: "a", account_revision: 3,
+  configuration_hash: "a".repeat(64), can_probe: true, reason: "ready" };
+const probeResult = { ...probeReady, id: "probe-one", actor_id: "actor", portal_id: "12", company_id: "34",
+  started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:01Z", status: "succeeded", error_code: null };
+async function inspectProbe(app, value = probeReady) {
+  const pending = app.button("Inspect connection readiness").props.onClick();
+  const request = app.requests.shift(); assert.equal(request.url, "integrations/hubspot/accounts/a/connection-readiness");
+  request.resolve(value); await pending;
+}
+
+test("connection probe requires explicit readiness and sends one bound request without source refresh", async () => {
+  const app = harness(); await ready(app);
+  assert.equal(app.requests.length, 0); assert.equal(app.button("Test mapped connection (read only)"), undefined);
+  await inspectProbe(app);
+  const handler = app.button("Test mapped connection (read only)").props.onClick;
+  const pending = handler(); const request = app.requests.shift();
+  assert.equal(request.url, "integrations/hubspot/accounts/a/probe");
+  assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", expected_account_revision: 3,
+    expected_configuration_hash: probeReady.configuration_hash });
+  await handler(); assert.equal(app.requests.length, 0);
+  request.resolve(probeResult); await pending;
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /probe-one: succeeded/); assert.match(html, /2026-10-23T00:00:01Z/);
+  assert.match(html, /not saved/); assert.match(html, /ongoing health/);
+  await handler(); assert.equal(app.requests.length, 0);
+  assert.equal(app.invalidations(), 0); assert.deepEqual(app.refreshes(), []);
+});
+
+test("connection readiness replacement, roles, foreign scope and unmount fence captured probes", async () => {
+  const app = harness(); await ready(app); await inspectProbe(app);
+  const old = app.button("Test mapped connection (read only)").props.onClick;
+  await inspectProbe(app, { ...probeReady, configuration_hash: "b".repeat(64) });
+  await old(); assert.equal(app.requests.length, 0);
+  const pending = app.button("Test mapped connection (read only)").props.onClick();
+  const request = app.requests.shift(); app.unmount(); request.resolve(probeResult); await pending;
+  assert.equal(request.init.signal.aborted, true);
+  assert.doesNotMatch(renderToStaticMarkup(app.render()), /probe-one/);
+  for (const role of ["viewer", "seller", "reviewer"]) {
+    const viewer = harness(role); await ready(viewer); await inspectProbe(viewer);
+    assert.equal(viewer.button("Test mapped connection (read only)").props.disabled, true);
+    await viewer.button("Test mapped connection (read only)").props.onClick(); assert.equal(viewer.requests.length, 0);
+  }
+  const foreign = harness(); await ready(foreign); await inspectProbe(foreign, { ...probeReady, account_id: "other" });
+  assert.equal(foreign.button("Test mapped connection (read only)"), undefined);
+  assert.match(renderToStaticMarkup(foreign.render()), /readiness unavailable/);
+});
+
+test("lost or misbound probe result requires new explicit inspection without replay", async () => {
+  for (const outcome of ["lost", "foreign", "configuration", "failed"]) {
+    const app = harness(); await ready(app); await inspectProbe(app);
+    const handler = app.button("Test mapped connection (read only)").props.onClick;
+    const pending = handler(); const request = app.requests.shift();
+    if (outcome === "lost") request.reject(new Error("Lost"));
+    else request.resolve({ ...probeResult, ...(outcome === "foreign" ? { account_id: "other" }
+      : outcome === "configuration" ? { configuration_hash: "b".repeat(64) }
+      : { status: "failed", error_code: "hubspot_timeout" }) });
+    await pending; await handler();
+    const html = renderToStaticMarkup(app.render());
+    assert.match(html, outcome === "failed" ? /failed \/ hubspot_timeout/ : /No result was confirmed/);
+    assert.equal(app.requests.length, 0); assert.deepEqual(app.refreshes(), []);
+  }
+});
+
 test("exact preview, missing fields and provenance bind explicit admin promotion", async () => {
   const app = harness(); await ready(app); await showPreview(app);
   const html = renderToStaticMarkup(app.render());

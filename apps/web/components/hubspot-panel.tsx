@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, currency, type AccountView } from "@/lib/api";
-import { accountPath, postHubSpot, readPreview, readSource, type AccountSource, type HubSpotStatus,
-  type HubSpotSyncRun, type SourceVersion } from "@/lib/hubspot";
+import { accountPath, postHubSpot, probeConnection, readProbeReadiness, readPreview, readSource, type AccountSource, type HubSpotStatus,
+  type HubSpotProbeReadiness, type HubSpotProbeResult, type HubSpotSyncRun, type SourceVersion } from "@/lib/hubspot";
 import { useSession } from "./session-gate";
 
 type Props = { view: AccountView; blocked?: boolean; onInvalidate: () => void; onRefresh: (message: string) => Promise<void> };
@@ -29,6 +29,9 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
   const lifetime = useRef<AbortController | null>(null);
   const locked = useRef(false);
   const historySequence = useRef(0);
+  const [probeReady, setProbeReady] = useState<HubSpotProbeReadiness | null>(null);
+  const probeReadyRef = useRef<HubSpotProbeReadiness | null>(null);
+  const [probeResult, setProbeResult] = useState<HubSpotProbeResult | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
@@ -42,6 +45,31 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
     return () => controller.abort();
     // The parent keys this component by session, account and revision.
   }, [view]);
+
+  async function inspectConnection() {
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted || locked.current || settled || blocked) return;
+    locked.current = true; setBusy(true); setError(null);
+    probeReadyRef.current = null; setProbeReady(null); setProbeResult(null);
+    try {
+      const value = await readProbeReadiness(view, signal);
+      if (!signal.aborted) { probeReadyRef.current = value; setProbeReady(value); }
+    } catch { if (!signal.aborted) setError("Connection readiness unavailable. Inspect again explicitly."); }
+    finally { locked.current = false; if (!signal.aborted) setBusy(false); }
+  }
+
+  async function testConnection(ready: HubSpotProbeReadiness) {
+    const signal = lifetime.current?.signal;
+    if (!admin || !signal || signal.aborted || locked.current || settled || blocked
+      || !ready.can_probe || probeReadyRef.current !== ready) return;
+    locked.current = true; setBusy(true); setError(null); setProbeResult(null);
+    probeReadyRef.current = null; setProbeReady(null);
+    try {
+      const value = await probeConnection(view, ready, signal);
+      if (!signal.aborted) setProbeResult(value);
+    } catch { if (!signal.aborted) setError("Connection check result unavailable. No result was confirmed. Inspect readiness before another explicit check."); }
+    finally { locked.current = false; if (!signal.aborted) setBusy(false); }
+  }
 
   async function load(kind: "preview" | "history") {
     const signal = lifetime.current?.signal;
@@ -66,7 +94,7 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
     if (!admin || !signal || signal.aborted || locked.current || settled || blocked || (kind !== "restore-sample" && !status?.configured)) return;
     if (kind === "promote" && (!preview || preview.preview.expected_account_revision !== view.account.revision)) return;
     if (kind === "restore-sample" && view.source?.kind !== "hubspot") return;
-    locked.current = true; setBusy(true); setError(null); onInvalidate();
+    locked.current = true; setBusy(true); setError(null); probeReadyRef.current = null; setProbeReady(null); setProbeResult(null); onInvalidate();
     let message: string;
     try {
       const body = kind === "promote" ? { schema_version: "1" as const, expected_account_revision: preview!.preview.expected_account_revision,
@@ -101,6 +129,14 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
     <p className="caveat">Sync reads only the server-mapped company. Source selection replaces local account facts, changes its revision and invalidates old workflow authority. No HubSpot write or customer action occurs.</p>
     <div className="source-actions"><button disabled={disabled || !admin || !status?.configured} onClick={() => mutate("sync")}>Sync mapped company (read only)</button>
       <button disabled={disabled || !status?.configured} onClick={() => load("preview")}>Load normalization preview</button></div>
+    <section aria-label="Mapped connection check">
+      <p>Check portal and mapped-company access without staging records. Results describe one point in time, are not saved, and do not verify business facts or ongoing health.</p>
+      <button disabled={disabled} onClick={inspectConnection}>Inspect connection readiness</button>
+      {probeReady && <><p>Connection check: {probeReady.reason.replaceAll("_", " ")}. Configuration {probeReady.configuration_hash}.</p>
+        <button disabled={disabled || !admin || !probeReady.can_probe} onClick={() => testConnection(probeReady)}>Test mapped connection (read only)</button></>}
+      {probeResult && <p role="status">Connection check {probeResult.id}: {probeResult.status}{probeResult.error_code ? ` / ${probeResult.error_code}` : ""}.
+        {" "}Portal {probeResult.portal_id} / company {probeResult.company_id}; checked {probeResult.started_at} to {probeResult.finished_at}. Account revision {probeResult.account_revision}.</p>}
+    </section>
     {busy && <p role="status">Loading source records...</p>}
     {error && <p role="alert" className="error-banner">{error}</p>}
     {preview && <section aria-label="Normalization preview"><h2>Exact normalization preview</h2>
