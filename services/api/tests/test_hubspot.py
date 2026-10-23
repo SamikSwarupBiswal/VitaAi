@@ -684,7 +684,18 @@ class HubSpotApiTests(unittest.TestCase):
         return baseline, changed, plan.json(), path, body
 
     def test_signal_to_verified_receipt_and_manual_outcome(self):
+        self.signal_to_verified_receipt_and_manual_outcome(use_model=False)
+
+    def test_model_planned_signal_to_receipt_still_requires_exact_human_approval(self):
+        self.signal_to_verified_receipt_and_manual_outcome(use_model=True)
+
+    def signal_to_verified_receipt_and_manual_outcome(self, *, use_model):
         import json
+        from unittest.mock import Mock
+
+        from vita_api.contracts import ModelRun
+        from vita_api.workflow_contracts import PlanningOutput
+
         baseline, changed, plan, selection_path, selection_body=self.source_mission_fixture()
         self.assertEqual(baseline['status'],'baseline')
         self.assertEqual(changed['status'],'changed')
@@ -692,8 +703,16 @@ class HubSpotApiTests(unittest.TestCase):
             response=client.post(path,headers=HEADERS,json=body)
             self.assertEqual(response.status_code,200,response.text)
             return response.json()
-        selected=post(self.client,selection_path,selection_body)
-        mission_id=selected['selection']['mission_id']
+        provider = Mock() if use_model else None
+        def generate(view, intent, kind, strategy):
+            output = PlanningOutput(intent=intent, action_kind=kind, strategy=strategy,
+                alternatives=plan['alternatives'], selected_alternative_id=plan['selected_alternative_id'], caveats=())
+            return ModelRun(id=str(uuid4()), account_id=view.account.id, organization_id=view.account.organization_id,
+                account_revision=view.account.revision, snapshot_hash=view.assessment.snapshot_hash, task="planning",
+                provider="synthetic", model="fixture-only", status="succeeded", validation="schema_and_references_valid",
+                planning=output, started_at=datetime.now(UTC), latency_ms=0, request_id="synthetic-joined-planning")
+        if provider is not None:
+            provider.plan.side_effect = generate
         settings=self.settings.model_copy(update={'hubspot_write_enabled':True})
         provider_calls=[]
         saved={}
@@ -713,16 +732,33 @@ class HubSpotApiTests(unittest.TestCase):
                 return httpx.Response(503)
             return httpx.Response(200,json={'id':'789','archived':False,'properties':saved['properties'],
                 'associations':{'companies':{'results':[{'id':'123','type':'task_to_company'}]}}})
-        app=create_app(settings,hubspot_transport=httpx.MockTransport(transport))
+        app=create_app(settings,provider=provider,hubspot_transport=httpx.MockTransport(transport))
         token=self.client.cookies.get('vitaai_session')
         with TestClient(app) as client:
             client.cookies.set('vitaai_session',token)
             before=client.get('/api/accounts/'+ACCOUNT_ID).json()
+            if use_model:
+                request = {"account_id": ACCOUNT_ID, "expected_revision": before['account']['revision'],
+                    "expected_snapshot_hash": before['assessment']['snapshot_hash'], "intent": "risk"}
+                model_run = post(client, '/api/plans/generate', request)
+                self.assertEqual((model_run['status'], model_run['provider']), ('succeeded', 'synthetic'))
+                plan = post(client, '/api/plans', {**request, 'model_run_id': model_run['id']})
+                self.assertEqual(plan['source'], 'model')
+                selection_body = {**selection_body, 'plan_id': plan['id'], 'expected_revision': plan['revision']}
+                provider.plan.assert_called_once()
+            selected=post(client,selection_path,selection_body)
+            mission_id=selected['selection']['mission_id']
             mission=client.get('/api/missions/'+mission_id).json()
+            self.assertEqual((mission['status'], self.rows(decisions), self.rows(claims)), ('draft', 0, 0))
+            self.assertEqual(provider_calls, [])
             action=post(client,f'/api/missions/{mission_id}/prepare',{'expected_revision':mission['revision'],
                 'alternative_id':plan['selected_alternative_id'],'connector_id':'hubspot-live','mode':'live',
                 'payload':{'kind':'hubspot_task_create','title':'Synthetic source follow-up','body':'Exact changed evidence\n Ω ',
                 'due_at':(datetime.now(UTC)+timedelta(days=1)).replace(microsecond=0).isoformat()}})
+            denied = client.post(f'/api/actions/{action["id"]}/execute', headers=HEADERS, json={
+                'expected_revision': action['revision'], 'decision_id': str(uuid4()), 'idempotency_key': 'unapproved-model'})
+            self.assertEqual(denied.status_code, 404, denied.text)
+            self.assertEqual((self.rows(decisions), self.rows(claims), provider_calls), (0, 0, []))
             action=post(client,f'/api/actions/{action["id"]}/submit',{'expected_revision':action['revision'],'binding_hash':action['binding_hash']})
             decision=post(client,f'/api/actions/{action["id"]}/review',{'expected_revision':action['revision'],'binding_hash':action['binding_hash'],'decision':'approved'})
             execute={'expected_revision':action['revision'],'decision_id':decision['id'],'idempotency_key':'synthetic-joined-journey'}
@@ -752,6 +788,10 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(restarted.get(selection_path).json(),selected['selection'])
             self.assertEqual(restarted.get('/api/missions/'+mission_id).json()['status'],'completed')
             self.assertEqual(restarted.get(f'/api/missions/{mission_id}/outcomes').json(),[report])
+            if use_model:
+                self.assertEqual(restarted.get(f'/api/plans/runs/{model_run["id"]}').json(), model_run)
+                self.assertEqual(restarted.get(f'/api/plans/{plan["id"]}').json(), plan)
+                provider.plan.assert_called_once()
 
     def test_source_event_selection_creates_one_unprepared_mission_without_authority(self):
         _, changed, plan, path, body = self.source_mission_fixture()
