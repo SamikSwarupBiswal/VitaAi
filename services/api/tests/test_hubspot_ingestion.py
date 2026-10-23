@@ -224,6 +224,41 @@ class ApiTests(unittest.TestCase):
             HubSpot(settings_override or self.settings, httpx.MockTransport(self.respond)),
             self.client.cookies.get("vitaai_session")))
 
+    def test_invalid_unicode_fails_without_leaving_pending_or_partial_output(self):
+        before = self.client.get("/api/accounts/" + ACCOUNT).json()
+        operation = self.operation()
+        real = datetime
+        for index, (field, value) in enumerate((
+            ("property", "\ud800"), ("property", "\udfff"),
+            ("label", "\ud800"), ("label", "\udfff"),
+            ("property", "বাংলা 😀"),
+        )):
+            page, record, calls = copy.deepcopy(self.page), copy.deepcopy(self.record), []
+            if field == "label":
+                page["results"][0]["associationTypes"][0]["label"] = value
+            else:
+                record["properties"]["firstname"] = value
+            def respond(request, page=page, record=record, calls=calls):
+                calls.append(request)
+                payload = {"portalId": 456} if request.url.path.startswith("/account") else (
+                    page if "/associations/" in request.url.path else record)
+                return httpx.Response(200, content=json.dumps(payload, ensure_ascii=True).encode())
+            operation.operation.connector.transport = httpx.MockTransport(respond)
+            with self.subTest(field=field, index=index), patch("vita_api.hubspot_ingestion.datetime") as clock:
+                clock.now.side_effect = lambda *_, offset=index: real.now(UTC) + timedelta(seconds=61 * offset)
+                result = operation.start(ACCOUNT, IngestionRequest(**BODY))
+                self.assertEqual(len(calls), 2 if field == "label" else 3)
+                saved = self.client.get(PREFIX + "/ingestions/" + str(result.id))
+                self.assertEqual(saved.status_code, 200)
+                self.assertEqual(saved.json(), result.model_dump(mode="json"))
+                if index < 4:
+                    self.assertEqual((result.status, result.error_code, result.objects, result.fingerprint),
+                                     ("failed", "invalid_response", [], None))
+                else:
+                    self.assertEqual(result.status, "succeeded")
+                    self.assertEqual(result.objects[0].properties["firstname"], value)
+        self.assertEqual(self.client.get("/api/accounts/" + ACCOUNT).json(), before)
+
     def test_configuration_change_fences_next_get_and_publication(self):
         operation = self.operation()
         def change(request):

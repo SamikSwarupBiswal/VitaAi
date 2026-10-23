@@ -119,6 +119,8 @@ class HubSpot:
                 data = json.loads(body)
                 if not isinstance(data, dict):
                     raise HubSpotFailure("invalid_response")
+                # Escaped lone surrogates decode in Python but cannot be saved or returned as UTF-8.
+                json.dumps(data, ensure_ascii=False).encode("utf-8")
                 return data
         except httpx.TimeoutException:
             raise HubSpotFailure("hubspot_timeout") from None

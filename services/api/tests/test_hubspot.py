@@ -64,6 +64,24 @@ def configured(**changes):
 
 
 class HubSpotTransportTests(unittest.TestCase):
+    def test_escaped_invalid_unicode_rejects_but_valid_multilingual_text_survives(self):
+        import json
+        for value in ("\ud800", "\udfff", "বাংলা 😀"):
+            calls = []
+            def respond(request, value=value, calls=calls):
+                calls.append(request)
+                payload = {"portalId": 456} if request.url.path.startswith("/account") else {
+                    **COMPANY, "properties": {"name": value}}
+                return httpx.Response(200, content=json.dumps(payload, ensure_ascii=True).encode())
+            connector = HubSpot(configured(), httpx.MockTransport(respond))
+            with self.subTest(valid=value == "বাংলা 😀"):
+                if value == "বাংলা 😀":
+                    self.assertEqual(connector.read_company("123", NOW).properties, {"name": value})
+                else:
+                    with self.assertRaisesRegex(HubSpotFailure, "^invalid_response$"):
+                        connector.read_company("123", NOW)
+                self.assertEqual(len(calls), 2)
+
     def test_fixed_gets_portal_binding_properties_and_safe_failures(self):
         for code, portal, expected in [(200, 456, None), (200, 999, "portal_mismatch"),
                                        (200, True, "invalid_response"), (401, 456, "hubspot_http_401"),
