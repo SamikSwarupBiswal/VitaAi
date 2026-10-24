@@ -40,6 +40,7 @@ from vita_api.workflow_storage import (
     actions,
     audits,
     claims,
+    coaching_reviews,
     decisions,
     missions,
     plans,
@@ -651,6 +652,36 @@ class HubSpotApiTests(unittest.TestCase):
         self.assertIsNone(reconstructed.execute_due(ACCOUNT_ID))
         self.assertEqual(len(self.calls), 2)
 
+        disabled = self.settings.model_copy(update={"hubspot_enabled": False,
+            "hubspot_refresh_enabled": False, "hubspot_company_map": {}})
+        def deny_network(request):
+            self.fail("Retained sync inspection must not contact HubSpot")
+        with TestClient(create_app(disabled, hubspot_transport=httpx.MockTransport(deny_network))) as other:
+            other.cookies.set("vitaai_session", self.client.cookies.get("vitaai_session"))
+            path = "/api/integrations/hubspot/runs/" + saved["id"]
+            occurrence_path = "/api/integrations/hubspot/refresh-occurrences/" + record["id"]
+            self.assertEqual(other.get(occurrence_path).json(), record)
+            response = other.get(path)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), saved)
+            self.assertEqual(other.get("/api/integrations/hubspot/runs/" + str(uuid4())).status_code, 404)
+            self.assertEqual(other.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/sync", headers=HEADERS,
+                                       json={"expected_account_revision": 1}).status_code, 503)
+            viewer = self.identity.create_user("sync-reader", "test-password-long", SAMPLE_ORG, "viewer")
+            _, viewer_token = self.identity.login(viewer.username, "test-password-long", 8)
+            other.cookies.set("vitaai_session", viewer_token)
+            self.assertEqual(other.get(path).json(), saved)
+            self.identity.logout(viewer_token)
+            self.assertEqual(other.get(path).status_code, 401)
+            foreign = self.identity.create_user("sync-foreign", "test-password-long", "other-org", "admin")
+            _, foreign_token = self.identity.login(foreign.username, "test-password-long", 8)
+            other.cookies.set("vitaai_session", foreign_token)
+            self.assertEqual(other.get(path).status_code, 404)
+        self.assertEqual(self.rows(sync_runs), 1)
+        self.assertEqual(self.rows(observations), 1)
+        self.assertEqual(self.rows(source_versions), 0)
+        self.assertEqual(len(self.calls), 2)
+
     def test_refresh_worker_changed_binding_and_expired_grant_never_dispatch(self):
         from vita_api.governance import PolicyDenied
         _, grant, due, worker = self.refresh_worker_fixture()
@@ -1043,6 +1074,8 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(authorizations)).all(), [])
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
+            self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
+            coaching_reviews.drop(connection)
             ingestions.drop(connection)
             occurrences.drop(connection)
             authorizations.drop(connection)
@@ -1055,7 +1088,7 @@ class HubSpotApiTests(unittest.TestCase):
         with self.app.state.store.engine.connect() as connection:
             for table in (detections, source_versions, observations, plans, audits, versions):
                 self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
-            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0016")
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0017")
         selected = self.client.post(path, headers=HEADERS, json=body)
         self.assertEqual(selected.status_code, 200, selected.text)
         self.assertEqual(selected.json()["selection"]["detection"], changed)
@@ -1370,6 +1403,8 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(authorizations)).all(), [])
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
+            self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
+            coaching_reviews.drop(connection)
             ingestions.drop(connection)
             occurrences.drop(connection)
             authorizations.drop(connection)
@@ -1384,7 +1419,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0016")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0017")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)

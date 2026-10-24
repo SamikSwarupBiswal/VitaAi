@@ -143,14 +143,14 @@ class HubSpotSync:
             .order_by(observations.c.sequence.desc()).limit(1)).scalar()
         return HubSpotObservation.model_validate(payload) if payload else None
 
-    def get(self, table, record_id, contract):
+    def get(self, table, record_id, contract, *, require_mapping=True):
         with self.transaction() as (connection, actor):
             payload = connection.execute(select(table.c.payload).where(
                 table.c.organization_id == actor.organization_id, table.c.id == str(record_id))).scalar()
             if payload is None:
                 raise PolicyDenied("record_not_found", 404)
             record = contract.model_validate(payload)
-            self.account(connection, actor, record.account_id)
+            self.account(connection, actor, record.account_id, require_mapping=require_mapping)
             return record
 
     def sync(self, account_id, expected, *, guard=None, run_id=None):
@@ -444,7 +444,7 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
 
     @router.get("/runs/{run_id}", response_model=HubSpotSyncRun)
     def get_run(run_id: UUID, actor: Current, operation: Service):
-        return operation.get(sync_runs, run_id, HubSpotSyncRun)
+        return operation.get(sync_runs, run_id, HubSpotSyncRun, require_mapping=False)
 
     @router.get("/observations/{observation_id}", response_model=HubSpotObservation)
     def get_observation(observation_id: UUID, actor: Current, operation: Service):
