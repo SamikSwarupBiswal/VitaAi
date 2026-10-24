@@ -20,7 +20,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
   const [selected, setSelected] = useState<IngestionRun | null>(null);
   const [recovery, setRecovery] = useState<IngestionRecoveryReadiness | null>(null);
   const [objectType, setObjectType] = useState<IngestionObjectType | "">("");
-  const [lookup, setLookup] = useState("");
+  const [lookup, setLookup] = useState({ id: "" });
   const [reading, setReading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [readyDisplay, setReadyDisplay] = useState(false);
@@ -33,6 +33,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
   const currentReadiness = useRef<IngestionReadiness | null>(null);
   const currentRecord = useRef<IngestionRun | null>(null);
   const currentRecovery = useRef<IngestionRecoveryReadiness | null>(null);
+  const currentLookup = useRef(lookup);
   const inputRevision = useRef(0), locked = useRef(false), ready = useRef(false);
   const capturedInput = inputVersion;
 
@@ -42,6 +43,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
     const request = ++sequence.current;
     setGeneration(request); setReadyDisplay(false);
     ++detailSequence.current;
+    currentLookup.current = { id: currentLookup.current.id }; setLookup(currentLookup.current);
     currentReadiness.current = null; currentRecord.current = null; currentRecovery.current = null; ready.current = false;
     setReadiness(null); setSelected(null); setRecovery(null); setRecords([]); setError(null); setReading(true);
     const results = await Promise.allSettled([readIngestionReadiness(view, signal), readIngestionHistory(view, signal)]);
@@ -62,6 +64,13 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
     return () => { controller.abort(); currentReadiness.current = null; currentRecord.current = null; currentRecovery.current = null;
       ready.current = false; window.removeEventListener("focus", reload); window.removeEventListener("vitaai-ingestion-changed", reload); };
   }, [refresh]);
+
+  function changeLookup(id: string) {
+    ++detailSequence.current;
+    currentLookup.current = { id }; setLookup(currentLookup.current);
+    currentRecord.current = null; currentRecovery.current = null;
+    setSelected(null); setRecovery(null); setError(null);
+  }
 
   async function inspect(id: string, expectedSequence: number) {
     const signal = lifetime.current?.signal;
@@ -126,7 +135,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
     <section aria-label="Ingestion history"><h3>Saved ingestions</h3><p>Latest twenty. Pending work across all account history blocks new starts. Original dates remain historical.</p>
       {readiness?.pending_run_id && <button disabled={pending || reading} onClick={() => inspect(readiness.pending_run_id!, inspectionSequence)}>Inspect pending ingestion</button>}
       <ul>{records.map(record => <li key={record.id}><button disabled={pending || reading} onClick={() => inspect(record.id, inspectionSequence)}>Inspect ingestion {record.id}</button> · {record.object_type} · {record.status} · started {record.started_at}</li>)}</ul>
-      <form onSubmit={event => { event.preventDefault(); void inspect(lookup, inspectionSequence); }}><label>Saved ingestion ID<input maxLength={36} required value={lookup} onChange={event => setLookup(event.target.value)} /></label><button disabled={pending || reading}>Load saved ingestion</button></form>
+      <form onSubmit={event => { event.preventDefault(); if (lookup === currentLookup.current) void inspect(lookup.id, inspectionSequence); }}><label>Saved ingestion ID<input maxLength={36} required value={lookup.id} onChange={event => changeLookup(event.target.value)} /></label><button disabled={pending || reading}>Load saved ingestion</button></form>
       {selected && <section aria-label="Saved ingestion"><h4>{selected.id} · {selected.object_type} · {selected.status}</h4>
         <p>Sequence {selected.sequence}; revision {selected.revision}; original actor {selected.actor_id}; account revision {selected.account_revision}; portal {selected.portal_id}; company {selected.company_id}.</p>
         <p>Configuration revision {selected.configuration_revision}; hash {selected.configuration_hash || "legacy unavailable"}; fingerprint {selected.fingerprint || "none"}; disposition {selected.disposition || "none"}; previous run {selected.previous_run_id || "none"}.</p>

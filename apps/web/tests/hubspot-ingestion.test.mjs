@@ -174,6 +174,35 @@ test("saved ID lookup preserves raw text/null/dates and rejects foreign identity
   assert.equal(app.requests.length, 0); app.unmount();
 });
 
+test("saved ingestion lookup rejects captured forms and late results after input changes", async () => {
+  for (const change of ["edit", "edit-back", "refresh"]) {
+    const app = harness(); await app.mount();
+    app.inputs()[0].props.onChange({ target: { value: other } });
+    const submit = app.forms()[1].props.onSubmit;
+    if (change === "refresh") {
+      const refresh = app.button("Refresh ingestion records").props.onClick();
+      await app.reads(); await refresh;
+    } else {
+      app.inputs()[0].props.onChange({ target: { value: id } });
+      if (change === "edit-back") app.inputs()[0].props.onChange({ target: { value: other } });
+    }
+    submit({ preventDefault() {} });
+    assert.equal(app.requests.length, 0, `obsolete lookup submitted after ${change}`);
+    app.unmount();
+  }
+  const app = harness(); await app.mount();
+  app.inputs()[0].props.onChange({ target: { value: other } });
+  app.forms()[1].props.onSubmit({ preventDefault() {} });
+  const previous = app.requests.shift();
+  app.inputs()[0].props.onChange({ target: { value: id } });
+  previous.resolve(occurrence); await flush();
+  assert.equal(app.requests.length, 0, "obsolete detail must not request recovery readiness");
+  assert.equal(app.button("Finalize interrupted ingestion"), undefined);
+  app.forms()[1].props.onSubmit({ preventDefault() {} });
+  assert.match(app.requests.shift().url, new RegExp(`/ingestions/${id}$`));
+  app.unmount();
+});
+
 test("crossed current account, readiness and history disable starts without displaying foreign records", async () => {
   for (const crossing of ["account", "readiness", "history"]) {
     const app = harness(); app.render(); await flush();
