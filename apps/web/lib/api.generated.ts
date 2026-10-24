@@ -230,7 +230,8 @@ export interface paths {
         /** Microsoft Callback */
         get: operations["microsoft_callback_api_integrations_microsoft_callback_get"];
         put?: never;
-        post?: never;
+        /** Microsoft Callback */
+        post: operations["microsoft_callback_api_integrations_microsoft_callback_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -785,6 +786,160 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/hubspot/accounts/{account_id}/seeds/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Seed Readiness */
+        get: operations["seed_readiness_api_integrations_hubspot_accounts__account_id__seeds_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/accounts/{account_id}/seeds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Seed History */
+        get: operations["seed_history_api_integrations_hubspot_accounts__account_id__seeds_get"];
+        put?: never;
+        /** Seed Prepare */
+        post: operations["seed_prepare_api_integrations_hubspot_accounts__account_id__seeds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Seed Inspect */
+        get: operations["seed_inspect_api_integrations_hubspot_seeds__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Seed Versions */
+        get: operations["seed_versions_api_integrations_hubspot_seeds__job_id__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Review */
+        post: operations["seed_review_api_integrations_hubspot_seeds__job_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Execute */
+        post: operations["seed_execute_api_integrations_hubspot_seeds__job_id__execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}/cleanup-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Cleanup Preview */
+        post: operations["seed_cleanup_preview_api_integrations_hubspot_seeds__job_id__cleanup_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Reconcile */
+        post: operations["seed_reconcile_api_integrations_hubspot_seeds__job_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/hubspot/seeds/{job_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed Recover */
+        post: operations["seed_recover_api_integrations_hubspot_seeds__job_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/hubspot/accounts/{account_id}/ingestions": {
         parameters: {
             query?: never;
@@ -1229,6 +1384,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/runs/{run_id}/quality-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Quality Inspection */
+        get: operations["quality_inspection_api_integrations_research_runs__run_id__quality_reviews_get"];
+        put?: never;
+        /** Quality Review */
+        post: operations["quality_review_api_integrations_research_runs__run_id__quality_reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/research/runs/{run_id}/recovery-readiness": {
         parameters: {
             query?: never;
@@ -1289,6 +1462,23 @@ export interface paths {
         };
         /** History */
         get: operations["history_api_integrations_research_accounts__account_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pipeline/{pipeline_id}/research/{research_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect */
+        get: operations["inspect_api_pipeline__pipeline_id__research__research_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2075,12 +2265,16 @@ export interface components {
              */
             status: "disabled" | "unconfigured" | "configured_unverified";
             /** Capabilities */
-            capabilities: ("model_discovery" | "account_analysis")[];
+            capabilities: ("model_discovery" | "account_analysis" | "account_drafting")[];
             /**
              * Byok Allowed
              * @default false
              */
             byok_allowed: boolean;
+            /** Allowed Models */
+            allowed_models?: {
+                [key: string]: string;
+            };
         };
         /** CoachingRequest */
         CoachingRequest: {
@@ -2223,6 +2417,8 @@ export interface components {
             mode: "mock" | "live";
             /** Expected Configuration Revision */
             expected_configuration_revision: number;
+            /** Model */
+            model?: string | null;
             /** Api Key */
             api_key?: string | null;
         };
@@ -2274,9 +2470,11 @@ export interface components {
             /**
              * Reason
              * @default worker_deadline_elapsed
-             * @constant
+             * @enum {string}
              */
-            reason: "worker_deadline_elapsed";
+            reason: "worker_deadline_elapsed" | "isolated_database_copy";
+            /** Isolation Id */
+            isolation_id?: string | null;
         };
         /** ComparisonRecoveryReadiness */
         ComparisonRecoveryReadiness: {
@@ -2343,6 +2541,14 @@ export interface components {
             expected_snapshot_hash: string;
             /** Providers */
             providers: components["schemas"]["ComparisonChoice"][];
+            /**
+             * Task
+             * @default analysis
+             * @enum {string}
+             */
+            task: "analysis" | "drafts";
+            /** Action Kind */
+            action_kind?: ("manual_review" | "support_escalation" | "renewal_prep" | "optimization_review" | "reactivation" | "follow_up" | "monitor") | null;
         };
         /** ComparisonResult */
         ComparisonResult: {
@@ -2413,6 +2619,7 @@ export interface components {
             /** Error Code */
             error_code?: string | null;
             analysis?: components["schemas"]["Analysis"] | null;
+            drafts?: components["schemas"]["CommunicationDrafts"] | null;
             /**
              * Credential Source
              * @default server
@@ -2476,6 +2683,14 @@ export interface components {
             snapshot: components["schemas"]["AccountView"];
             /** Results */
             results: components["schemas"]["ComparisonResult"][];
+            /**
+             * Task
+             * @default analysis
+             * @enum {string}
+             */
+            task: "analysis" | "drafts";
+            /** Action Kind */
+            action_kind?: ("manual_review" | "support_escalation" | "renewal_prep" | "optimization_review" | "reactivation" | "follow_up" | "monitor") | null;
         };
         /** DestinationBinding */
         DestinationBinding: {
@@ -3136,6 +3351,16 @@ export interface components {
             configuration_revision: number;
             /** Configuration Hash */
             configuration_hash: string;
+            /**
+             * Object Limit
+             * @default 20
+             */
+            object_limit: number;
+            /**
+             * Page Limit
+             * @default 5
+             */
+            page_limit: number;
             /** Connector Configured */
             connector_configured: boolean;
             /** Ingestion Enabled */
@@ -3241,6 +3466,16 @@ export interface components {
             configuration_revision: number;
             /** Configuration Hash */
             configuration_hash?: string | null;
+            /**
+             * Object Limit
+             * @default 20
+             */
+            object_limit: number;
+            /**
+             * Page Limit
+             * @default 5
+             */
+            page_limit: number;
             /**
              * Object Type
              * @enum {string}
@@ -4508,6 +4743,169 @@ export interface components {
             /** Error Code */
             error_code?: string | null;
         };
+        /** QualityInspection */
+        QualityInspection: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy
+             * @default research-quality-1
+             * @constant
+             */
+            policy: "research-quality-1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Revision */
+            run_revision: number;
+            /** Sources Hash */
+            sources_hash: string;
+            /** Latest Revision */
+            latest_revision: number;
+            /** Can Review */
+            can_review: boolean;
+            /** Reviews */
+            reviews?: components["schemas"]["QualityReview"][];
+            /**
+             * Caveat
+             * @default Human source-quality reports retain a reviewer's assessment and references, not independently verified facts. Matching, schema validity and reviewer labels never alter evidence confidence or workflow authority.
+             */
+            caveat: string;
+        };
+        /** QualityRequest */
+        QualityRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Run Revision */
+            expected_run_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /** Expected Sources Hash */
+            expected_sources_hash: string;
+            /** Source Index */
+            source_index: number;
+            /** Source Url */
+            source_url: string;
+            /**
+             * Identity
+             * @enum {string}
+             */
+            identity: "consistent" | "namesake_or_unrelated" | "uncertain";
+            /**
+             * Factual Support
+             * @enum {string}
+             */
+            factual_support: "supported" | "contradicted" | "uncertain";
+            /**
+             * Citation Support
+             * @enum {string}
+             */
+            citation_support: "supports_excerpt" | "does_not_support" | "uncertain";
+            /** Note */
+            note: string;
+            /** References */
+            references?: string[];
+        };
+        /** QualityReview */
+        QualityReview: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Policy
+             * @default research-quality-1
+             * @constant
+             */
+            policy: "research-quality-1";
+            /**
+             * Basis
+             * @default manual_report
+             * @constant
+             */
+            basis: "manual_report";
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+            /**
+             * External Execution
+             * @default false
+             * @constant
+             */
+            external_execution: false;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Revision */
+            run_revision: number;
+            /** Revision */
+            revision: number;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /** Internal Evidence Ids */
+            internal_evidence_ids: string[];
+            /** Sources Hash */
+            sources_hash: string;
+            /** Source Index */
+            source_index: number;
+            source: components["schemas"]["ResearchSource"];
+            report: components["schemas"]["QualityRequest"];
+        };
         /** Receipt */
         Receipt: {
             /**
@@ -4866,6 +5264,7 @@ export interface components {
             topics?: components["schemas"]["ResearchTopic"][];
             /** Caveats */
             caveats: string[];
+            decision?: components["schemas"]["ResearchDecisionBrief"] | null;
         };
         /** ResearchContext */
         ResearchContext: {
@@ -4905,6 +5304,54 @@ export interface components {
              */
             caveat: string;
         };
+        /** ResearchDecisionBrief */
+        ResearchDecisionBrief: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy Version
+             * @default research-decision-1
+             * @constant
+             */
+            policy_version: "research-decision-1";
+            /**
+             * Focus
+             * @enum {string}
+             */
+            focus: "evidence_review" | "risk_review" | "growth_review" | "competing_signals" | "monitor";
+            /** Executive Summary */
+            executive_summary: string;
+            /** Conversation Strategy */
+            conversation_strategy?: components["schemas"]["ResearchReviewQuestion"][];
+            /** Suggested Opening */
+            suggested_opening?: string | null;
+            /** Proposed Crm Note */
+            proposed_crm_note?: string | null;
+            /** Cautions */
+            cautions: string[];
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+            /**
+             * Approval Status
+             * @default unapproved
+             * @constant
+             */
+            approval_status: "unapproved";
+            /**
+             * External Execution
+             * @default false
+             * @constant
+             */
+            external_execution: false;
+        };
         /** ResearchExclusion */
         ResearchExclusion: {
             /**
@@ -4922,6 +5369,47 @@ export interface components {
              * @enum {string}
              */
             reason: "unsafe_url" | "account_match" | "duplicate" | "unknown_publication" | "stale_publication" | "invalid_time";
+        };
+        /** ResearchFusion */
+        ResearchFusion: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Policy Version
+             * @default saved-research-fusion-1
+             * @constant
+             */
+            policy_version: "saved-research-fusion-1";
+            /**
+             * Pipeline Run Id
+             * Format: uuid
+             */
+            pipeline_run_id: string;
+            /**
+             * Pipeline Started At
+             * Format: date-time
+             */
+            pipeline_started_at: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            recommendation: components["schemas"]["Recommendation"];
+            research_context: components["schemas"]["ResearchContext"];
+            research_specialist: components["schemas"]["ResearchSpecialist"];
+            /**
+             * External Execution
+             * @default false
+             * @constant
+             */
+            external_execution: false;
         };
         /** ResearchReadiness */
         ResearchReadiness: {
@@ -4981,9 +5469,11 @@ export interface components {
             /**
              * Reason
              * @default worker_deadline_elapsed
-             * @constant
+             * @enum {string}
              */
-            reason: "worker_deadline_elapsed";
+            reason: "worker_deadline_elapsed" | "isolated_database_copy";
+            /** Isolation Id */
+            isolation_id?: string | null;
         };
         /** ResearchRecoveryReadiness */
         ResearchRecoveryReadiness: {
@@ -5178,6 +5668,43 @@ export interface components {
              */
             factual_confidence: "unverified";
         };
+        /** ResearchSpecialist */
+        ResearchSpecialist: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Role
+             * @default research
+             * @constant
+             */
+            role: "research";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "supporting_context" | "missing_source";
+            /**
+             * Research Run Id
+             * Format: uuid
+             */
+            research_run_id: string;
+            /** Context Expires At */
+            context_expires_at: string | null;
+            /** Findings */
+            findings?: components["schemas"]["ResearchReviewQuestion"][];
+            /** Missing Sources */
+            missing_sources?: string[];
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+        };
         /** ResearchStatus */
         ResearchStatus: {
             /**
@@ -5208,6 +5735,10 @@ export interface components {
             domain: string;
             /** Publisher Domains */
             publisher_domains?: string[];
+            /** Company Domains */
+            company_domains?: string[];
+            /** Identity Terms */
+            identity_terms?: string[];
             /** Company Aliases */
             company_aliases?: string[];
         };
@@ -5353,6 +5884,243 @@ export interface components {
             /** Opportunity Contribution */
             opportunity_contribution: number;
         };
+        /** SeedBinding */
+        SeedBinding: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Binding Hash */
+            binding_hash: string;
+        };
+        /** SeedCleanup */
+        SeedCleanup: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Binding Hash */
+            binding_hash: string;
+            /** Item Indices */
+            item_indices: number[];
+        };
+        /** SeedInspection */
+        SeedInspection: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            job: components["schemas"]["SeedJob"];
+            /** Account Revision */
+            account_revision: number;
+            /** Can Review */
+            can_review: boolean;
+            /** Can Execute */
+            can_execute: boolean;
+            /** Can Reconcile */
+            can_reconcile: boolean;
+            /** Can Recover */
+            can_recover: boolean;
+            /**
+             * Can Prepare Cleanup
+             * @default false
+             */
+            can_prepare_cleanup: boolean;
+        };
+        /** SeedItem */
+        SeedItem: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Index */
+            index: number;
+            /**
+             * Object Type
+             * @default companies
+             * @enum {string}
+             */
+            object_type: "companies" | "contacts" | "notes" | "deals";
+            /** Parent Index */
+            parent_index?: number | null;
+            /** Association Type Id */
+            association_type_id?: number | null;
+            /** Provider Request */
+            provider_request: string;
+            /** Resolved Request */
+            resolved_request?: string | null;
+            /**
+             * Status
+             * @default ready
+             * @enum {string}
+             */
+            status: "ready" | "dispatching" | "succeeded" | "failed" | "result_unknown" | "skipped";
+            /** Resource Id */
+            resource_id?: string | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * Verification
+             * @default not_run
+             * @enum {string}
+             */
+            verification: "not_run" | "verified" | "mismatch" | "unavailable";
+            /** Verified At */
+            verified_at?: string | null;
+            /** Verified Request Hash */
+            verified_request_hash?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Archive Selected
+             * @default false
+             */
+            archive_selected: boolean;
+            /** Archive Target Id */
+            archive_target_id?: string | null;
+        };
+        /** SeedJob */
+        SeedJob: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /**
+             * Status
+             * @default draft
+             * @enum {string}
+             */
+            status: "draft" | "approved" | "rejected" | "claimed" | "executing" | "succeeded" | "failed" | "result_unknown" | "interrupted";
+            preview: components["schemas"]["SeedPreview"];
+            /** Test Portal Id */
+            test_portal_id: string;
+            /** Binding Hash */
+            binding_hash: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Items */
+            items: components["schemas"]["SeedItem"][];
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Review Expires At */
+            review_expires_at?: string | null;
+            /** Review Reason */
+            review_reason?: string | null;
+            /** Claimed By */
+            claimed_by?: string | null;
+            /** Claimed At */
+            claimed_at?: string | null;
+            /** Worker Deadline At */
+            worker_deadline_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Recovered By */
+            recovered_by?: string | null;
+            /** Recovered At */
+            recovered_at?: string | null;
+            /**
+             * Last Event
+             * @default preview_saved
+             */
+            last_event: string;
+            /** Last Actor Id */
+            last_actor_id: string;
+            /**
+             * Last Event At
+             * Format: date-time
+             */
+            last_event_at: string;
+            /**
+             * Policy
+             * @default synthetic-company-seed-1
+             * @constant
+             */
+            policy: "synthetic-company-seed-1";
+            /**
+             * Operation
+             * @default create
+             * @enum {string}
+             */
+            operation: "create" | "archive";
+            /** Source Job Id */
+            source_job_id?: string | null;
+        };
+        /** SeedPrepare */
+        SeedPrepare: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Configuration Hash */
+            expected_configuration_hash: string;
+            /** Count */
+            count: number;
+            /**
+             * Include Contacts
+             * @default false
+             */
+            include_contacts: boolean;
+            /**
+             * Include Notes
+             * @default false
+             */
+            include_notes: boolean;
+            /**
+             * Include Deals
+             * @default false
+             */
+            include_deals: boolean;
+        };
         /** SeedPreview */
         SeedPreview: {
             /**
@@ -5435,6 +6203,84 @@ export interface components {
             expected_configuration_hash: string;
             /** Count */
             count: number;
+        };
+        /** SeedReadiness */
+        SeedReadiness: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Portal Id */
+            portal_id: string;
+            /** Test Portal Id */
+            test_portal_id: string;
+            /** Configured */
+            configured: boolean;
+            /** Can Prepare */
+            can_prepare: boolean;
+            /** Deal Pipeline */
+            deal_pipeline: string;
+            /** Deal Stage */
+            deal_stage: string;
+            /** Deal Seed Available */
+            deal_seed_available: boolean;
+            /** Blocking Job Id */
+            blocking_job_id?: string | null;
+        };
+        /** SeedRecovery */
+        SeedRecovery: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Binding Hash */
+            binding_hash: string;
+            /**
+             * Expected Worker Deadline At
+             * Format: date-time
+             */
+            expected_worker_deadline_at: string;
+        };
+        /** SeedReview */
+        SeedReview: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Binding Hash */
+            binding_hash: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approved" | "rejected";
+            /** Reason */
+            reason: string;
         };
         /** SessionView */
         SessionView: {
@@ -6262,6 +7108,26 @@ export interface operations {
         };
     };
     microsoft_callback_api_integrations_microsoft_callback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    microsoft_callback_api_integrations_microsoft_callback_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -7435,6 +8301,340 @@ export interface operations {
             };
         };
     };
+    seed_readiness_api_integrations_hubspot_accounts__account_id__seeds_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_history_api_integrations_hubspot_accounts__account_id__seeds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_prepare_api_integrations_hubspot_accounts__account_id__seeds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedPrepare"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_inspect_api_integrations_hubspot_seeds__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_versions_api_integrations_hubspot_seeds__job_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_review_api_integrations_hubspot_seeds__job_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedReview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_execute_api_integrations_hubspot_seeds__job_id__execute_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedBinding"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_cleanup_preview_api_integrations_hubspot_seeds__job_id__cleanup_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedCleanup"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_reconcile_api_integrations_hubspot_seeds__job_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedBinding"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_recover_api_integrations_hubspot_seeds__job_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeedRecovery"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeedJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     ingestion_history_api_integrations_hubspot_accounts__account_id__ingestions_get: {
         parameters: {
             query?: never;
@@ -8321,6 +9521,72 @@ export interface operations {
             };
         };
     };
+    quality_inspection_api_integrations_research_runs__run_id__quality_reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    quality_review_api_integrations_research_runs__run_id__quality_reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     recovery_readiness_api_integrations_research_runs__run_id__recovery_readiness_get: {
         parameters: {
             query?: never;
@@ -8436,6 +9702,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchRun"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_api_pipeline__pipeline_id__research__research_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pipeline_id: string;
+                research_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchFusion"];
                 };
             };
             /** @description Validation Error */

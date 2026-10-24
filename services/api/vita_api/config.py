@@ -42,10 +42,13 @@ class ResearchTarget(BaseModel):
     company_name: str = Field(min_length=1, max_length=160, pattern=r"^[\w .,&'()-]+$")
     domain: ResearchDomain
     publisher_domains: list[ResearchDomain] = Field(default_factory=list, max_length=5)
+    company_domains: list[ResearchDomain] = Field(default_factory=list, max_length=5)
+    identity_terms: list[Annotated[str, Field(min_length=3, max_length=160, pattern=r"^[\w .,&'()-]+$")]] = Field(
+        default_factory=list, max_length=5)
     company_aliases: list[Annotated[str, Field(min_length=3, max_length=160, pattern=r"^[\w .,&'()-]+$")]] = Field(
         default_factory=list, max_length=5)
 
-    @field_validator("company_aliases")
+    @field_validator("company_aliases", "identity_terms")
     @classmethod
     def canonical_aliases(cls, value):
         aliases = {" ".join(item.casefold().split()) for item in value}
@@ -53,7 +56,7 @@ class ResearchTarget(BaseModel):
             raise ValueError("Company aliases require a name of at least three characters")
         return sorted(aliases)
 
-    @field_validator("publisher_domains")
+    @field_validator("publisher_domains", "company_domains")
     @classmethod
     def canonical_publishers(cls, value):
         return sorted(set(value))
@@ -66,9 +69,18 @@ class ComparisonProviderConfig(BaseModel):
     api_key: SecretStr = SecretStr("")
     model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
     response_model: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_./:-]*$")
+    allowed_models: dict[Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_./:-]+$")],
+        Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_./:-]+$")]] = Field(
+            default_factory=dict, max_length=20)
     revision: int = Field(default=1, ge=1)
     resource_name: str = Field(default="", pattern=r"^(?:[a-z0-9][a-z0-9-]{0,61}[a-z0-9])?$")
     endpoint_domain: Literal["services.ai.azure.com", "openai.azure.com"] = "services.ai.azure.com"
+
+    @model_validator(mode="after")
+    def default_model_identity(self):
+        if self.model in self.allowed_models and self.allowed_models[self.model] != (self.response_model or self.model):
+            raise ValueError("Default and selectable model response identities must agree")
+        return self
 
 
 class Settings(BaseSettings):
@@ -95,7 +107,14 @@ class Settings(BaseSettings):
     hubspot_enabled: bool = False
     hubspot_probe_enabled: bool = False
     hubspot_ingestion_enabled: bool = False
+    hubspot_ingestion_object_limit: int = Field(default=20, ge=1, le=100)
+    hubspot_ingestion_page_limit: int = Field(default=5, ge=1, le=10)
     hubspot_write_enabled: bool = False
+    hubspot_seed_enabled: bool = False
+    hubspot_cleanup_enabled: bool = False
+    hubspot_seed_test_portal_id: str = Field(default="", pattern=r"^(?:[1-9][0-9]{0,19})?$")
+    hubspot_seed_deal_pipeline: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
+    hubspot_seed_deal_stage: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
     hubspot_refresh_enabled: bool = False
     hubspot_refresh_worker_enabled: bool = False
     hubspot_configuration_revision: int = Field(default=1, ge=1)
@@ -113,10 +132,37 @@ class Settings(BaseSettings):
     microsoft_client_id: UUID | None = None
     microsoft_client_secret: SecretStr = SecretStr("")
     microsoft_token_key: SecretStr = SecretStr("")
-    microsoft_redirect_uri: Literal[
-        "http://127.0.0.1:8000/api/integrations/microsoft/callback",
-        "http://localhost:8000/api/integrations/microsoft/callback",
-    ] = "http://127.0.0.1:8000/api/integrations/microsoft/callback"
+    microsoft_redirect_uri: str = Field(default="http://127.0.0.1:8000/api/integrations/microsoft/callback", max_length=256)
+    microsoft_web_origin: str = Field(default="", max_length=256)
+
+    @field_validator("microsoft_redirect_uri", "microsoft_web_origin")
+    @classmethod
+    def microsoft_urls(cls, value, info):
+        callback = info.field_name == "microsoft_redirect_uri"
+        if not callback and value == "":
+            return value
+        suffix = "/api/integrations/microsoft/callback" if callback else ""
+        local = {f"http://{host}:{8000 if callback else 3000}{suffix}" for host in ("127.0.0.1", "localhost")}
+        if value in local:
+            return value
+        url = urlsplit(value)
+        host = url.hostname or ""
+        if (url.scheme != "https" or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", host)
+                or url.username or url.password or url.port not in (None, 443)
+                or url.query or url.fragment or url.path != suffix or any(char.isspace() for char in value)
+                or not value.isascii()):
+            raise ValueError("Use an exact HTTPS Microsoft callback/web origin or the supported loopback default")
+        return "https://" + host + suffix
+
+    @model_validator(mode="after")
+    def microsoft_callback_boundary(self):
+        callback = urlsplit(self.microsoft_redirect_uri)
+        if callback.scheme == "https":
+            if self.microsoft_web_origin != "https://" + callback.hostname or not self.session_cookie_secure:
+                raise ValueError("Hosted Microsoft callbacks require the exact same HTTPS web origin and secure session cookies")
+        elif self.microsoft_web_origin and self.microsoft_web_origin != "http://" + callback.hostname + ":3000":
+            raise ValueError("The local Microsoft callback and web origin must use the same loopback host")
+        return self
 
     @field_validator("microsoft_tenant_id", "microsoft_client_id", mode="before")
     @classmethod

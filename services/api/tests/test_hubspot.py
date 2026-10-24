@@ -16,7 +16,6 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
-
 from vita_api.app import create_app
 from vita_api.config import PROPERTY_SEMANTICS, Settings
 from vita_api.hubspot import HubSpot, HubSpotFailure
@@ -28,11 +27,14 @@ from vita_api.hubspot_refresh import (
     authorizations,
     occurrences,
 )
+from vita_api.hubspot_seeding import seeds
+from vita_api.hubspot_seeding import versions as seed_versions
 from vita_api.hubspot_sync import observations, sync_runs
 from vita_api.identity import Identity, users
 from vita_api.provider_comparison import comparisons
 from vita_api.provider_probe import probes
 from vita_api.research_narrative import narratives
+from vita_api.research_quality import quality_reviews
 from vita_api.sample import SAMPLE_ORG, sample_records
 from vita_api.source_missions import source_missions
 from vita_api.storage import source_versions
@@ -1062,7 +1064,6 @@ class HubSpotApiTests(unittest.TestCase):
 
     def test_source_event_selection_migration_preserves_populated_detection_and_plan_history(self):
         from sqlalchemy import text
-
         from vita_api.migrate import upgrade
         _, changed, plan, path, body = self.source_mission_fixture()
         with self.app.state.store.engine.begin() as connection:
@@ -1075,6 +1076,9 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
             self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
+            for table in (quality_reviews, seed_versions, seeds):
+                self.assertEqual(connection.execute(select(table)).all(), [])
+                table.drop(connection)
             coaching_reviews.drop(connection)
             ingestions.drop(connection)
             occurrences.drop(connection)
@@ -1088,7 +1092,7 @@ class HubSpotApiTests(unittest.TestCase):
         with self.app.state.store.engine.connect() as connection:
             for table in (detections, source_versions, observations, plans, audits, versions):
                 self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
-            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0017")
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0019")
         selected = self.client.post(path, headers=HEADERS, json=body)
         self.assertEqual(selected.status_code, 200, selected.text)
         self.assertEqual(selected.json()["selection"]["detection"], changed)
@@ -1404,6 +1408,9 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
             self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
+            for table in (quality_reviews, seed_versions, seeds):
+                self.assertEqual(connection.execute(select(table)).all(), [])
+                table.drop(connection)
             coaching_reviews.drop(connection)
             ingestions.drop(connection)
             occurrences.drop(connection)
@@ -1419,7 +1426,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0017")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0019")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)

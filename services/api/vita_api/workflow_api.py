@@ -83,25 +83,26 @@ def install_workflow_routes(app, store, identity, settings, provider=None, hubsp
 
     @router.post(PREFIX + "/connect", response_model=MicrosoftStart)
     def microsoft_connect(request: Request, response: Response, actor: Current):
-        if request.headers.get("origin") not in {None, microsoft.connection_origin}:
+        allowed = {microsoft.connection_origin} if microsoft.hosted_callback else {None, microsoft.connection_origin}
+        if request.headers.get("origin") not in allowed:
             raise PolicyDenied("microsoft_connection_host_mismatch", 409)
         result, cookie = microsoft.begin(actor.id, request.cookies.get("vitaai_session"))
-        response.set_cookie(COOKIE, cookie, httponly=True, samesite="lax", max_age=600,
-                            path=PREFIX + "/callback", secure=False)
+        response.set_cookie(COOKIE, cookie, max_age=600, **microsoft.flow_cookie_options)
         return result
 
     @router.get(PREFIX + "/callback")
+    @router.post(PREFIX + "/callback")
     def microsoft_callback(request: Request):
         microsoft.complete(request.cookies.get(COOKIE), request.state.microsoft_response)
         response = RedirectResponse(microsoft.connection_origin + "/missions", status_code=303)
-        response.delete_cookie(COOKIE, path=PREFIX + "/callback", httponly=True, samesite="lax")
+        response.delete_cookie(COOKIE, **microsoft.flow_cookie_options)
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
     @router.post(PREFIX + "/signout", response_model=MicrosoftStatus)
     def microsoft_signout(request: Request, response: Response, actor: Current):
         microsoft.signout(actor.id, request.cookies.get("vitaai_session"))
-        response.delete_cookie(COOKIE, path=PREFIX + "/callback", httponly=True, samesite="lax")
+        response.delete_cookie(COOKIE, **microsoft.flow_cookie_options)
         return microsoft.status(actor.id, request.cookies.get("vitaai_session"))
 
     @router.post(PREFIX + "/refresh", response_model=MicrosoftStatus)

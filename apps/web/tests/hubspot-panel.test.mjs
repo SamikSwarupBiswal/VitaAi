@@ -17,6 +17,7 @@ const observation = { id: "observation", account_id: "a", organization_id: "org"
   provider_updated_at: "2026-10-16T00:00:00Z", fetched_at: "2026-10-17T00:00:00Z", properties: { name: "Source name" } };
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 function load(relative, mocks, extra = "") {
+  mocks = { "./hubspot-seed-panel": { HubSpotSeedPanel: () => null }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const output = ts.transpileModule(readFileSync(filename, "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },

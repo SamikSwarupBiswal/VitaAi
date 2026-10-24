@@ -17,7 +17,6 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
-
 from vita_api.app import create_app
 from vita_api.config import ResearchTarget, Settings
 from vita_api.contracts import AccountSource, AccountView
@@ -31,6 +30,7 @@ from vita_api.research import (
     ResearchRecoveryRequest,
     ResearchRequest,
     ResearchRun,
+    source_match,
 )
 from vita_api.research_context import build_context
 from vita_api.research_service import WORKER_BUDGET, ResearchService, research_runs
@@ -51,6 +51,46 @@ def settings(**changes):
 
 
 class ResearchTransportTests(unittest.TestCase):
+    def test_declared_domain_and_publisher_identity_truth_table_stays_unverified(self):
+        target = ResearchTarget(**TARGET, company_domains=["subsidiary.test"],
+            publisher_domains=["publisher.test"], company_aliases=["Example Holdings"],
+            identity_terms=["Chennai", "software"])
+        # Even a namesake with every declared term is only an unverified candidate.
+        cases = [
+            ("https://example.test/update", "Unrelated title", "", "configured_domain"),
+            ("https://news.subsidiary.test/update", "", "", "configured_domain"),
+            ("https://subsidiary.test.evil.test/update", "Example Company Chennai software", "", None),
+            ("https://publisher.test/update", "Example Company in CHENNAI", "Software update",
+             "configured_publisher_company_mention"),
+            ("https://publisher.test/update", "Example Holdings Chennai software", "",
+             "configured_publisher_company_mention"),
+            ("https://publisher.test/update", "Other firm", "Example Company Chennai software",
+             "configured_publisher_company_mention"),
+            ("https://publisher.test/update", "Example Company Chennai", "hardware", None),
+            ("https://publisher.test/update", "Example Company Chennai softwarehouse", "", None),
+            ("https://publisher.test/update", "Other Company Chennai software", "", None),
+            ("https://publisher.test/update", "Example Companywide Chennai software", "", None),
+            ("https://publisher.test/example-company-chennai-software", "Unrelated", "", None),
+            ("https://publisher.test/update", "Example", "Company Chennai software", None),
+            ("https://undeclared.test/update", "Example Company Chennai software", "", None),
+            ("https://publisher.test/update", "Namesake Example Company Chennai software", "",
+             "configured_publisher_company_mention"),
+        ]
+        for url, title, content, expected in cases:
+            with self.subTest(url=url, title=title, content=content):
+                self.assertEqual(source_match(url, title, content, target), expected)
+        calls = []
+        def respond(request):
+            calls.append(request)
+            self.assertEqual(json.loads(request.content)["include_domains"],
+                ["example.test", "subsidiary.test", "publisher.test"])
+            return httpx.Response(200, json={"results": [{**ITEM, "url": "https://publisher.test/namesake",
+                "title": "Namesake Example Company Chennai software"}]})
+        result = Research(settings(), httpx.MockTransport(respond)).search(target)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].factual_confidence, "unverified")
+
     def test_declared_aliases_match_only_whole_names_on_declared_publishers(self):
         target = ResearchTarget(**TARGET, publisher_domains=["publisher.test"],
             company_aliases=[" Example  Co ", "EXAMPLE CO", "Example Holdings"])
@@ -215,7 +255,8 @@ class ResearchApiTests(unittest.TestCase):
         before = self.client.get("/api/portfolio").json()
         ready = self.client.get(path)
         self.assertEqual(ready.status_code, 200)
-        self.assertEqual(ready.json()["target"], {**TARGET, "publisher_domains": [], "company_aliases": []})
+        self.assertEqual(ready.json()["target"], {**TARGET, "publisher_domains": [], "company_aliases": [],
+            "company_domains": [], "identity_terms": []})
         self.assertEqual(ready.json()["account_revision"], 1)
         self.assertTrue(ready.json()["can_start"])
         self.assertEqual(ready.json()["live_status"], "configured_unverified")

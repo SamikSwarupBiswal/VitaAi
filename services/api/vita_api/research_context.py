@@ -44,6 +44,20 @@ class ResearchBrief(ResearchContract):
     verification_questions: list[ResearchReviewQuestion] = Field(default_factory=list, max_length=4)
     topics: list[ResearchTopic] = Field(default_factory=list, max_length=6)
     caveats: list[str]
+    decision: "ResearchDecisionBrief | None" = None
+
+
+class ResearchDecisionBrief(ResearchContract):
+    policy_version: Literal["research-decision-1"] = "research-decision-1"
+    focus: Literal["evidence_review", "risk_review", "growth_review", "competing_signals", "monitor"]
+    executive_summary: str
+    conversation_strategy: list[ResearchReviewQuestion] = Field(default_factory=list, max_length=6)
+    suggested_opening: str | None = None
+    proposed_crm_note: str | None = Field(default=None, max_length=20000)
+    cautions: list[str]
+    factual_confidence: Literal["unverified"] = "unverified"
+    approval_status: Literal["unapproved"] = "unapproved"
+    external_execution: Literal[False] = False
 
 
 class ResearchContext(ResearchContract):
@@ -97,6 +111,7 @@ def build_brief(context: ResearchContext) -> ResearchBrief:
         caveats.append("The internal assessment requires review; public context cannot remove that requirement.")
     brief = ResearchBrief(basis="supporting_context" if context.status == "usable" else "internal_only",
         internal_summary=summary, internal_evidence_ids=sorted({item.id for item in view.evidence}), caveats=caveats)
+    brief.decision = build_decision_brief(context)
     if context.status != "usable":
         brief.caveats.append(f"Public context is {context.status}. This brief uses internal observations only.")
         return brief
@@ -115,6 +130,62 @@ def build_brief(context: ResearchContext) -> ResearchBrief:
             question="Verify the cited public sources and resolve missing CRM evidence before planning. "
                      "Public context cannot fill those gaps.", evidence_ids=[], source_urls=urls))
     return brief
+
+
+def build_decision_brief(context: ResearchContext) -> ResearchDecisionBrief:
+    view, assessment = context.internal, context.internal.assessment
+    ids = sorted({item.id for item in view.evidence})
+    usable = context.status == "usable"
+    urls = [source.url for source in context.usable_sources] if usable else []
+    blocked = assessment.requires_review or assessment.confidence < 100
+    if blocked:
+        focus = "evidence_review"
+    elif assessment.risk >= 45 and assessment.opportunity >= 65:
+        focus = "competing_signals"
+    elif assessment.risk >= 45:
+        focus = "risk_review"
+    elif assessment.opportunity >= 65:
+        focus = "growth_review"
+    else:
+        focus = "monitor"
+    summary = (f"Review focus: {focus.replace('_', ' ')} from the retained internal assessment on "
+               f"{assessment.as_of}. Health {assessment.health}/100, risk {assessment.risk}/100, "
+               f"opportunity {assessment.opportunity}/100; baseline evidence confidence {assessment.confidence}%. "
+               f"Annual contract value {view.account.annual_value if view.account.annual_value is not None else 'Unknown'}; "
+               f"renewal {view.account.renewal_date or 'Unknown'}. ")
+    summary += ("Public sources are available for verification alongside these observations; no relationship or business effect is established."
+                if usable else f"Public context is {context.status}; this review uses internal observations only.")
+    strategy = [ResearchReviewQuestion(
+        question="Check the original dates, source identities, missing values and contradictory internal evidence before preparing outreach.",
+        evidence_ids=ids, source_urls=[])]
+    if usable:
+        strategy.append(ResearchReviewQuestion(
+            question="Verify that the cited reports concern this account rather than a namesake, and confirm publication dates and contradictory reports.",
+            evidence_ids=[], source_urls=urls))
+        for metric, label in (("usage_change", "product usage"), ("support_cases", "unresolved support"),
+                              ("expansion", "expansion interest")):
+            evidence_ids = sorted({item.id for item in view.evidence if item.metric == metric})
+            if evidence_ids:
+                strategy.append(ResearchReviewQuestion(
+                    question=f"Ask whether the public context, once verified, is relevant to the saved {label} observations; do not assume an explanation or causal relationship.",
+                    evidence_ids=evidence_ids, source_urls=urls))
+    strategy.append(ResearchReviewQuestion(
+        question="Record a human conclusion with its evidence. Any task, note or outreach still requires separate preparation and fresh exact review in Missions.",
+        evidence_ids=ids, source_urls=urls))
+    can_propose = usable and not blocked and focus != "monitor"
+    return ResearchDecisionBrief(focus=focus, executive_summary=summary, conversation_strategy=strategy,
+        suggested_opening=("Could we review the dated account observations and confirm whether these public reports concern your organisation and priorities?"
+                           if can_propose else None),
+        proposed_crm_note=(f"Proposed internal evidence-review note, not a completed conversation or business outcome. "
+                           f"Account {view.account.id}, revision {view.account.revision}, assessment {assessment.as_of}. "
+                           f"Baseline risk {assessment.risk}/100 and opportunity {assessment.opportunity}/100 remain unchanged. "
+                           f"Internal evidence: {', '.join(ids)}. Unverified public sources for human review: {', '.join(urls)}. "
+                           "Confirm identity, dates and relevance; record the actual conclusion separately. This proposal is unapproved."
+                           if can_propose else None),
+        cautions=["Public source relevance and keyword groups are not verified identity, sentiment, causality or business impact.",
+                  "Do not infer contract value, currency, renewal dates or product/support metrics from public reports.",
+                  "Missing or contradictory internal evidence must be resolved; public context cannot increase baseline confidence or remove review gates.",
+                  "A suggested opening or CRM note records no contact, task, approval, execution or outcome."])
 
 
 def build_context(view: AccountView, run: ResearchRun, target: ResearchTarget | None,
@@ -144,7 +215,7 @@ def build_context(view: AccountView, run: ResearchRun, target: ResearchTarget | 
         seen = set()
         for index, source in enumerate(run.sources):
             reason = None
-            if not any(source_url(source.url, domain) for domain in [target.domain, *target.publisher_domains]):
+            if not any(source_url(source.url, domain) for domain in [target.domain, *target.company_domains, *target.publisher_domains]):
                 reason = "unsafe_url"
             elif source_match(source.url, source.title, source.text, target) != source.match:
                 reason = "account_match"

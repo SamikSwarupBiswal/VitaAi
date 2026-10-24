@@ -5,6 +5,7 @@ import { api, currency, type AccountView } from "@/lib/api";
 import { accountPath, postHubSpot, previewSeed, probeConnection, readProbeReadiness, readPreview, readSource, type AccountSource, type HubSpotStatus,
   type HubSpotProbeReadiness, type HubSpotProbeResult, type HubSpotSyncRun, type SourceVersion } from "@/lib/hubspot";
 import { useSession } from "./session-gate";
+import { HubSpotSeedPanel } from "./hubspot-seed-panel";
 
 type Props = { view: AccountView; blocked?: boolean; onInvalidate: () => void; onRefresh: (message: string) => Promise<void> };
 type PreviewData = NonNullable<Awaited<ReturnType<typeof readPreview>>>;
@@ -179,6 +180,7 @@ function HubSpotAccount({ view, admin, blocked = false, onInvalidate, onRefresh 
     </section>}
     {view.source?.kind === "hubspot" && <section aria-label="Restore synthetic source"><p>Restore the original saved synthetic facts and dates under a new revision. This does not make old evidence fresh or restore old approvals.</p>
       <button disabled={disabled || !admin} onClick={() => mutate("restore-sample")}>Restore original synthetic facts</button></section>}
+    <HubSpotSeedPanel view={view} blocked={disabled} />
     <section aria-label="Source history"><h2>Source history</h2>
       <p>Inspect an immutable before/after source version for this account. The current version loads automatically; earlier versions require their saved ID.</p>
       <form onSubmit={lookup}><label>Source version ID<input value={sourceId} required maxLength={36} onChange={event => setSourceId(event.target.value)} /></label>

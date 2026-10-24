@@ -19,6 +19,7 @@ function scope(view: AccountView, record: { organization_id: string; account_id:
 
 export function checkIngestion(view: AccountView, run: IngestionRun) {
   scope(view, run);
+  const objectLimit = run.object_limit ?? 20, pageLimit = run.page_limit ?? 5;
   if (!uuid.test(run.id) || !Number.isSafeInteger(run.account_revision) || run.account_revision < 1
     || !Number.isSafeInteger(run.configuration_revision) || run.configuration_revision < 1
     || (run.configuration_hash != null && !/^[a-f0-9]{64}$/.test(run.configuration_hash))
@@ -26,7 +27,9 @@ export function checkIngestion(view: AccountView, run: IngestionRun) {
     || !["contacts", "deals", "notes", "tasks", "calls", "meetings", "emails"].includes(run.object_type)
     || !["pending", "succeeded", "failed", "interrupted"].includes(run.status)
     || ![run.started_at, run.worker_deadline_at].every(time) || !optionalTime(run.finished_at)
-    || !Array.isArray(run.objects) || run.objects.length > 20) throw new Error("Invalid saved ingestion record.");
+    || !Number.isSafeInteger(objectLimit) || objectLimit < 1 || objectLimit > 100
+    || !Number.isSafeInteger(pageLimit) || pageLimit < 1 || pageLimit > 10
+    || !Array.isArray(run.objects) || run.objects.length > objectLimit) throw new Error("Invalid saved ingestion record.");
   for (const item of run.objects) {
     if (!/^[1-9][0-9]{0,19}$/.test(item.object_id) || !time(item.created_at) || !time(item.updated_at)
       || !item.properties || typeof item.properties !== "object" || Array.isArray(item.properties)
@@ -55,10 +58,13 @@ export async function readIngestionReadiness(view: AccountView, signal: AbortSig
     throw new Error("Refresh current account first.");
   }
   scope(view, ready);
+  const objectLimit = ready.object_limit ?? 20, pageLimit = ready.page_limit ?? 5;
   if (ready.account_revision !== view.account.revision || !Number.isSafeInteger(ready.configuration_revision)
     || !/^[a-f0-9]{64}$/.test(ready.configuration_hash) || typeof ready.can_start !== "boolean"
     || typeof ready.connector_configured !== "boolean" || typeof ready.ingestion_enabled !== "boolean"
     || ready.configuration_revision < 1
+    || !Number.isSafeInteger(objectLimit) || objectLimit < 1 || objectLimit > 100
+    || !Number.isSafeInteger(pageLimit) || pageLimit < 1 || pageLimit > 10
     || (ready.pending_run_id != null && !uuid.test(ready.pending_run_id)) || !optionalTime(ready.cooldown_until)) {
     throw new Error("Ingestion readiness binding changed.");
   }

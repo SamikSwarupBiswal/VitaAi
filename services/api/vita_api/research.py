@@ -59,7 +59,8 @@ class ResearchRecovery(ResearchContract):
     actor_id: str
     recovered_at: AwareDatetime
     previous_revision: int
-    reason: Literal["worker_deadline_elapsed"] = "worker_deadline_elapsed"
+    reason: Literal["worker_deadline_elapsed", "isolated_database_copy"] = "worker_deadline_elapsed"
+    isolation_id: UUID | None = None
 
 
 class ResearchRecoveryRequest(ResearchContract):
@@ -139,9 +140,13 @@ def publication(value, fetched):
 
 
 def source_match(url: str, title: str, text: str, target: ResearchTarget):
-    if source_url(url, target.domain):
+    if any(source_url(url, domain) for domain in [target.domain, *target.company_domains]):
         return "configured_domain"
     if any(source_url(url, domain) for domain in target.publisher_domains):
+        normalized = " ".join((title + " " + text).casefold().split())
+        if any(not re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", normalized)
+               for term in target.identity_terms):
+            return None
         for declared_name in [target.company_name, *target.company_aliases]:
             name = " ".join(declared_name.casefold().split())
             if not any(char.isalnum() for char in name):
@@ -182,7 +187,7 @@ class Research:
                     "search_depth": "basic", "max_results": 5, "auto_parameters": False,
                     "include_answer": False, "include_raw_content": False, "include_images": False,
                     "include_published_date": True,
-                    "include_domains": list(dict.fromkeys([target.domain, *target.publisher_domains])),
+                    "include_domains": list(dict.fromkeys([target.domain, *target.company_domains, *target.publisher_domains])),
                     "include_domains_mode": "restrict",
                 }) as response):
                 if response.status_code != 200:
@@ -201,7 +206,7 @@ class Research:
                 if not isinstance(item, dict) or not isinstance(item.get("url"), str):
                     raise ResearchFailure("invalid_response")
                 url = item["url"]
-                if (not any(source_url(url, domain) for domain in [target.domain, *target.publisher_domains])
+                if (not any(source_url(url, domain) for domain in [target.domain, *target.company_domains, *target.publisher_domains])
                         or url in seen):
                     continue
                 seen.add(url)

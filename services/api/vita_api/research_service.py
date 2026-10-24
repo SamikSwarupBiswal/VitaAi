@@ -266,6 +266,13 @@ class ResearchService:
 
 
 def install_research_routes(app, store, identity, settings, transport=None):
+    from .research_quality import (
+        QualityInspection,
+        QualityRequest,
+        QualityReview,
+        ResearchQuality,
+    )
+
     connector = Research(settings, transport)
     router = APIRouter(prefix=PREFIX)
 
@@ -298,6 +305,14 @@ def install_research_routes(app, store, identity, settings, transport=None):
     @router.get("/runs/{run_id}/context", response_model=ResearchContext)
     def context(run_id: UUID, actor: Current, operation: Service):
         return operation.context(run_id)
+
+    @router.get("/runs/{run_id}/quality-reviews", response_model=QualityInspection)
+    def quality_inspection(run_id: UUID, actor: Current, operation: Service):
+        return ResearchQuality(operation).inspect(run_id)
+
+    @router.post("/runs/{run_id}/quality-reviews", response_model=QualityReview)
+    def quality_review(run_id: UUID, body: QualityRequest, actor: Current, operation: Service):
+        return ResearchQuality(operation).review(run_id, body)
 
     @router.get("/runs/{run_id}/recovery-readiness", response_model=ResearchRecoveryReadiness)
     def recovery_readiness(run_id: UUID, actor: Current, operation: Service):

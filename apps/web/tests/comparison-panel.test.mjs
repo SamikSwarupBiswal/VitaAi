@@ -154,6 +154,23 @@ function harness(role = "admin", sharedPending = new Set(), available = catalog)
 }
 async function mount(app, status = ready, history = []) { app.render(); await flush(); await app.settle(status, history); }
 
+test("explicit allowed model binds request and rejects captured selection handlers", async () => {
+  const available = [{ ...catalog[0], allowed_models: { "second-model": "canonical-second" } }];
+  const app = harness("seller", new Set(), available); await mount(app);
+  app.input(0).props.onChange({ target: { checked: true } });
+  const old = app.button("Compare selected providers").props.onClick;
+  const selector = () => walk(app.render(), node => node.type === "select").at(-1);
+  selector().props.onChange({ target: { value: "second-model" } });
+  await old(); assert.equal(app.requests.length, 0);
+  const pending = app.button("Compare selected providers").props.onClick();
+  const request = app.requests.shift();
+  assert.equal(JSON.parse(request.init.body).providers[0].model, "second-model");
+  request.resolve({ ...run, results: [{ ...run.results[0], model: "second-model", expected_response_model: "canonical-second" }] });
+  await flush(); await app.settle(ready, []); await pending;
+  assert.equal(selector().props.value, "");
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
 test("BYOK is sent once only on explicit live compare and clears before uncertainty refresh", async () => {
   const available = [{ ...catalog[0], byok_allowed: true, live_configured: false }];
   const app = harness("seller", new Set(), available); await mount(app);
@@ -223,6 +240,7 @@ test("reads never dispatch; deliberate mock choices bind exact snapshot and conf
   assert.match(request.url, /accounts\/a\/compare$/);
   assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", expected_revision: 3,
     expected_snapshot_hash: view.assessment.snapshot_hash,
+    task: "analysis",
     providers: [{ schema_version: "1", provider: "openai", mode: "mock", expected_configuration_revision: 7 }] });
   request.resolve(run); await flush(); assert.ok(app.requests.every(r => !r.init.method));
   await app.settle({ ...ready, can_start: false }, [run]); await pending;

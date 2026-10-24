@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountView } from "@/lib/api";
-import { checkComparisonRun, comparisonPending, discoverComparisonProvider, readComparisons, readComparisonRun,
+import { checkComparisonRun, comparisonActionKinds, comparisonPending, discoverComparisonProvider, readComparisons, readComparisonRun,
   readComparisonRecovery, recoverComparison, startComparison, type CatalogEntry, type ComparisonReadiness,
-  type ComparisonRecoveryReadiness, type ComparisonRun, type DiscoveryResult } from "@/lib/comparison";
+  type ComparisonActionKind, type ComparisonTask, type ComparisonRecoveryReadiness, type ComparisonRun,
+  type DiscoveryResult } from "@/lib/comparison";
 import { useSession } from "./session-gate";
 import { ProviderTestPanel } from "./provider-test-panel";
 
@@ -35,6 +36,9 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
   const [keys, setKeys] = useState<Record<string, string>>({});
   const requestKeys = useRef<Record<string, string>>({});
   const eligibilityEpoch = useRef(0), renderedEpoch = eligibilityEpoch.current;
+  const [task, setTask] = useState<ComparisonTask>("analysis");
+  const [actionKind, setActionKind] = useState<ComparisonActionKind>("follow_up");
+  const [models, setModels] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     const signal = lifetime.current?.signal;
@@ -43,6 +47,8 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
     ++eligibilityEpoch.current;
     setReading(true); setReady(null); setCatalog([]); setRuns([]); setSelected(null); setRecovery(null); setDiscovery(null);
     setChoices({}); setLive({}); requestKeys.current = {}; setKeys({}); setError(null);
+    setTask("analysis"); setActionKind("follow_up");
+    setModels({});
     try {
       const value = await readComparisons(view, signal);
       if (!signal.aborted && current === sequence.current) {
@@ -68,6 +74,7 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
     const providers = catalog.filter(item => choices[item.provider]).map(item => ({ schema_version: "1" as const,
       provider: item.provider, mode: live[item.provider] ? "live" as const : "mock" as const,
       expected_configuration_revision: item.configuration_revision,
+      ...(models[item.provider] ? { model: models[item.provider] } : {}),
       ...(live[item.provider] && requestKeys.current[item.provider] ? { api_key: requestKeys.current[item.provider] } : {}) }));
     if (!signal || signal.aborted || renderedEpoch !== eligibilityEpoch.current || locked.current || comparisonPending.has(scope) || reading || !ready
       || (entry ? role !== "admin" : role === "viewer" || !ready.can_start || !providers.length || providers.length > 4)
@@ -80,10 +87,14 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
     try {
       if (entry) found = await discoverComparisonProvider(entry, live[entry.provider] ? "live" : "mock", signal, discoveryKey);
       else {
-        const run = checkComparisonRun(view, await startComparison(view, providers, signal));
+        const run = checkComparisonRun(view, await startComparison(view, providers, signal,
+          { task, action_kind: task === "drafts" ? actionKind : null }));
         if (run.account_revision !== view.account.revision || run.snapshot_hash !== view.assessment.snapshot_hash
+          || (run.task ?? "analysis") !== task || (run.action_kind ?? null) !== (task === "drafts" ? actionKind : null)
           || run.results.length !== providers.length || run.results.some((result, index) => result.provider !== providers[index].provider
-            || result.requested_mode !== providers[index].mode || result.configuration_revision !== providers[index].expected_configuration_revision)) {
+            || result.requested_mode !== providers[index].mode || result.configuration_revision !== providers[index].expected_configuration_revision
+            || providers[index].model && (result.model !== providers[index].model
+              || result.expected_response_model !== catalog.find(item => item.provider === result.provider)?.allowed_models?.[providers[index].model!]))) {
           throw new Error("Comparison context changed");
         }
         if (!signal.aborted) setNotice(`Run ${run.id}: ${run.status}. Processing completion does not mean every provider succeeded. Inspect saved records.`);
@@ -146,9 +157,30 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
     {ready?.pending_run_id && <p>Pending run {ready.pending_run_id} blocks new starts, including after worker loss. Inspect that run to check explicit finalization eligibility; reading never retries it.</p>}
     {ready?.next_start_at && <p>60-second account cooldown ends {ready.next_start_at}. Refresh records to check eligibility.</p>}
     {role === "viewer" && <p>Read only. Your current role cannot compare or discover providers.</p>}
-    <p>Choose up to four providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Models and endpoints are managed on the server.</p>
+    <p>Choose up to four providers deliberately. Every mode defaults to mock; mock/disabled/unconfigured returns no model analysis. Live requires authorized service access and independent server gates. Model choices and expected response identities are allowed by the server; discovery alone does not prove compatibility or select a model.</p>
+    <label>Comparison task<select value={task} disabled={disabled || role === "viewer"}
+      onChange={event => { const value = event.target.value; if (value !== "analysis" && value !== "drafts") return;
+        ++eligibilityEpoch.current; setTask(value); }}>
+      <option value="analysis">Evidence-linked analysis</option><option value="drafts">Evidence-linked communication drafts</option>
+    </select></label>
+    {task === "drafts" && <><label>Draft purpose<select value={actionKind} disabled={disabled || role === "viewer"}
+      onChange={event => { const value = event.target.value as ComparisonActionKind;
+        if (!comparisonActionKinds.includes(value)) return; ++eligibilityEpoch.current; setActionKind(value); }}>
+      {comparisonActionKinds.map(kind => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}
+    </select></label><p>Every selected provider receives this same purpose and retained facts. Draft text is an unapproved proposal;
+      it creates no mission, contact, CRM write or sent email. Monitor and manual review allow only internal notes.</p></>}
     {catalog.map(entry => <fieldset key={entry.provider} disabled={disabled}><legend>{entry.provider}</legend>
       <p>{entry.status} · configuration revision {entry.configuration_revision} · requested model {entry.model || "Unconfigured"} · expected response model {entry.expected_response_model || "Unconfigured"}.</p>
+      <label>{entry.provider} model for this comparison<select value={models[entry.provider] || ""}
+        disabled={disabled || role === "viewer"} onChange={event => {
+          const value = event.target.value;
+          if (value && !Object.hasOwn(entry.allowed_models ?? {}, value)) return;
+          ++eligibilityEpoch.current; setModels({ ...models, [entry.provider]: value });
+        }}>
+        <option value="">Server default ({entry.model || "Unconfigured"})</option>
+        {Object.entries(entry.allowed_models ?? {}).map(([model, expected]) =>
+          <option value={model} key={model}>{model} → expected {expected}</option>)}
+      </select></label>
       {entry.provider === "foundry" && <p>Foundry requests use the configured deployment name. Discovered model IDs do not select deployments or prove inference compatibility.</p>}
       <label><input type="checkbox" checked={!!choices[entry.provider]} disabled={disabled || role === "viewer" || (!choices[entry.provider] && chosenCount >= 4)}
         onChange={event => { if (event.target.checked && !choices[entry.provider] && chosenCount >= 4) return;
@@ -177,7 +209,7 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
     <section aria-label="Comparison history"><h2>Comparison history</h2><p>Latest 20 saved runs. Reading never dispatches inference or renews dates or authority.</p>
       {!reading && !runs.length && <p>No saved comparisons.</p>}
       <ul>{runs.map(run => <li key={run.id}><button disabled={disabled} onClick={() => inspect(run.id)}>Inspect {run.id}</button>
-        <span> · {run.status} · revision {run.account_revision} · {run.started_at}</span></li>)}</ul>
+        <span> · {run.task ?? "analysis"}{run.action_kind ? ` / ${run.action_kind}` : ""} · {run.status} · revision {run.account_revision} · {run.started_at}</span></li>)}</ul>
       <label>Older comparison run ID<input value={lookup} onChange={event => setLookup(event.target.value)} /></label>
       <button disabled={disabled || !lookup.trim()} onClick={() => inspect(lookup.trim())}>Inspect saved comparison ID</button>
       {selected && <ComparisonRecord run={selected} view={view} />}
@@ -185,7 +217,7 @@ function ComparisonAccount({ view, role, actor, organization }: { view: AccountV
         <p>Finalization preserves the original snapshot and completed results, and marks unresolved results interrupted. It never requests inference or retries. An already-authorized dispatch may still begin or finish; finalization does not prove provider cancellation.</p>
         <p>{recovery ? `Recovery: ${recovery.reason}. Run revision ${recovery.run_revision}.` : "Recovery readiness unavailable. Inspect this run again before finalizing."}</p>
         {recovery?.recover_after && <p>Worker deadline {recovery.recover_after}. Inspect again after this time to check current eligibility.</p>}
-        {recovery?.reason === "legacy_worker" && <p>This older run has no worker fencing protocol and requires operator investigation.</p>}
+        {recovery?.reason === "legacy_worker" && <p>This older run has no worker fencing protocol and requires operator investigation using the documented isolated database-copy procedure; elapsed time cannot enable online finalization.</p>}
         <button disabled={disabled || role === "viewer" || !ready || !recovery?.can_recover}
           onClick={() => finalizeInterrupted()}>Finalize interrupted comparison</button>
       </section>}
@@ -197,13 +229,15 @@ function ComparisonRecord({ run, view }: { run: ComparisonRun; view: AccountView
   const baseline = run.snapshot.assessment;
   return <section aria-label="Saved comparison"><h3>Saved comparison</h3>
     <p>Run {run.id} · {run.status} · policy {run.policy_version} · original actor {run.actor_id}.</p>
+    <p>Original task {run.task ?? "analysis"}{run.action_kind ? `; purpose ${run.action_kind}` : ""}. Retained drafts are unapproved proposals and never execution or contact evidence.</p>
     <p>Original revision {run.account_revision}; snapshot {run.snapshot_hash}. {run.account_revision !== view.account.revision
       || run.snapshot_hash !== view.assessment.snapshot_hash ? "Historical snapshot; differs from the current account." : "Snapshot matches the displayed account; this grants no renewed authority."}</p>
     <p>Started {run.started_at}; finished {run.finished_at || "Pending"}. Completed means processing finished; inspect every independent result.</p>
     {run.status === "pending" && <p>Pending is unresolved and blocks new starts. Viewing cannot recover or retry this run.</p>}
     {run.status === "discarded" && <p>Context or authority changed. Unpublished output was discarded.</p>}
-    {run.status === "interrupted" && <p>Explicitly finalized after the worker deadline. Completed results remain historical; unresolved results do not establish a provider outcome.</p>}
+    {run.status === "interrupted" && <p>Explicitly finalized through its recorded recovery protocol. Completed results remain historical; unresolved results do not establish a provider outcome.</p>}
     {run.recovery && <p>Finalized by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous run revision {run.recovery.previous_revision}; reason {run.recovery.reason}.</p>}
+    {run.recovery?.isolation_id && <p>Isolated recovery copy {run.recovery.isolation_id}. Original workers may still complete against their old database; this record does not prove cancellation.</p>}
     <h4>Retained deterministic baseline</h4>
     <p>{run.snapshot.account.name} · assessment as of {baseline.as_of} · health {baseline.health} · risk {baseline.risk} · opportunity {baseline.opportunity} · confidence {baseline.confidence}%.</p>
     <ul>{baseline.caveats.map((text, index) => <li key={index}>{text}</li>)}</ul>
@@ -218,6 +252,14 @@ function ComparisonRecord({ run, view }: { run: ComparisonRun; view: AccountView
       {result.analysis ? <><h5>Advisory findings</h5><ul>{result.analysis.findings.map((finding, index) => <li key={index}>{finding.text} · evidence {finding.evidence_ids.join(", ")}</li>)}</ul>
         <h5>Proposed next steps</h5><ul>{result.analysis.next_steps.map((step, index) => <li key={index}>{step.text} · evidence {step.evidence_ids.join(", ")}</li>)}</ul>
         <ul>{result.analysis.caveats.map((text, index) => <li key={index}>{text}</li>)}</ul></> : <p>No model analysis from this result.</p>}
+      {result.drafts && <section aria-label={`${result.provider} proposed drafts`}><h5>Unapproved communication drafts · {result.drafts.action_kind}</h5>
+        {(["email", "call_script", "voice_summary", "internal_note"] as const).map(kind => {
+          const draft = result.drafts?.[kind];
+          return <section key={kind}><h6>{kind.replaceAll("_", " ")}</h6>{draft ? <><p>{draft.text}</p>
+            <p>Evidence: {draft.evidence_ids.join(", ")}</p></> : <p>No outreach proposal for this field.</p>}</section>;
+        })}
+        <ul>{result.drafts.caveats.map((text, index) => <li key={index}>{text}</li>)}</ul>
+      </section>}
     </section>)}
   </section>;
 }

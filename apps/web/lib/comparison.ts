@@ -7,15 +7,26 @@ export type ComparisonReadiness = components["schemas"]["ComparisonReadiness"];
 export type ComparisonRecoveryReadiness = components["schemas"]["ComparisonRecoveryReadiness"];
 export type ComparisonChoice = components["schemas"]["ComparisonChoice"];
 export type DiscoveryResult = components["schemas"]["DiscoveryResult"];
+export type ComparisonTask = "analysis" | "drafts";
+export type ComparisonActionKind = components["schemas"]["CommunicationDrafts"]["action_kind"];
+export const comparisonActionKinds: ComparisonActionKind[] = ["manual_review", "support_escalation", "renewal_prep",
+  "optimization_review", "reactivation", "follow_up", "monitor"];
+export type ComparisonTaskChoice = { task: ComparisonTask; action_kind: ComparisonActionKind | null };
 const prefix = "provider-comparison";
 const accountPath = (view: AccountView) => `${prefix}/accounts/${encodeURIComponent(view.account.id)}`;
 // Retain transport locks across account/panel remounts within this organization.
 export const comparisonPending = new Set<string>();
 
 export function checkComparisonRun(view: AccountView, run: ComparisonRun) {
+  const task = run.task ?? "analysis", action = run.action_kind ?? null;
   if (run.account_id !== view.account.id || run.organization_id !== view.account.organization_id
     || run.snapshot.account.id !== run.account_id || run.snapshot.account.organization_id !== run.organization_id
-    || run.snapshot.account.revision !== run.account_revision || run.snapshot.assessment.snapshot_hash !== run.snapshot_hash) {
+    || run.snapshot.account.revision !== run.account_revision || run.snapshot.assessment.snapshot_hash !== run.snapshot_hash
+    || !["analysis", "drafts"].includes(task) || (task === "drafts"
+      ? !action || !comparisonActionKinds.includes(action) : action !== null)
+    || run.results.some(result => task === "drafts"
+      ? result.analysis != null || result.drafts != null && result.drafts.action_kind !== action
+      : result.drafts != null)) {
     throw new Error("Comparison record unavailable for this account.");
   }
   return run;
@@ -61,9 +72,13 @@ export async function recoverComparison(view: AccountView, run: ComparisonRun, r
   return saved;
 }
 
-export function startComparison(view: AccountView, providers: ComparisonChoice[], signal: AbortSignal) {
+export function startComparison(view: AccountView, providers: ComparisonChoice[], signal: AbortSignal,
+  choice: ComparisonTaskChoice = { task: "analysis", action_kind: null }) {
+  if (choice.task === "drafts" ? !choice.action_kind || !comparisonActionKinds.includes(choice.action_kind)
+    : choice.task !== "analysis" || choice.action_kind !== null) throw new Error("Choose a comparison task and action.");
   const body: components["schemas"]["ComparisonRequest"] = { schema_version: "1",
-    expected_revision: view.account.revision, expected_snapshot_hash: view.assessment.snapshot_hash, providers };
+    expected_revision: view.account.revision, expected_snapshot_hash: view.assessment.snapshot_hash, providers, task: choice.task,
+    ...(choice.task === "drafts" ? { task: choice.task, action_kind: choice.action_kind } : {}) };
   return api<ComparisonRun>(`${accountPath(view)}/compare`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
   });

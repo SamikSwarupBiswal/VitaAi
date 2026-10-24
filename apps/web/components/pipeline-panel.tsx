@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type PipelineRequest, type PipelineRun } from "@/lib/api";
 import { comparePipelineRuns } from "@/lib/pipeline-delta";
 import { SellerPriorities } from "./seller-priorities";
+import { SavedResearchFusion } from "./saved-research-fusion";
 
 export function PipelinePanel({ onSelect, organizationId, snapshots, configured, expanded = false, seller = false }: {
   onSelect: (id: string) => void; organizationId: string; snapshots: Record<string, string>; configured: boolean; expanded?: boolean; seller?: boolean;
@@ -91,6 +92,7 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
             </p>)}
           </details>
         </details> : <p>Specialist findings were not recorded in this saved run.</p>}
+        <SavedResearchFusion current={run} accountId={item.account_id} />
       </li>)}</ol><p>{run.caveats.join(" ")}</p>
       <SavedRunComparison key={run.id} current={run} />
     </div>}

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
 from typing import Annotated
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -17,7 +18,7 @@ from .hubspot_refresh import RefreshScheduler, RefreshWorker
 from .hubspot_sync import install_hubspot_routes
 from .identity import Actor, Identity, LoginFailure, LoginRequest, SessionView
 from .microsoft import PREFIX as MICROSOFT_PREFIX
-from .microsoft import Microsoft
+from .microsoft import Microsoft, decode_callback
 from .models import AdvisoryProvider
 from .nebius import Nebius
 from .pipeline import Pipeline, PipelineRequest, PipelineRun
@@ -26,6 +27,7 @@ from .provider_catalog import install_catalog_routes
 from .provider_comparison import install_comparison_routes
 from .provider_probe import install_probe_routes
 from .research import PREFIX as RESEARCH_PREFIX
+from .research_fusion import install_research_fusion_routes
 from .research_narrative import install_narrative_routes
 from .research_service import install_research_routes
 from .sample import SAMPLE_ORG, sample_records
@@ -61,7 +63,10 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             store.engine.dispose()
 
     app = FastAPI(title="VitaAi local foundation", version="0.1.0", lifespan=lifespan)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+    hosts = ["127.0.0.1", "localhost", "testserver"]
+    if microsoft.hosted_callback:
+        hosts.append(urlsplit(settings.microsoft_redirect_uri).hostname)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     app.state.store = store
     app.state.refresh_scheduler = refresh_scheduler
 
@@ -77,17 +82,41 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
 
     @app.middleware("http")
     async def local_origin(request: Request, call_next):
-        if request.url.path == MICROSOFT_PREFIX + "/callback":
+        def callback_error():
+            response = safe_error("invalid_microsoft_callback", 400)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+
+        callback = request.url.path == MICROSOFT_PREFIX + "/callback"
+        if callback:
             # Remove OAuth codes/state from the ASGI scope before access logging and errors.
             query = request.scope.get("query_string", b"")
-            request.state.microsoft_response = dict(request.query_params) if len(query) <= 16384 else {}
             request.scope["query_string"] = b""
+            data = bytearray()
+            if request.method == "POST":
+                if not microsoft.hosted_callback or request.headers.get("content-type", "").split(";", 1)[0] != "application/x-www-form-urlencoded":
+                    return callback_error()
+                async for chunk in request.stream():
+                    data.extend(chunk)
+                    if len(data) > 16384:
+                        return callback_error()
+                if query:
+                    return callback_error()
+            elif request.method == "GET" and not microsoft.hosted_callback and len(query) <= 16384:
+                data.extend(query)
+            else:
+                return callback_error()
+            try:
+                request.state.microsoft_response = decode_callback(bytes(data))
+            except (ValueError, UnicodeError):
+                return callback_error()
         origin = request.headers.get("origin")
-        if request.method == "POST" and origin and origin not in {
-            "http://127.0.0.1:3000", "http://localhost:3000",
+        if request.method == "POST" and not callback and origin and origin not in {
+            "http://127.0.0.1:3000", "http://localhost:3000", microsoft.connection_origin,
         }:
             return JSONResponse({"detail": "Untrusted request origin"}, status_code=403)
-        if (request.method == "POST" and settings.auth_mode == "session"
+        if (request.method == "POST" and not callback and settings.auth_mode == "session"
                 and request.headers.get("x-vitaai-request") != "1"):
             return JSONResponse({"detail": "Expected same-origin application request"}, status_code=403)
         response = await call_next(request)
@@ -220,6 +249,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_workflow_routes(app, store, identity, settings, provider, hubspot_transport, microsoft)
     install_hubspot_routes(app, store, identity, settings, hubspot_transport)
     install_research_routes(app, store, identity, settings, research_transport)
+    install_research_fusion_routes(app, store, settings)
     install_narrative_routes(app, store, identity, settings, narrative_transport)
     install_catalog_routes(app, store, identity, settings, comparison_transport)
     install_comparison_routes(app, store, identity, settings, comparison_transport)

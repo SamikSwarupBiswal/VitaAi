@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url), ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 function load(relative, mocks = {}) {
+  mocks = { "./saved-research-fusion": { SavedResearchFusion: () => null }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const target = new Module(filename); target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target); target.require = name => mocks[name]

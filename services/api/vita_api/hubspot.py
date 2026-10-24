@@ -133,7 +133,7 @@ class HubSpot:
             raise HubSpotFailure("hubspot_timeout") from None
         except httpx.RequestError:
             raise HubSpotFailure("hubspot_network_error") from None
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise HubSpotFailure("invalid_response") from None
 
     def read_company(self, company_id: str, now: datetime | None = None, *, before_request=None) -> CompanyRead:

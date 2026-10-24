@@ -7,7 +7,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 import httpx
-from pydantic import AwareDatetime, Field, ValidationError
+from pydantic import AwareDatetime, Field, ValidationError, model_validator
 from sqlalchemy import (
     JSON,
     Column,
@@ -78,6 +78,8 @@ class IngestionRun(HubSpotContract):
     company_id: str
     configuration_revision: int
     configuration_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    object_limit: int = Field(default=20, strict=True, ge=1, le=100)
+    page_limit: int = Field(default=5, strict=True, ge=1, le=10)
     object_type: ObjectType
     sequence: int
     revision: int = 1
@@ -89,8 +91,14 @@ class IngestionRun(HubSpotContract):
     fingerprint: str | None = None
     disposition: Literal["baseline", "unchanged", "changed"] | None = None
     previous_run_id: UUID | None = None
-    objects: list[AssociatedObject] = Field(default_factory=list, max_length=20)
+    objects: list[AssociatedObject] = Field(default_factory=list, max_length=100)
     recovered_by: str | None = None
+
+    @model_validator(mode="after")
+    def retained_bounds(self):
+        if len(self.objects) > self.object_limit:
+            raise ValueError("Saved ingestion exceeds its original object bound")
+        return self
 
 
 class IngestionRecovery(HubSpotContract):
@@ -105,6 +113,8 @@ class IngestionReadiness(HubSpotContract):
     account_revision: int
     configuration_revision: int
     configuration_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    object_limit: int = Field(default=20, ge=1, le=100)
+    page_limit: int = Field(default=5, ge=1, le=10)
     connector_configured: bool
     ingestion_enabled: bool
     can_start: bool
@@ -138,11 +148,12 @@ class AssociatedReader(HubSpot):
             if type(portal) is not int or str(portal) != self.settings.hubspot_portal_id:
                 raise HubSpotFailure("portal_mismatch")
             associations, after, seen = {}, None, set()
-            for _ in range(5):
+            page_size = min(20, self.settings.hubspot_ingestion_object_limit)
+            for _ in range(self.settings.hubspot_ingestion_page_limit):
                 data = get(f"/crm/v4/objects/companies/{company_id}/associations/{object_type}",
-                           {"limit": 20, **({"after": after} if after else {})})
+                           {"limit": page_size, **({"after": after} if after else {})})
                 rows = data.get("results")
-                if not isinstance(rows, list) or len(rows) > 20:
+                if not isinstance(rows, list) or len(rows) > page_size:
                     raise HubSpotFailure("invalid_response")
                 try:
                     for row in rows:
@@ -158,7 +169,7 @@ class AssociatedReader(HubSpot):
                         if object_id in associations and associations[object_id] != types:
                             raise HubSpotFailure("association_changed_during_read")
                         associations[object_id] = types
-                    if len(associations) > 20:
+                    if len(associations) > self.settings.hubspot_ingestion_object_limit:
                         raise HubSpotFailure("ingestion_limit_exceeded")
                     paging = data.get("paging", {})
                     if not isinstance(paging, dict):
@@ -206,6 +217,15 @@ class Ingestion:
     def __init__(self, operation):
         self.operation = operation
 
+    def configuration_hash(self, account_id):
+        _, digest = RefreshAuthorizations(self.operation).binding(account_id)
+        settings = self.operation.connector.settings
+        limits = (settings.hubspot_ingestion_object_limit, settings.hubspot_ingestion_page_limit)
+        if limits == (20, 5):
+            return digest
+        return hashlib.sha256(json.dumps({"configuration_hash": digest,
+            "object_limit": limits[0], "page_limit": limits[1]}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
     def read_run(self, connection, actor, record_id):
         payload = connection.execute(select(ingestions.c.payload).where(
             ingestions.c.organization_id == actor.organization_id, ingestions.c.id == str(record_id))).scalar()
@@ -230,7 +250,7 @@ class Ingestion:
         with self.operation.transaction() as (connection, actor):
             account = self.operation.account(connection, actor, account_id, require_mapping=False)
             settings = self.operation.connector.settings
-            _, digest = RefreshAuthorizations(self.operation).binding(account_id)
+            digest = self.configuration_hash(account_id)
             scope = (ingestions.c.organization_id == actor.organization_id,
                      ingestions.c.account_id == str(account_id))
             pending = connection.execute(select(ingestions.c.id).where(
@@ -259,7 +279,8 @@ class Ingestion:
                 reason = "ready"
             return IngestionReadiness(organization_id=actor.organization_id, account_id=account_id,
                 account_revision=account.revision, configuration_revision=settings.hubspot_configuration_revision,
-                configuration_hash=digest, connector_configured=self.operation.connector.configured,
+                configuration_hash=digest, object_limit=settings.hubspot_ingestion_object_limit,
+                page_limit=settings.hubspot_ingestion_page_limit, connector_configured=self.operation.connector.configured,
                 ingestion_enabled=settings.hubspot_ingestion_enabled, can_start=reason == "ready", reason=reason,
                 pending_run_id=pending, cooldown_until=cooldown_until)
 
@@ -305,7 +326,7 @@ class Ingestion:
             raise PolicyDenied("hubspot_ingestion_unconfigured", 503)
         with op.transaction(write=True) as (connection, actor):
             account = op.account(connection, actor, account_id, body.expected_account_revision)
-            _, configuration_hash = RefreshAuthorizations(op).binding(account_id)
+            configuration_hash = self.configuration_hash(account_id)
             if (op.connector.settings != settings
                     or settings.hubspot_configuration_revision != body.expected_configuration_revision
                     or configuration_hash != body.expected_configuration_hash):
@@ -328,6 +349,7 @@ class Ingestion:
                 company_id=settings.hubspot_company_map[str(account_id)],
                 configuration_revision=settings.hubspot_configuration_revision, object_type=body.object_type,
                 sequence=previous.sequence + 1 if previous else 1, started_at=now,
+                object_limit=settings.hubspot_ingestion_object_limit, page_limit=settings.hubspot_ingestion_page_limit,
                 worker_deadline_at=now + timedelta(minutes=2))
             run.configuration_hash = configuration_hash
             connection.execute(ingestions.insert().values(id=str(run.id), organization_id=run.organization_id,

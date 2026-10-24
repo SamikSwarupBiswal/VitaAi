@@ -7,6 +7,7 @@ import { checkResearchRun, readResearch, readResearchRun, readResearchRecovery, 
   type ResearchContextView, type ResearchReadiness, type ResearchRecoveryReadiness, type ResearchRun } from "@/lib/research";
 import { useSession } from "./session-gate";
 import { ResearchNarrativePanel } from "./research-narrative-panel";
+import { ResearchQualityPanel } from "./research-quality-panel";
 
 export function ResearchPanel({ view }: { view: AccountView }) {
   const session = useSession();
@@ -171,6 +172,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
       <ul>{runs.map(run => <li key={run.id}><button disabled={disabled} onClick={() => inspect(run.id)}>Inspect {run.id}</button>
         <span> · {run.mode} / {run.status} · revision {run.account_revision} · {run.started_at}</span></li>)}</ul>
       {selected && <ResearchRecord run={selected} readiness={readiness} now={now} />}
+      {selected && <ResearchQualityPanel view={view} run={selected} />}
       {selected && <button disabled={disabled || contextReading} onClick={() => inspectContext()}>Inspect current research context</button>}
       {contextReading && <p role="status">Reading saved context...</p>}
       {context && <ResearchContextRecord context={context} now={now} />}
@@ -180,7 +182,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
         <p>Finalization retains the original target, revision, modes and dates. It adds no sources or context window and never searches or retries. An already-authorized search may still begin or finish; finalization does not prove provider cancellation.</p>
         <p>{recovery ? `Recovery: ${recovery.reason}. Run revision ${recovery.run_revision}.` : "Recovery readiness unavailable. Inspect this run again before finalizing."}</p>
         {recovery?.recover_after && <p>Worker deadline {recovery.recover_after}. Inspect again after this time to check eligibility.</p>}
-        {recovery?.reason === "legacy_worker" && <p>This older run has no worker fencing protocol and requires operator investigation.</p>}
+        {recovery?.reason === "legacy_worker" && <p>This older run has no worker fencing protocol and requires operator investigation using the documented isolated database-copy procedure; elapsed time cannot enable online finalization.</p>}
         <button disabled={disabled || !writer || !readiness || !recovery?.can_recover}
           onClick={() => finalizeInterrupted()}>Finalize interrupted research</button>
       </section>}
@@ -188,7 +190,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
   </details>;
 }
 
-function ResearchContextRecord({ context, now }: { context: ResearchContextView; now: number | null }) {
+export function ResearchContextRecord({ context, now }: { context: ResearchContextView; now: number | null }) {
   const usable = researchContextUsable(context, now);
   const view = context.internal;
   return <section aria-label="Research context"><h3>Research context</h3>
@@ -200,6 +202,19 @@ function ResearchContextRecord({ context, now }: { context: ResearchContextView;
       <p>{context.brief.internal_summary}</p>
       <p>Internal evidence: {context.brief.internal_evidence_ids.join(", ") || "None"}.</p>
       <ul>{context.brief.caveats.map((caveat, index) => <li key={index}>{caveat}</li>)}</ul>
+      {context.brief.decision && <section aria-label="Research decision brief"><h4>Research decision brief</h4>
+        <p>{context.brief.decision.policy_version} · {context.brief.decision.focus.replaceAll("_", " ")} · unapproved · factual confidence unverified.</p>
+        {(usable || context.brief.basis === "internal_only") && <p>{context.brief.decision.executive_summary}</p>}
+        <h5>Conversation review strategy</h5>
+        <ol>{(context.brief.decision.conversation_strategy ?? []).filter(question => usable || !question.source_urls.length).map((question, index) => <li key={index}>
+          {question.question}<p>Internal evidence: {question.evidence_ids.join(", ") || "None"}. Public sources: {question.source_urls.join(", ") || "None"}.</p>
+        </li>)}</ol>
+        {usable && context.brief.decision.suggested_opening && <><h5>Suggested opening for review</h5><p>{context.brief.decision.suggested_opening}</p></>}
+        {usable && context.brief.decision.proposed_crm_note && <><h5>Unapproved CRM note proposal</h5><pre>{context.brief.decision.proposed_crm_note}</pre>
+          <a href={`/missions?account=${encodeURIComponent(view.account.id)}`}>Review this account in Missions</a>
+          <p>This link opens the workspace. It does not create, prepare, approve or write a note.</p></>}
+        <h5>Cautions</h5><ul>{context.brief.decision.cautions.map(caution => <li key={caution}>{caution}</li>)}</ul>
+      </section>}
       {usable && !!context.brief.topics?.length && <section aria-label="Public research topics">
         <h4>Public research topics</h4>
         <p>Keyword mentions only, including denials and contradictory reports. These groups do not establish events,
@@ -243,9 +258,11 @@ function ResearchRecord({ run, readiness, now }: { run: ResearchRun; readiness: 
     <p>Original account revision {run.account_revision}; target {run.target.company_name} / {run.target.domain}.</p>
     <p>Declared publisher domains: {run.target.publisher_domains?.join(", ") || "None"}. Company mentions remain unverified.</p>
     <p>Declared company name aliases: {run.target.company_aliases?.join(", ") || "None"}. These do not verify identity.</p>
+    <p>Additional declared company domains: {run.target.company_domains?.join(", ") || "None"}. Required publisher identity terms: {run.target.identity_terms?.join(", ") || "None"}. These are matching constraints, not verified identity.</p>
     <p>Started {run.started_at}; finished {run.finished_at || "Pending"}; context expires {run.expires_at || "No context window"}.</p>
     <p>Run revision {run.revision}; worker deadline {run.worker_deadline_at || "Unavailable (legacy record)"}.</p>
     {run.recovery && <p>Finalized as interrupted by {run.recovery.actor_id} at {run.recovery.recovered_at}; previous run revision {run.recovery.previous_revision}; reason {run.recovery.reason}. This records finalization, not provider completion.</p>}
+    {run.recovery?.isolation_id && <p>Isolated recovery copy {run.recovery.isolation_id}. Original workers may still complete against their old database; this record does not prove cancellation.</p>}
     <p>{researchContext(run, readiness, now)}</p>
     <p>{run.caveat}</p>
     {run.error_code && <p>Server result: {run.error_code}</p>}

@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.identity import Identity, sessions, users
@@ -272,8 +271,10 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(before, self.store.list_accounts(SAMPLE_ORG))
         self.assertIn("alembic_version", inspect(self.store.engine).get_table_names())
         with self.store.engine.connect() as connection:
-            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0017")
+            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0019")
             self.assertIn("hubspot_ingestion_runs", inspect(connection).get_table_names())
+            self.assertTrue({"hubspot_seed_jobs", "hubspot_seed_versions", "research_quality_reviews"}
+                <= set(inspect(connection).get_table_names()))
             self.assertEqual(connection.execute(select(users.c.id)).scalar(), self.user.id)
 
     def test_closed_pooled_connection_recovers_before_first_query(self):

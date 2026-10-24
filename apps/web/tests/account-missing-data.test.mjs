@@ -10,6 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
+  mocks = { "./saved-research-fusion": { SavedResearchFusion: () => null }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const compiled = ts.transpileModule(readFileSync(filename, "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },

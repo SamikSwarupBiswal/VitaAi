@@ -34,8 +34,9 @@ class CatalogEntry(Contract):
     model: str | None
     expected_response_model: str | None
     status: Literal["disabled", "unconfigured", "configured_unverified"]
-    capabilities: list[Literal["model_discovery", "account_analysis"]]
+    capabilities: list[Literal["model_discovery", "account_analysis", "account_drafting"]]
     byok_allowed: bool = False
+    allowed_models: dict[str, str] = Field(default_factory=dict, max_length=21)
 
 
 class DiscoveryRequest(Contract):
@@ -96,7 +97,9 @@ class ProviderCatalog:
                 configuration_revision=config.revision, model=config.model or None,
                 expected_response_model=config.response_model or config.model or None,
                 status="disabled" if not config.enabled else "configured_unverified" if configured else "unconfigured",
-                capabilities=["model_discovery", "account_analysis"],
+                capabilities=["model_discovery", "account_analysis", "account_drafting"],
+                allowed_models={**config.allowed_models,
+                    **({config.model: config.response_model or config.model} if config.model else {})},
                 byok_allowed=bool(self.settings.comparison_byok_enabled and config.enabled and config.live_enabled
                     and config.model and (provider != "foundry" or config.resource_name))))
         return result

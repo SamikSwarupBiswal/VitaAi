@@ -121,7 +121,8 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
   const inspectionSequence = generation;
   function submit(event: FormEvent) { event.preventDefault(); void mutate("start"); }
   return <details className="pipeline-panel hubspot-panel"><summary>Associated HubSpot records · {view.account.name}</summary>
-    <p>Explicit read-only staging of one associated object type, limited to five pages and twenty unique objects. Incomplete reads fail without partial output. Source promotion and scheduled staging are separate.</p>
+    <p>Explicit read-only staging of one associated object type. Incomplete reads fail without partial output. Source promotion and scheduled staging are separate.</p>
+    <p>Configured bounds: {readiness ? readiness.page_limit ?? 5 : "unavailable"} pages and {readiness ? readiness.object_limit ?? 20 : "unavailable"} unique objects. The original two-minute worker deadline still applies.</p>
     <p>Current account revision {view.account.revision}; configuration revision {readiness?.configuration_revision ?? "unavailable"}; hash {readiness?.configuration_hash || "unavailable"}.</p>
     <p>Start readiness: {readiness?.reason || "unavailable"}. Configuration does not prove connectivity or factual freshness.</p>
     {!admin && <p>Read only. An administrator must start or finalize ingestion.</p>}
@@ -138,6 +139,7 @@ function IngestionAccount({ view, admin }: { view: AccountView; admin: boolean }
       <form onSubmit={event => { event.preventDefault(); if (lookup === currentLookup.current) void inspect(lookup.id, inspectionSequence); }}><label>Saved ingestion ID<input maxLength={36} required value={lookup.id} onChange={event => changeLookup(event.target.value)} /></label><button disabled={pending || reading}>Load saved ingestion</button></form>
       {selected && <section aria-label="Saved ingestion"><h4>{selected.id} · {selected.object_type} · {selected.status}</h4>
         <p>Sequence {selected.sequence}; revision {selected.revision}; original actor {selected.actor_id}; account revision {selected.account_revision}; portal {selected.portal_id}; company {selected.company_id}.</p>
+        <p>Original limits: {selected.page_limit ?? 5} pages and {selected.object_limit ?? 20} unique objects.</p>
         <p>Configuration revision {selected.configuration_revision}; hash {selected.configuration_hash || "legacy unavailable"}; fingerprint {selected.fingerprint || "none"}; disposition {selected.disposition || "none"}; previous run {selected.previous_run_id || "none"}.</p>
         <p>Started {selected.started_at}; original deadline {selected.worker_deadline_at}; finished {selected.finished_at || "none"}; error {selected.error_code || "none"}; recovered by {selected.recovered_by || "none"}.</p>
         <p>Raw properties preserve missing and null values. Deal amount is not annual value; object update time is not activity time. These records do not change facts, metrics, scores, detection or workflow authority.</p>

@@ -71,6 +71,17 @@ from .hubspot_refresh import (
     RefreshScheduleView,
 )
 from .hubspot_seed import SeedPreview, SeedPreviewRequest, preview_seed
+from .hubspot_seeding import (
+    SeedBinding,
+    SeedCleanup,
+    Seeding,
+    SeedInspection,
+    SeedJob,
+    SeedPrepare,
+    SeedReadiness,
+    SeedRecovery,
+    SeedReview,
+)
 from .identity import Actor, sessions, token_digest, users
 from .storage import accounts, selected_evidence, selected_source, source_versions
 
@@ -381,6 +392,46 @@ def install_hubspot_routes(app, store, identity, settings, transport=None):
     @router.post("/accounts/{account_id}/seed-preview", response_model=SeedPreview)
     def seed_preview(account_id: UUID, body: SeedPreviewRequest, actor: Current, operation: Service):
         return preview_seed(operation, account_id, body)
+
+    @router.get("/accounts/{account_id}/seeds/readiness", response_model=SeedReadiness)
+    def seed_readiness(account_id: UUID, actor: Current, operation: Service):
+        return Seeding(operation).readiness(account_id)
+
+    @router.get("/accounts/{account_id}/seeds", response_model=list[SeedJob])
+    def seed_history(account_id: UUID, actor: Current, operation: Service):
+        return Seeding(operation).history(account_id)
+
+    @router.post("/accounts/{account_id}/seeds", response_model=SeedJob)
+    def seed_prepare(account_id: UUID, body: SeedPrepare, actor: Current, operation: Service):
+        return Seeding(operation).prepare(account_id, body)
+
+    @router.get("/seeds/{job_id}", response_model=SeedInspection)
+    def seed_inspect(job_id: UUID, actor: Current, operation: Service):
+        return Seeding(operation).inspection(job_id)
+
+    @router.get("/seeds/{job_id}/versions", response_model=list[SeedJob])
+    def seed_versions(job_id: UUID, actor: Current, operation: Service):
+        return Seeding(operation).history_versions(job_id)
+
+    @router.post("/seeds/{job_id}/review", response_model=SeedJob)
+    def seed_review(job_id: UUID, body: SeedReview, actor: Current, operation: Service):
+        return Seeding(operation).review(job_id, body)
+
+    @router.post("/seeds/{job_id}/execute", response_model=SeedJob)
+    def seed_execute(job_id: UUID, body: SeedBinding, actor: Current, operation: Service):
+        return Seeding(operation).execute(job_id, body)
+
+    @router.post("/seeds/{job_id}/cleanup-preview", response_model=SeedJob)
+    def seed_cleanup_preview(job_id: UUID, body: SeedCleanup, actor: Current, operation: Service):
+        return Seeding(operation).prepare_cleanup(job_id, body)
+
+    @router.post("/seeds/{job_id}/reconcile", response_model=SeedJob)
+    def seed_reconcile(job_id: UUID, body: SeedBinding, actor: Current, operation: Service):
+        return Seeding(operation).reconcile(job_id, body)
+
+    @router.post("/seeds/{job_id}/recover", response_model=SeedJob)
+    def seed_recover(job_id: UUID, body: SeedRecovery, actor: Current, operation: Service):
+        return Seeding(operation).recover(job_id, body)
 
     @router.post("/accounts/{account_id}/ingestions", response_model=IngestionRun)
     def ingest(account_id: UUID, body: IngestionRequest, actor: Current, operation: Service):

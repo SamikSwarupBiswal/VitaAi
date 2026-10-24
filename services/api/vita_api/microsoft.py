@@ -4,7 +4,7 @@ import json
 import re
 import secrets
 from datetime import UTC, datetime
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -31,6 +31,26 @@ from .workflow_contracts import DestinationBinding
 PREFIX = "/api/integrations/microsoft"
 SCOPES = ["https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/Mail.ReadWrite"]
 COOKIE = "vitaai_microsoft_flow"
+
+
+def decode_callback(encoded: bytes):
+    """Bounded unique form/query fields; never echo codes/state or provider errors."""
+    if not encoded or len(encoded) > 16384:
+        raise ValueError("Invalid Microsoft callback")
+    raw = encoded.decode("ascii")
+    if re.search(r"%(?![a-fA-F0-9]{2})", raw):
+        raise ValueError("Invalid Microsoft callback")
+    fields = parse_qsl(raw, keep_blank_values=True, strict_parsing=True,
+        max_num_fields=16, encoding="utf-8", errors="strict")
+    response = dict(fields)
+    if (len(response) != len(fields) or not 16 <= len(response.get("state", "")) <= 256
+            or bool(response.get("code")) == bool(response.get("error"))
+            or any(not re.fullmatch(r"[a-zA-Z_]{1,80}", key) or any(char in value for char in "\x00\r\n")
+                for key, value in fields)):
+        raise ValueError("Invalid Microsoft callback")
+    return response
+
+
 flows = Table("microsoft_flows", metadata,
     Column("id", String(64), primary_key=True), Column("organization_id", String(80), nullable=False),
     Column("actor_id", String(80), nullable=False), Column("session_hash", String(64), nullable=False),
@@ -115,7 +135,16 @@ class Microsoft:
 
     @property
     def connection_origin(self):
-        return "http://" + urlsplit(self.settings.microsoft_redirect_uri).hostname + ":3000"
+        return self.settings.microsoft_web_origin or "http://" + urlsplit(self.settings.microsoft_redirect_uri).hostname + ":3000"
+
+    @property
+    def hosted_callback(self):
+        return urlsplit(self.settings.microsoft_redirect_uri).scheme == "https"
+
+    @property
+    def flow_cookie_options(self):
+        return {"httponly": True, "samesite": "none" if self.hosted_callback else "lax",
+            "secure": self.hosted_callback, "path": PREFIX + "/callback"}
 
     def seal(self, value):
         return self.cipher().encrypt(canonical_json(value)).decode("ascii")
@@ -132,6 +161,8 @@ class Microsoft:
             s.microsoft_organization_id, s.microsoft_configuration_revision, s.microsoft_redirect_uri]
         if s.microsoft_refresh_enabled:
             configuration.append("explicit-refresh-1")
+        if s.microsoft_web_origin or self.hosted_callback:
+            configuration.extend(["hosted-callback-1", self.connection_origin])
         return hashlib.sha256(canonical_json(configuration)).hexdigest()
 
     def _tx(self, actor_id, session_token=None, *, authenticated=True, write=True):
@@ -162,7 +193,7 @@ class Microsoft:
                 expires_at=int(self.clock().timestamp()) + 600, consumed=False, encrypted_flow=""))
         try:
             flow = self.oauth().initiate_auth_code_flow(SCOPES, redirect_uri=self.settings.microsoft_redirect_uri,
-                                                       prompt="select_account")
+                prompt="select_account", **({"response_mode": "form_post"} if self.hosted_callback else {}))
             if not isinstance(flow["state"], str) or not 16 <= len(flow["state"]) <= 256:
                 raise ValueError("Invalid state")
             encrypted = self.seal(flow)
@@ -175,10 +206,18 @@ class Microsoft:
             pending = connection.execute(select(flows).where(flows.c.id == flow_id)).mappings().first()
             self._pending(connection, actor, pending, consumed=False)
             connection.execute(update(flows).where(flows.c.id == flow_id).values(encrypted_flow=encrypted))
-        return MicrosoftStart(authorization_url=flow["auth_uri"]), cookie
+        return MicrosoftStart(authorization_url=flow["auth_uri"]), self.seal({"flow_token": cookie}) if self.hosted_callback else cookie
 
     def complete(self, cookie, response):
-        # Lax flow cookie on cross-site callback; original Strict application session checked in DB.
+        # A hosted form POST uses only the encrypted flow cookie. The original Strict
+        # application session/role is still revalidated in the durable database.
+        if self.hosted_callback:
+            if not isinstance(cookie, str) or len(cookie) > 4096:
+                raise PolicyDenied("microsoft_state_invalid", 409)
+            value = self.unseal(cookie)
+            cookie = value.get("flow_token") if isinstance(value, dict) else None
+        if not isinstance(cookie, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", cookie):
+            raise PolicyDenied("microsoft_state_invalid", 409)
         with self.store.engine.connect() as connection:
             pending = connection.execute(select(flows).where(flows.c.id == token_digest(cookie or ""))).mappings().first()
         if pending is None:
