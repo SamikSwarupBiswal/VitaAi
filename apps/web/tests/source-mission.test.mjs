@@ -136,6 +136,22 @@ test("plan input changes discard late reads and clear explicit alternative choic
   await app.button("Create draft from selected event and plan").props.onClick(); assert.equal(env.requests.length, 0); app.unmount();
 });
 
+test("captured plan form cannot load a previous input after replacement or refresh", async t => {
+  const env = environment(t), app = env.mount(); await env.ready(app);
+  app.input().props.onChange({ target: { value: plan.id } });
+  const submit = app.form().props.onSubmit;
+  app.input().props.onChange({ target: { value: id(99) } });
+  const submitted = submit({ preventDefault() {} }); await flush();
+  assert.equal(env.requests.length, 0, "A captured submit must not load the prior plan ID");
+  await submitted;
+  const beforeRefresh = app.form().props.onSubmit;
+  const refreshed = app.button("Refresh selection records").props.onClick(); await env.context(); await refreshed;
+  const obsolete = beforeRefresh({ preventDefault() {} }); await flush();
+  assert.equal(env.requests.length, 0, "Refresh must invalidate old form callbacks even when the ID is unchanged");
+  await obsolete;
+  app.unmount();
+});
+
 test("pending guard survives unmount; obsolete responses cannot restore controls", async t => {
   const env = environment(t), app = env.mount(); await env.ready(app); await env.proposal(app); app.choose();
   const pending = app.button("Create draft from selected event and plan").props.onClick(), request = env.requests.shift(); app.unmount();

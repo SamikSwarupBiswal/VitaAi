@@ -13,7 +13,7 @@ export function SourceMissionPanel({ view, record }: { view: AccountView; record
   const [ready, setReady] = useState(false);
   const [reading, setReading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [planId, setPlanId] = useState("");
+  const [planInput, setPlanInput] = useState({ id: "" });
   const [plan, setPlan] = useState<Plan | null>(null);
   const [alternative, setAlternative] = useState("");
   const [selection, setSelection] = useState<SourceSelection | null>(null);
@@ -22,12 +22,14 @@ export function SourceMissionPanel({ view, record }: { view: AccountView; record
   const lifetime = useRef<AbortController | null>(null);
   const sequence = useRef(0), locked = useRef(false), eligible = useRef(false);
   const proposal = useRef<Plan | null>(null), chosen = useRef("");
+  const currentInput = useRef(planInput);
   const writer = !!actor && actor.organization_id === view.account.organization_id && actor.role !== "viewer";
 
   const refresh = useCallback(async () => {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted) return;
     const current = ++sequence.current; eligible.current = false; proposal.current = null; chosen.current = "";
+    currentInput.current = { id: currentInput.current.id }; setPlanInput(currentInput.current);
     setReady(false); setReading(true); setPlan(null); setAlternative(""); setSelection(null); setError(null);
     try {
       const context = await readSourceContext(view, record, signal);
@@ -49,16 +51,18 @@ export function SourceMissionPanel({ view, record }: { view: AccountView; record
 
   function changePlan(value: string) {
     ++sequence.current; proposal.current = null; chosen.current = "";
-    setPlanId(value); setPlan(null); setAlternative(""); setReading(false); setError(null);
+    currentInput.current = { id: value }; setPlanInput(currentInput.current);
+    setPlan(null); setAlternative(""); setReading(false); setError(null);
   }
 
   async function loadPlan(event: FormEvent) {
     event.preventDefault(); const signal = lifetime.current?.signal;
-    if (!signal || signal.aborted || !writer || !eligible.current || locked.current || sourceSelectionPending(view)) return;
+    if (!signal || signal.aborted || !writer || !eligible.current || locked.current || sourceSelectionPending(view)
+      || planInput !== currentInput.current) return;
     const current = ++sequence.current; proposal.current = null; chosen.current = "";
     setPlan(null); setAlternative(""); setReading(true); setError(null);
     try {
-      const value = await readSourcePlan(view, record, planId, signal);
+      const value = await readSourcePlan(view, record, planInput.id, signal);
       if (!signal.aborted && current === sequence.current) { proposal.current = value; setPlan(value); }
     } catch { if (!signal.aborted && current === sequence.current) setError("Saved plan is unavailable, used, stale or incompatible. Load a fresh unused plan for this account/event."); }
     finally { if (!signal.aborted && current === sequence.current) setReading(false); }
@@ -94,7 +98,7 @@ export function SourceMissionPanel({ view, record }: { view: AccountView; record
     {notice && <p role="status">{notice}</p>}{error && <p role="alert" className="error-banner">{error}</p>}
     {selection ? <SelectionRecord selection={selection} view={view} /> : <>
       <p>Create a plan explicitly in <a href={`/missions?account=${encodeURIComponent(view.account.id)}`}>Missions</a>, copy its saved ID before starting a mission, then load it here. Loading never creates a plan or calls a model.</p>
-      <form onSubmit={loadPlan}><label>Saved plan ID<input value={planId} required maxLength={36} disabled={pending || !writer || !compatible || !ready}
+      <form onSubmit={loadPlan}><label>Saved plan ID<input value={planInput.id} required maxLength={36} disabled={pending || !writer || !compatible || !ready}
         onChange={event => changePlan(event.target.value)} /></label>
         <button disabled={pending || reading || !writer || !compatible || !ready}>Load saved plan</button></form>
       {plan && <><p>Plan {plan.id} · revision {plan.revision} · {plan.source} / {plan.validation}. Account revision {plan.evidence.account_revision}; as of {plan.evidence.as_of}.</p>
