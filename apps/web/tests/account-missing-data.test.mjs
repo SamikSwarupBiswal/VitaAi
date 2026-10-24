@@ -29,6 +29,7 @@ const delta = load("../lib/pipeline-delta.ts");
 const api = load("../lib/api.ts");
 const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
+function ReadinessMarker() { return null; }
 const view = (id, value, renewal) => ({
   account: { id, name: id, industry: "Test", annual_value: value, revision: 1 }, renewal_days: renewal,
   assessment: { health: 100, risk: 0, opportunity: 0, confidence: 75, caveats: [], factors: [],
@@ -40,8 +41,9 @@ function briefingWorkspace(hooks = {}, navigation = {}, session = null, apiOverr
     react: hooks, "next/navigation": navigation, "next/link": { __esModule: true, default: ({ children }) => children },
     "@/lib/api": apiOverride, "./account-table": table, "./account-detail": detail,
     ...Object.fromEntries(["pipeline-panel", "session-gate", "hubspot-panel", "research-panel", "comparison-panel",
-      "source-detection-panel", "hubspot-ingestion-panel", "hubspot-refresh-panel"].map(name => ["./" + name, {}])),
+      "source-detection-panel", "hubspot-ingestion-panel", "hubspot-refresh-panel", "operations-readiness"].map(name => ["./" + name, {}])),
     "./session-gate": { useSession: () => session },
+    "./operations-readiness": { OperationsReadiness: ReadinessMarker },
   }, "\nexports.briefForAcceptance = PortfolioBriefing; exports.contentForAcceptance = WorkspaceContent; exports.operationsForAcceptance = OperationsMissions; exports.managerForAcceptance = ManagerWorkSummary;");
 }
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"
@@ -100,6 +102,27 @@ test("operations sample mode offers no private mission request", () => {
     const html = renderToStaticMarkup(workspace.operationsForAcceptance({ portfolio: { organization_id: "org", accounts: [] } }));
     assert.match(html, /Session identity/); assert.equal(requested, false);
   } finally { if (prior === undefined) delete globalThis.window; else globalThis.window = prior; }
+});
+
+test("integration summary is Operations-only, uses the selected account and has exact existing control targets", () => {
+  const selected = view("A", 1, 1), portfolio = { accounts: [selected], organization_id: "org", as_of: "2026-10-24" };
+  for (const [persona, loading, error, blocked] of [["operations", false, null, false], ["seller", false, null, false],
+    ["operations", true, null, false], ["operations", false, "failed", false], ["operations", false, null, true]]) {
+    let cursor = 0;
+    const states = [portfolio, null, loading, error, "", "all", "risk", true, false, null, {}, null, blocked];
+    const workspace = briefingWorkspace({ useEffect() {}, useCallback: fn => fn, useRef: initial => ({ current: initial }),
+      useMemo: fn => fn(), useState: initial => [cursor < states.length ? states[cursor++] : (cursor++, initial), () => {}] },
+      { useRouter: () => ({}), useSearchParams: () => new URLSearchParams("account=A") });
+    const tree = workspace.contentForAcceptance({ accountDirectory: false, persona });
+    const nodes = walk(tree), summary = nodes.find(n => n.type === ReadinessMarker);
+    assert.equal(!!summary, persona === "operations" && !loading && !error && !blocked);
+    if (summary) {
+      assert.equal(summary.props.view, selected);
+      for (const target of ["scheduled-staging", "associated-records", "advisory-research", "provider-comparison"]) {
+        assert.equal(nodes.filter(n => n.props?.id === target).length, 1, target);
+      }
+    }
+  }
 });
 
 test("manager summary counts exact owner lifecycle records and links only actual completed missions", () => {
@@ -368,6 +391,7 @@ test("workspace discloses incomplete totals and sorts unknowns last in both dire
       "./source-detection-panel": { SourceDetectionPanel: () => null },
       "./hubspot-ingestion-panel": { HubSpotIngestionPanel: () => null },
       "./hubspot-refresh-panel": { HubSpotRefreshPanel: () => null },
+      "./operations-readiness": { OperationsReadiness: () => null },
     }, "\nexports.contentForAcceptance = WorkspaceContent;");
     const tree = workspace.contentForAcceptance({ accountDirectory: true, persona: "executive" });
     const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"

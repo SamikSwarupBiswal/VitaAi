@@ -1,0 +1,119 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import Module, { createRequire } from "node:module";
+import path from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url), ts = require("typescript");
+const { renderToStaticMarkup } = require("react-dom/server");
+const view = { account: { id: "account", organization_id: "org", revision: 3, name: "A <source>" },
+  source: { id: "source" }, assessment: { snapshot_hash: "hash" } };
+const base = { organization_id: "org", account_id: "account", account_revision: 3 };
+const values = [
+  { ...base, authorization: { id: "original-grant", status: "revoked", expires_at: "2026-10-23T10:00:00Z" },
+    can_authorize: false, worker_available: false, pending_occurrence_id: "pending-occurrence" },
+  { ...base, ingestion_enabled: true, connector_configured: true, can_start: false, reason: "ingestion_pending",
+    pending_run_id: "pending-ingestion", cooldown_until: "2026-10-24T10:00:00Z" },
+  { ...base, live_status: "unconfigured", can_start: false, pending_run_id: null, next_start_at: null },
+  { ...base, configured: true, can_start: true, pending_run_id: null, next_start_at: null, snapshot_hash: "hash" },
+];
+const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"
+  ? [node, ...walk(node.props?.children)] : [];
+
+function environment(t, initialSession = { mode: "session", actor: { id: "viewer", role: "viewer", organization_id: "org" } }) {
+  const requests = [], listeners = new Map(), prior = globalThis.window;
+  globalThis.window = { addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); },
+    removeEventListener(name, fn) { listeners.get(name)?.delete(fn); } };
+  t.after(() => { globalThis.window = prior; });
+  let session = initialSession, cursor = 0, effects = [], cleanups = [], selected = view;
+  const slots = [];
+  const hooks = {
+    useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial;
+      return [slots[i], value => { slots[i] = typeof value === "function" ? value(slots[i]) : value; }]; },
+    useRef(initial) { const i = cursor++; if (!(i in slots)) slots[i] = { current: initial }; return slots[i]; },
+    useCallback(fn, deps) { const i = cursor++; if (!(i in slots) || deps.some((v, j) => v !== slots[i].deps[j])) slots[i] = { fn, deps }; return slots[i].fn; },
+    useEffect(fn, deps) { const i = cursor++; if (!(i in slots) || deps.some((v, j) => v !== slots[i][j])) {
+      slots[i] = deps; effects.push(() => { cleanups[i]?.(); cleanups[i] = fn(); }); } },
+  };
+  const filename = fileURLToPath(new URL("../components/operations-readiness.tsx", import.meta.url));
+  const output = ts.transpileModule(readFileSync(filename, "utf8"), {
+    compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const mod = new Module(filename); mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
+  const mocks = { react: hooks, "./session-gate": { useSession: () => session },
+    "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) } };
+  const normal = mod.require.bind(mod); mod.require = name => name in mocks ? mocks[name] : normal(name);
+  mod._compile(output, filename);
+  const render = () => { cursor = 0; const tree = mod.exports.OperationsReadiness({ view: selected });
+    const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
+  function reply(batch = requests.splice(0), records = values, current = selected) {
+    assert.equal(batch.length, 5); assert.ok(batch.every(r => !r.init.method && r.init.signal));
+    batch[0].resolve(current);
+    batch.slice(1).forEach((r, i) => records[i] instanceof Error ? r.reject(records[i]) : r.resolve(records[i]));
+  }
+  return { requests, reply, render, read: mod.exports.readOperationsReadiness,
+    button: () => walk(render()).find(n => n.type === "button"),
+    select(value) { selected = value; }, actor(value) { session = value; },
+    unmount() { cleanups.forEach(fn => fn?.()); }, listeners };
+}
+
+test("readiness reads only current scoped local records and retains pending IDs and original dates", async t => {
+  const env = environment(t), pending = env.read(view, new AbortController().signal);
+  assert.deepEqual(env.requests.map(r => r.url), ["accounts/account", "integrations/hubspot/accounts/account/refresh-schedule",
+    "integrations/hubspot/accounts/account/ingestions/readiness", "integrations/research/accounts/account/readiness", "provider-comparison/accounts/account/readiness"]);
+  env.reply(); const rows = await pending;
+  assert.match(rows[0].detail, /pending-occurrence.*original-grant.*revoked.*2026-10-23T10:00:00Z/);
+  assert.match(rows[1].detail, /pending-ingestion.*2026-10-24T10:00:00Z/);
+  assert.match(rows[2].detail, /Live service unconfigured/); assert.match(rows[3].detail, /Configured, unverified/);
+});
+
+test("an unavailable or crossed integration hides only that row; crossed account verification rejects all", async t => {
+  const env = environment(t);
+  for (const bad of [new Error("private upstream error"), { ...values[1], account_id: "foreign", pending_run_id: "private-pending" },
+    { ...values[1], organization_id: "foreign" }, { ...values[1], account_revision: 2 }]) {
+    const pending = env.read(view, new AbortController().signal); env.reply(undefined, [values[0], bad, values[2], values[3]]);
+    const rows = await pending; assert.match(rows[1].detail, /Read unavailable/); assert.match(rows[0].detail, /original-grant/);
+    assert.doesNotMatch(JSON.stringify(rows), /private/);
+  }
+  for (const current of [{ ...view, account: { ...view.account, revision: 4 } }, { ...view, source: { id: "changed" } },
+    { ...view, assessment: { snapshot_hash: "other" } }, { ...view, account: { ...view.account, organization_id: "foreign" } }]) {
+    const pending = env.read(view, new AbortController().signal); env.reply(undefined, values, current);
+    await assert.rejects(pending, /Current account unavailable/);
+  }
+});
+
+test("viewer summary preserves escaped text and links only to existing read-only control targets", async t => {
+  const env = environment(t); env.render(); await flush(); env.reply(); await flush();
+  const tree = env.render(), html = renderToStaticMarkup(tree);
+  assert.match(html, /A &lt;source&gt;/); assert.match(html, /No provider request was made/); assert.match(html, /pending-occurrence/);
+  assert.deepEqual(walk(tree).filter(n => n.type === "a").map(n => n.props.href),
+    ["#scheduled-staging", "#associated-records", "#advisory-research", "#provider-comparison"]);
+  assert.equal(walk(tree).filter(n => n.type === "form").length, 0); assert.equal(env.requests.length, 0); env.unmount();
+});
+
+test("refresh clears prior success and late reads cannot replace the latest result", async t => {
+  const env = environment(t); env.render(); await flush(); env.reply(); await flush();
+  const first = env.button().props.onClick(); const obsolete = env.requests.splice(0);
+  assert.doesNotMatch(renderToStaticMarkup(env.render()), /original-grant/);
+  const latest = env.button().props.onClick(); const fresh = env.requests.splice(0);
+  env.reply(fresh, [{ ...values[0], authorization: null, pending_occurrence_id: null }, ...values.slice(1)]); await latest;
+  env.reply(obsolete); await first;
+  assert.doesNotMatch(renderToStaticMarkup(env.render()), /original-grant/);
+  const failed = env.button().props.onClick(), batch = env.requests.splice(0); batch[0].reject(new Error("read failed"));
+  batch.slice(1).forEach((r, i) => r.resolve(values[i])); await failed;
+  assert.match(renderToStaticMarkup(env.render()), /Current readiness unavailable/); assert.equal(env.requests.length, 0); env.unmount();
+});
+
+test("sample mode makes no private read; account and actor changes cancel and hide prior records", async t => {
+  const sample = environment(t, { mode: "sample", actor: null }); sample.render(); await flush();
+  assert.equal(sample.requests.length, 0); assert.match(renderToStaticMarkup(sample.render()), /Sign in/); sample.unmount();
+  const env = environment(t); env.render(); await flush(); const batch = env.requests.splice(0);
+  env.select({ ...view, account: { ...view.account, id: "other" } }); env.render(); await flush();
+  assert.ok(batch.every(r => r.init.signal.aborted)); env.reply(batch); await flush();
+  assert.doesNotMatch(renderToStaticMarkup(env.render()), /original-grant/);
+  env.actor({ mode: "session", actor: { id: "foreign", role: "viewer", organization_id: "foreign" } });
+  env.render(); await flush(); const prior = env.requests.splice(0); assert.ok(prior.every(r => r.init.signal.aborted));
+  assert.match(renderToStaticMarkup(env.render()), /Sign in/); env.unmount();
+});

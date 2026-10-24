@@ -311,6 +311,7 @@ function workspaceHarness(t) {
   };
   const children = Object.fromEntries(["AccountTable", "AccountDetail", "PipelinePanel", "HubSpotPanel", "ResearchPanel", "SourceDetectionPanel", "ComparisonPanel", "HubSpotRefreshPanel", "HubSpotIngestionPanel"].map(name => [name, () => null]));
   const workspace = load("../components/workspace.tsx", { react: hooks,
+    "./operations-readiness": { OperationsReadiness: () => null },
     "./hubspot-refresh-panel": children,
     "./hubspot-ingestion-panel": children,
     "next/navigation": { useRouter: () => ({}), useSearchParams: () => new URLSearchParams({ account: "a" }) },

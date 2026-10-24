@@ -16,6 +16,7 @@ import { ComparisonPanel } from "./comparison-panel";
 import { SourceDetectionPanel } from "./source-detection-panel";
 import { HubSpotIngestionPanel } from "./hubspot-ingestion-panel";
 import { HubSpotRefreshPanel } from "./hubspot-refresh-panel";
+import { OperationsReadiness } from "./operations-readiness";
 
 export function Workspace({ accountDirectory = false }: { accountDirectory?: boolean }) {
   const params = useSearchParams();
@@ -354,13 +355,15 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         {portfolio && persona === "operations" && <p className="data-stamp">Model: {provider?.configured ? "Configured; inspect individual runs for validation." : "Unconfigured."} Evidence assessment: {portfolio.as_of}. External execution unavailable.</p>}
         {portfolio && persona === "operations" && !loading && !error && !authorityBlocked && <OperationsMissions portfolio={portfolio}
           key={`operations:${portfolio.organization_id}:${sourceGeneration}`} />}
+        {selected && persona === "operations" && !loading && !error && !authorityBlocked && <OperationsReadiness view={selected}
+          key={`readiness:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
         {selected && <HubSpotPanel view={selected} key={`hubspot:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`}
           blocked={authorityBlocked} onInvalidate={() => { setSourcePending(true); invalidateAuthority(); }} onRefresh={refreshSource} />}
-        {selected && !authorityBlocked && <ComparisonPanel view={selected} key={`comparison:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
-        {selected && !authorityBlocked && <ResearchPanel view={selected} key={`research:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
+        {selected && !authorityBlocked && <div id="provider-comparison"><ComparisonPanel view={selected} key={`comparison:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} /></div>}
+        {selected && !authorityBlocked && <div id="advisory-research"><ResearchPanel view={selected} key={`research:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} /></div>}
         {selected && !authorityBlocked && <SourceDetectionPanel view={selected} key={`detection:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
-        {selected && !authorityBlocked && <HubSpotRefreshPanel view={selected} key={`refresh:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
-        {selected && !authorityBlocked && <HubSpotIngestionPanel view={selected} key={`ingestion:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} />}
+        {selected && !authorityBlocked && <div id="scheduled-staging"><HubSpotRefreshPanel view={selected} key={`refresh:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} /></div>}
+        {selected && !authorityBlocked && <div id="associated-records"><HubSpotIngestionPanel view={selected} key={`ingestion:${selected.account.id}:${selected.account.revision}:${sourceGeneration}`} /></div>}
         {portfolio && !authorityBlocked && <PipelinePanel onSelect={openBriefAccount} organizationId={portfolio.organization_id}
           snapshots={Object.fromEntries(portfolio.accounts.map(view => [view.account.id, view.assessment.snapshot_hash]))}
           configured={provider?.configured || false} key={persona} expanded={persona === "seller"} seller={persona === "seller"} />}
