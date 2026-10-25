@@ -51,6 +51,29 @@ def settings(**changes):
 
 
 class ResearchTransportTests(unittest.TestCase):
+    def test_duplicate_json_fields_and_credential_echoes_reject_without_retry(self):
+        duplicate_item = json.dumps(ITEM).replace('"title": "Company update"',
+            '"title": "Other company", "t\\u0069tle": "Company update"')
+        escaped_key = ''.join(f'\\u{ord(char):04x}' for char in 'synthetic-search-token')
+        payloads = [
+            ('{"results": [], "results": [' + json.dumps(ITEM) + ']}').encode(),
+            ('{"results": [' + duplicate_item + ']}').encode(),
+            json.dumps({"results": [{**ITEM, "content": "synthetic-search-token"}]}).encode(),
+            json.dumps({"results": [{**ITEM, "title": "synthetic-search-token"}]}).encode(),
+            ('{"results": [' + json.dumps(ITEM).replace('Untrusted external text', escaped_key) + ']}').encode(),
+            json.dumps({"results": [{**ITEM, "url": "https://example.test/synthetic-search-token"}]}).encode(),
+        ]
+        for payload in payloads:
+            calls = []
+            def respond(request, calls=calls, payload=payload):
+                calls.append(request)
+                return httpx.Response(200, content=payload)
+            with self.subTest(payload_length=len(payload)):
+                with self.assertRaises(ResearchFailure) as caught:
+                    Research(settings(), httpx.MockTransport(respond)).search(ResearchTarget(**TARGET))
+                self.assertEqual(str(caught.exception), "invalid_response")
+                self.assertEqual(len(calls), 1)
+
     def test_declared_domain_and_publisher_identity_truth_table_stays_unverified(self):
         target = ResearchTarget(**TARGET, company_domains=["subsidiary.test"],
             publisher_domains=["publisher.test"], company_aliases=["Example Holdings"],
@@ -295,6 +318,26 @@ class ResearchApiTests(unittest.TestCase):
         finally:
             separate.engine.dispose()
         self.assertEqual(self.client.get(f"{PREFIX}/accounts/{ACCOUNT}/runs").json(), [run])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.search().status_code, 429)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_echo_rejection_persists_safe_fallback_without_sources_or_retry(self):
+        before = self.client.get("/api/portfolio").json()
+        def echo(request):
+            self.calls.append(request)
+            return httpx.Response(200, json={"results": [{**ITEM, "content": "synthetic-search-token"}]})
+        with TestClient(create_app(self.settings, research_transport=httpx.MockTransport(echo))) as client:
+            client.cookies.update(self.client.cookies)
+            response = client.post(f"{PREFIX}/accounts/{ACCOUNT}/search", headers=HEADERS,
+                json={"expected_account_revision": 1, "mode": "live"})
+        self.assertEqual(response.status_code, 200)
+        run = response.json()
+        self.assertEqual((run["mode"], run["status"], run["error_code"], run["sources"]),
+            ("fallback", "unavailable", "invalid_response", []))
+        self.assertNotIn("synthetic-search-token", response.text)
+        self.assertEqual(self.client.get(f'{PREFIX}/runs/{run["id"]}').json(), run)
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.search().status_code, 429)
         self.assertEqual(len(self.calls), 1)

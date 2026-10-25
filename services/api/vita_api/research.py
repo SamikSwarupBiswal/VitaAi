@@ -105,6 +105,13 @@ class ResearchFailure(Exception):
     """Fixed safe codes only, never provider bodies or exception messages."""
 
 
+def research_object(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("Duplicate research field")
+    return value
+
+
 def source_url(value: str, domain: str) -> bool:
     try:
         url = urlsplit(value)
@@ -197,7 +204,8 @@ class Research:
                     body.extend(chunk)
                     if len(body) > 65536:
                         raise ResearchFailure("response_too_large")
-            data = json.loads(body)
+            credential = self.settings.research_api_key.get_secret_value()
+            data = json.loads(body, object_pairs_hook=research_object)
             if not isinstance(data, dict) or not isinstance(data.get("results"), list) or len(data["results"]) > 5:
                 raise ResearchFailure("invalid_response")
             fetched = datetime.now(UTC)
@@ -213,6 +221,8 @@ class Research:
                 published = publication(item.get("published_date"), fetched)
                 if (not isinstance(item.get("title"), str) or not isinstance(item.get("content"), str)
                         or type(item.get("score")) not in (float, int)):
+                    raise ResearchFailure("invalid_response")
+                if any(credential in item[field] for field in ("url", "title", "content")):
                     raise ResearchFailure("invalid_response")
                 match = source_match(url, item["title"], item["content"], target)
                 if match is None:
