@@ -51,6 +51,7 @@ function harness(role = "admin", transport) {
   const panel = load("../components/research-panel.tsx", { react: hooks, "@/lib/research": helper,
     "./research-narrative-panel": { ResearchNarrativePanel: () => null },
     "./research-quality-panel": { ResearchQualityPanel: () => null },
+    "./research-identity-panel": { ResearchIdentityPanel: () => null },
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) } });
   let key;
   const render = () => { cursor = 0; const outer = panel.ResearchPanel({ view }); key = outer.key;
@@ -82,6 +83,15 @@ test("mount/history/focus use only GET; mock defaults and double clicks send one
   await app.settle(ready, [run]);
   const inspect = app.inspect().props.onClick(); app.requests.shift().resolve(run); await inspect;
   assert.match(renderToStaticMarkup(app.render()), /No sources from this run/);
+  assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("identity completion cannot strand an in-flight full research refresh", async () => {
+  const app = harness(); await mount(app, ready, [run]);
+  const refreshing = app.button("Refresh research records").props.onClick();
+  window.dispatchEvent(new Event("vitaai-research-identity-changed"));
+  await app.settle(ready, [run]); await refreshing;
+  assert.equal(app.button("Record mock research").props.disabled, false);
   assert.equal(app.requests.length, 0); app.unmount();
 });
 

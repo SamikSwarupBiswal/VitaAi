@@ -98,6 +98,7 @@ class PopulatedMigrationTests(unittest.TestCase):
             after_0019 = self.rows_snapshot(legacy.engine)
             self.assertEqual({name: after_0019[name] for name in before_0019}, before_0019)
             self.assertEqual(after_0019["research_quality_reviews"], [])
+            self.assertEqual(after_0019["research_identity_decisions"], [])
             self.assertEqual(seeds.history(self.account.id), [reviewed])
             self.assertEqual(seeds.history_versions(job.id), [job, reviewed])
             self.assertEqual(calls, [])

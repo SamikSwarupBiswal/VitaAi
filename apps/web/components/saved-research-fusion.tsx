@@ -33,8 +33,12 @@ function FusionInspector({ current, accountId }: { current: PipelineRun; account
     const tick = () => setNow(Date.now());
     const timer = window.setInterval(tick, 1000);
     window.addEventListener("focus", invalidate); window.addEventListener("vitaai-source-changed", invalidate);
+    window.addEventListener("vitaai-research-identity-changing", invalidate);
+    window.addEventListener("vitaai-research-identity-changed", invalidate);
     return () => { active.mounted = false; active.sequence++; request.current?.abort(); window.clearInterval(timer);
-      window.removeEventListener("focus", invalidate); window.removeEventListener("vitaai-source-changed", invalidate); };
+      window.removeEventListener("focus", invalidate); window.removeEventListener("vitaai-source-changed", invalidate);
+      window.removeEventListener("vitaai-research-identity-changing", invalidate);
+      window.removeEventListener("vitaai-research-identity-changed", invalidate); };
   }, []);
   function edit(id: string) {
     const active = binding.current; active.input = { id }; active.sequence++; active.busy = false;

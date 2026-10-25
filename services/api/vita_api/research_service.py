@@ -125,6 +125,8 @@ class ResearchService:
             return self.context_in_transaction(connection, actor, run_id)
 
     def context_in_transaction(self, connection, actor, run_id):
+        from .research_identity import ResearchIdentity
+
         run = self.load(connection, actor.organization_id, run_id)
         account = self.account(connection, actor, run.account_id)
         facts = selected_evidence(connection, actor.organization_id, account.id)
@@ -136,7 +138,8 @@ class ResearchService:
         settings = self.connector.settings
         target = settings.research_account_map.get(account.id) if (
             actor.organization_id == settings.research_organization_id) else None
-        return build_context(view, run, target, enabled=self.connector.status(actor.organization_id).enabled, now=now)
+        return build_context(view, run, target, enabled=self.connector.status(actor.organization_id).enabled, now=now,
+            identity_decisions=ResearchIdentity.latest(connection, run))
 
     def start(self, account_id, body):
         settings = self.connector.settings
@@ -266,6 +269,12 @@ class ResearchService:
 
 
 def install_research_routes(app, store, identity, settings, transport=None):
+    from .research_identity import ResearchIdentity
+    from .research_identity_contracts import (
+        IdentityDecision,
+        IdentityInspection,
+        IdentityRequest,
+    )
     from .research_quality import (
         QualityInspection,
         QualityRequest,
@@ -309,6 +318,14 @@ def install_research_routes(app, store, identity, settings, transport=None):
     @router.get("/runs/{run_id}/quality-reviews", response_model=QualityInspection)
     def quality_inspection(run_id: UUID, actor: Current, operation: Service):
         return ResearchQuality(operation).inspect(run_id)
+
+    @router.get("/runs/{run_id}/identity-decisions", response_model=IdentityInspection)
+    def identity_inspection(run_id: UUID, actor: Current, operation: Service):
+        return ResearchIdentity(operation).inspect(run_id)
+
+    @router.post("/runs/{run_id}/identity-decisions", response_model=IdentityDecision)
+    def identity_review(run_id: UUID, body: IdentityRequest, actor: Current, operation: Service):
+        return ResearchIdentity(operation).review(run_id, body)
 
     @router.post("/runs/{run_id}/quality-reviews", response_model=QualityReview)
     def quality_review(run_id: UUID, body: QualityRequest, actor: Current, operation: Service):

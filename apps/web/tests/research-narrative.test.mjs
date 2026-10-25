@@ -134,6 +134,31 @@ test("inspection preserves Unknowns/provenance and escapes hypotheses with safe 
   assert.equal(app.requests.length, 0); app.unmount();
 });
 
+test("retained narratives become historical when identity decisions or usable sources change", async () => {
+  const original = context();
+  original.usable_sources.push({ ...original.usable_sources[0], url: "https://example.test/second" });
+  const run = { ...saved(original, "live"), status: "succeeded", validation: "schema_and_references_valid",
+    output: { hypotheses: [{ interpretation: "Retained interpretation", verification_question: "Verify this source",
+      evidence_ids: ["evidence-1"], source_urls: [original.usable_sources[0].url] }], caveats: [] } };
+  for (const change of [
+    {},
+    { identity_decisions: [{ id: "decision", revision: 1, status: "uncertain" }] },
+    { usable_sources: [original.usable_sources[1]] },
+  ]) {
+    const current = { ...structuredClone(original), ...change };
+    const app = harness({ ctx: current }); await mount(app, ready, [run]);
+    const inspection = app.inspect().props.onClick(); app.requests.shift().resolve(run); await inspection;
+    const html = app.html();
+    if (Object.keys(change).length) {
+      assert.match(html, /Historical or expired context/);
+      assert.doesNotMatch(html, /Retained context window open/);
+    } else assert.match(html, /Retained context window open/);
+    assert.match(html, /Retained interpretation/);
+    assert.match(html, /https:\/\/example.test\/news/);
+    assert.equal(app.requests.length, 0); app.unmount();
+  }
+});
+
 test("refresh invalidates captured starts and late details; unmount rejects old private responses", async () => {
   const app = harness(); const run = saved(app.ctx); await mount(app, ready, [run]);
   const generate = app.button("Record mock narrative").props.onClick;

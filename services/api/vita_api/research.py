@@ -48,7 +48,8 @@ class ResearchSource(ResearchContract):
     title: str = Field(min_length=1, max_length=500)
     text: str = Field(max_length=4000)
     provider_relevance: float = Field(ge=0, le=1, allow_inf_nan=False)
-    match: Literal["configured_domain", "configured_publisher_company_mention"] = "configured_domain"
+    match: Literal["configured_domain", "configured_publisher_company_mention",
+                   "configured_publisher_identity_candidate"] = "configured_domain"
     published_at: AwareDatetime | None
     fetched_at: AwareDatetime
     freshness_at_fetch: Literal["fresh", "stale", "unknown"]
@@ -161,6 +162,18 @@ def source_match(url: str, title: str, text: str, target: ResearchTarget):
             pattern = r"(?<!\w)" + re.escape(name) + r"(?!\w)"
             if any(re.search(pattern, " ".join(value.casefold().split())) for value in (title, text)):
                 return "configured_publisher_company_mention"
+        # Broader lexical forms generate candidates only; context requires separate adjudication.
+        words = re.findall(r"\w+", target.company_name.casefold())
+        core = list(words)
+        while core and core[-1] in {"corporation", "corp", "incorporated", "inc", "limited", "ltd", "llc", "plc"}:
+            core.pop()
+        forms = {" ".join(core)} if core != words and len(" ".join(core)) >= 3 else set()
+        acronym = "".join(word[0] for word in words)
+        if len(acronym) >= 3:
+            forms.add(acronym)
+        for form in forms:
+            if re.search(r"(?<!\w)" + re.escape(form) + r"(?!\w)", normalized):
+                return "configured_publisher_identity_candidate"
     return None
 
 

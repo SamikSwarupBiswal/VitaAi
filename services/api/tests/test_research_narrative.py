@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.governance import PolicyDenied
@@ -35,6 +34,25 @@ MODEL = "nvidia/nemotron-synthetic"
 
 
 class NarrativeTests(unittest.TestCase):
+    def test_identity_decision_during_inference_fences_output_without_retry(self):
+        before = self.client.get("/api/portfolio").json()
+        def reject_identity():
+            path = self.path + "/identity-decisions"
+            ready = self.client.get(path).json()
+            response = self.client.post(path, headers=HEADERS, json={"expected_revision": 0,
+                "expected_run_revision": ready["run_revision"], "expected_account_revision": ready["account_revision"],
+                "expected_snapshot_hash": ready["snapshot_hash"], "expected_sources_hash": ready["sources_hash"],
+                "source_index": 0, "source_url": self.saved["sources"][0]["url"], "decision": "uncertain",
+                "source_subject": "Company", "note": "Synthetic identity uncertainty"})
+            self.assertEqual(response.status_code, 200, response.text)
+        self.on_model = reject_identity
+        response = self.client.post(self.path + "/narratives", headers=HEADERS, json=self.body)
+        self.assertEqual(response.status_code, 409, response.text)
+        history = self.client.get(self.path + "/narratives").json()
+        self.assertEqual((history[0]["status"], history[0]["output"]), ("discarded", None))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.client.get("/api/portfolio").json(), before)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.pg_admin = None

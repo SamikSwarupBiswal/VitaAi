@@ -148,6 +148,9 @@ export function ResearchNarrativePanel({ view, context, writer }: {
     {selected && <NarrativeRecord run={selected} current={usable
       && selected.research_run_id === context.retained_run.id && selected.context.retained_run.revision === context.retained_run.revision
       && selected.context.internal.assessment.snapshot_hash === view.assessment.snapshot_hash
+      && JSON.stringify(selected.context.retained_run.target) === JSON.stringify(context.retained_run.target)
+      && JSON.stringify(selected.context.identity_decisions ?? []) === JSON.stringify(context.identity_decisions ?? [])
+      && JSON.stringify(selected.context.usable_sources) === JSON.stringify(context.usable_sources)
       && researchContextUsable(selected.context, now)} />}
     {selected?.status === "pending" && <section aria-label="Interrupted narrative recovery"><h4>Interrupted narrative recovery</h4>
       <p>Finalization retains original context, dates, model and modes. It fences late publication and never retries inference or renews context. An authorized remote call may still finish; this does not prove provider cancellation.</p>

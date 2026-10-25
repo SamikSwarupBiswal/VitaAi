@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .factual_evaluation import Annotation, Hash, digest, load_private, text_digest
 from .research import source_match
+from .research_identity_contracts import identity_bound
 from .research_narrative import NarrativeRun
 
 RUBRIC = "research-grounding-1"
@@ -73,6 +74,16 @@ def evaluate_narrative(run: NarrativeRun, dataset: ResearchDataset):
                 for url, source in sources.items())):
         raise ValueError("Public sources must be unique exact retained parent sources")
     judgments = {item.source_url: item for item in dataset.sources}
+    decisions = {item.source_index: item for item in context.identity_decisions}
+    if len(decisions) != len(context.identity_decisions):
+        raise ValueError("Identity decisions must be unique per source")
+    for url, source in sources.items():
+        index = next(index for index, retained_source in enumerate(parent.sources) if retained_source.url == url)
+        decision = decisions.get(index)
+        if ((decision is not None and (not identity_bound(decision, parent, view)
+                or decision.created_at > context.evaluated_at or decision.report.decision != "corroborated"))
+                or (source.match == "configured_publisher_identity_candidate" and decision is None)):
+            raise ValueError("Usable candidate requires exact corroborating identity adjudication")
     if (len(judgments) != len(dataset.sources) or judgments.keys() != sources.keys()
             or any(item.source_sha256 != digest(sources[url]) for url, item in judgments.items())):
         raise ValueError("Annotate every retained usable source identity exactly once")

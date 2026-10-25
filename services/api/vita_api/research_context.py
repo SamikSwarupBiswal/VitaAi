@@ -14,12 +14,14 @@ from .research import (
     source_match,
     source_url,
 )
+from .research_identity_contracts import IdentityDecision, identity_bound
 
 
 class ResearchExclusion(ResearchContract):
     source_index: int = Field(ge=0, le=4)
     url: str
-    reason: Literal["unsafe_url", "account_match", "duplicate", "unknown_publication", "stale_publication", "invalid_time"]
+    reason: Literal["unsafe_url", "account_match", "duplicate", "unknown_publication", "stale_publication", "invalid_time",
+                    "identity_unresolved", "identity_binding_changed"]
 
 
 class ResearchReviewQuestion(ResearchContract):
@@ -68,6 +70,7 @@ class ResearchContext(ResearchContract):
                     "target_changed", "invalid_window", "expired", "no_usable_sources"]
     usable_sources: list[ResearchSource] = Field(default_factory=list, max_length=5)
     exclusions: list[ResearchExclusion] = Field(default_factory=list, max_length=5)
+    identity_decisions: list[IdentityDecision] = Field(default_factory=list, max_length=5)
     review_question: ResearchReviewQuestion | None = None
     brief: ResearchBrief | None = None
     factual_confidence: Literal["unverified"] = "unverified"
@@ -189,11 +192,13 @@ def build_decision_brief(context: ResearchContext) -> ResearchDecisionBrief:
 
 
 def build_context(view: AccountView, run: ResearchRun, target: ResearchTarget | None,
-                  *, enabled: bool, now: datetime) -> ResearchContext:
+                  *, enabled: bool, now: datetime, identity_decisions: list[IdentityDecision] | None = None) -> ResearchContext:
     # Callers load the account and run in one authenticated scoped transaction.
     if str(run.account_id) != view.account.id or run.organization_id != view.account.organization_id:
         raise ValueError("research_context_scope_mismatch")
     context = ResearchContext(internal=view, retained_run=run, evaluated_at=now, status="run_unavailable")
+    context.identity_decisions = identity_decisions or []
+    decisions = {item.source_index: item for item in context.identity_decisions}
     if not enabled:
         context.status = "disabled"
     elif run.account_revision != view.account.revision:
@@ -215,10 +220,16 @@ def build_context(view: AccountView, run: ResearchRun, target: ResearchTarget | 
         seen = set()
         for index, source in enumerate(run.sources):
             reason = None
+            decision = decisions.get(index)
             if not any(source_url(source.url, domain) for domain in [target.domain, *target.company_domains, *target.publisher_domains]):
                 reason = "unsafe_url"
             elif source_match(source.url, source.title, source.text, target) != source.match:
                 reason = "account_match"
+            elif decision and (not identity_bound(decision, run, view) or decision.created_at > now):
+                reason = "identity_binding_changed"
+            elif ((decision and decision.report.decision != "corroborated")
+                    or (source.match == "configured_publisher_identity_candidate" and decision is None)):
+                reason = "identity_unresolved"
             elif source.url in seen:
                 reason = "duplicate"
             elif source.published_at is None:

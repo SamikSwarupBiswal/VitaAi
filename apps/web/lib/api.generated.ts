@@ -1402,6 +1402,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/research/runs/{run_id}/identity-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Identity Inspection */
+        get: operations["identity_inspection_api_integrations_research_runs__run_id__identity_decisions_get"];
+        put?: never;
+        /** Identity Review */
+        post: operations["identity_review_api_integrations_research_runs__run_id__identity_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/research/runs/{run_id}/recovery-readiness": {
         parameters: {
             query?: never;
@@ -3329,6 +3347,171 @@ export interface components {
             observation_id?: string | null;
             /** Error Code */
             error_code?: string | null;
+        };
+        /** IdentityDecision */
+        IdentityDecision: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Policy
+             * @default research-identity-1
+             * @constant
+             */
+            policy: "research-identity-1";
+            /**
+             * Basis
+             * @default reviewer_adjudication
+             * @constant
+             */
+            basis: "reviewer_adjudication";
+            /**
+             * Factual Confidence
+             * @default unverified
+             * @constant
+             */
+            factual_confidence: "unverified";
+            /**
+             * External Execution
+             * @default false
+             * @constant
+             */
+            external_execution: false;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Revision */
+            run_revision: number;
+            target: components["schemas"]["ResearchTarget"];
+            /** Sources Hash */
+            sources_hash: string;
+            /** Source Index */
+            source_index: number;
+            source: components["schemas"]["ResearchSource"];
+            /** Revision */
+            revision: number;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            report: components["schemas"]["IdentityRequest"];
+        };
+        /** IdentityInspection */
+        IdentityInspection: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Account Revision */
+            account_revision: number;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Revision */
+            run_revision: number;
+            /** Sources Hash */
+            sources_hash: string;
+            /** Can Review */
+            can_review: boolean;
+            /** Decisions */
+            decisions?: components["schemas"]["IdentityDecision"][];
+            /** History */
+            history?: components["schemas"]["IdentityDecision"][];
+            /**
+             * Caveat
+             * @default Identity decisions retain the reviewer's subject-bound conclusion and supplied evidence. References are not independently fetched or machine-verified. Corroboration can admit a candidate; uncertain, conflicting or unrelated decisions exclude it. Facts, confidence and action approvals remain unchanged.
+             */
+            caveat: string;
+        };
+        /** IdentityReference */
+        IdentityReference: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Url */
+            url: string;
+            /** Subject */
+            subject: string;
+            /** Excerpt */
+            excerpt: string;
+            /** Relation */
+            relation: string;
+        };
+        /** IdentityRequest */
+        IdentityRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Run Revision */
+            expected_run_revision: number;
+            /** Expected Account Revision */
+            expected_account_revision: number;
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /** Expected Sources Hash */
+            expected_sources_hash: string;
+            /** Source Index */
+            source_index: number;
+            /** Source Url */
+            source_url: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "corroborated" | "namesake_or_unrelated" | "uncertain" | "conflicting";
+            /** Source Subject */
+            source_subject: string;
+            /** Note */
+            note: string;
+            /** References */
+            references?: components["schemas"]["IdentityReference"][];
         };
         /** IngestionReadiness */
         IngestionReadiness: {
@@ -5290,6 +5473,8 @@ export interface components {
             usable_sources?: components["schemas"]["ResearchSource"][];
             /** Exclusions */
             exclusions?: components["schemas"]["ResearchExclusion"][];
+            /** Identity Decisions */
+            identity_decisions?: components["schemas"]["IdentityDecision"][];
             review_question?: components["schemas"]["ResearchReviewQuestion"] | null;
             brief?: components["schemas"]["ResearchBrief"] | null;
             /**
@@ -5368,7 +5553,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "unsafe_url" | "account_match" | "duplicate" | "unknown_publication" | "stale_publication" | "invalid_time";
+            reason: "unsafe_url" | "account_match" | "duplicate" | "unknown_publication" | "stale_publication" | "invalid_time" | "identity_unresolved" | "identity_binding_changed";
         };
         /** ResearchFusion */
         ResearchFusion: {
@@ -5648,7 +5833,7 @@ export interface components {
              * @default configured_domain
              * @enum {string}
              */
-            match: "configured_domain" | "configured_publisher_company_mention";
+            match: "configured_domain" | "configured_publisher_company_mention" | "configured_publisher_identity_candidate";
             /** Published At */
             published_at: string | null;
             /**
@@ -9574,6 +9759,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QualityReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    identity_inspection_api_integrations_research_runs__run_id__identity_decisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    identity_review_api_integrations_research_runs__run_id__identity_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IdentityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityDecision"];
                 };
             };
             /** @description Validation Error */

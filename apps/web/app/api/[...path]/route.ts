@@ -39,8 +39,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     ? new RegExp(`^integrations/microsoft(?:/missions/${uuid}/execution-readiness)?$`).test(joined)
     : request.method === "POST" && /^integrations\/microsoft\/(?:connect|signout|refresh)$/.test(joined);
   const researchPath = request.method === "GET"
-    ? new RegExp(`^integrations/research(?:/runs/${uuid}(?:/recovery-readiness|/context|/narrative-readiness|/narratives|/quality-reviews)?|/narratives/${uuid}(?:/recovery-readiness)?|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
-    : request.method === "POST" && new RegExp(`^integrations/research/(?:accounts/${uuid}/search|runs/${uuid}/(?:recover|narratives|quality-reviews)|narratives/${uuid}/recover)$`).test(joined);
+    ? new RegExp(`^integrations/research(?:/runs/${uuid}(?:/recovery-readiness|/context|/narrative-readiness|/narratives|/quality-reviews|/identity-decisions)?|/narratives/${uuid}(?:/recovery-readiness)?|/accounts/${uuid}/(?:runs|readiness))?$`).test(joined)
+    : request.method === "POST" && new RegExp(`^integrations/research/(?:accounts/${uuid}/search|runs/${uuid}/(?:recover|narratives|quality-reviews|identity-decisions)|narratives/${uuid}/recover)$`).test(joined);
   const comparisonPath = request.method === "GET"
     ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}(?:/recovery-readiness)?|accounts/${uuid}/(?:runs|readiness)|providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:test-readiness|tests)|tests/${uuid}(?:/recovery-readiness)?)$`).test(joined)
     : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:discover|test)|accounts/${uuid}/compare|(?:runs|tests)/${uuid}/recover)$`).test(joined);
@@ -50,7 +50,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
   try {
     const body = request.method === "POST" ? await request.text() : undefined;
-    if (body && body.length > (workflowPath ? 262144 : joined.endsWith("/quality-reviews") ? 16384 : 4096)) {
+    if (body && body.length > (workflowPath ? 262144 : joined.endsWith("/quality-reviews") ? 16384
+      : joined.endsWith("/identity-decisions") ? 32768 : 4096)) {
       return NextResponse.json({ detail: "Request too large" }, { status: 413 });
     }
     const upstream = await fetch(`http://127.0.0.1:8000/api/${joined}`, {

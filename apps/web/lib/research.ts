@@ -109,6 +109,6 @@ export function researchSourceMatchedLink(source: components["schemas"]["Researc
   if ((source.match ?? "configured_domain") === "configured_domain") {
     return [target.domain, ...(target.company_domains ?? [])].some(domain => researchSourceLink(source.url, domain));
   }
-  return source.match === "configured_publisher_company_mention"
+  return (source.match === "configured_publisher_company_mention" || source.match === "configured_publisher_identity_candidate")
     && !!target.publisher_domains?.some(domain => researchSourceLink(source.url, domain));
 }

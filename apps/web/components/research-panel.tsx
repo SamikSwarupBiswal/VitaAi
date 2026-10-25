@@ -8,6 +8,7 @@ import { checkResearchRun, readResearch, readResearchRun, readResearchRecovery, 
 import { useSession } from "./session-gate";
 import { ResearchNarrativePanel } from "./research-narrative-panel";
 import { ResearchQualityPanel } from "./research-quality-panel";
+import { ResearchIdentityPanel } from "./research-identity-panel";
 
 export function ResearchPanel({ view }: { view: AccountView }) {
   const session = useSession();
@@ -61,11 +62,17 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
     // Defer the initial read; the same function handles explicit/focus revalidation.
     queueMicrotask(() => { if (!controller.signal.aborted) void refresh(); });
     const reload = () => { void refresh(); };
+    const invalidateIdentity = () => { if (selectedBinding.current !== null) ++sequence.current; recoverySequence.current = null;
+      contextLocked.current = false; setContext(null); setContextReading(false); setNow(Date.now()); };
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     window.addEventListener("focus", reload);
     window.addEventListener("vitaai-research-changed", reload);
+    window.addEventListener("vitaai-research-identity-changing", invalidateIdentity);
+    window.addEventListener("vitaai-research-identity-changed", invalidateIdentity);
     return () => { controller.abort(); window.clearInterval(timer); window.removeEventListener("focus", reload);
-      window.removeEventListener("vitaai-research-changed", reload); };
+      window.removeEventListener("vitaai-research-changed", reload);
+      window.removeEventListener("vitaai-research-identity-changing", invalidateIdentity);
+      window.removeEventListener("vitaai-research-identity-changed", invalidateIdentity); };
   }, [refresh]);
 
   async function search() {
@@ -113,7 +120,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
 
   async function inspectContext() {
     const signal = lifetime.current?.signal;
-    if (!signal || signal.aborted || locked.current || contextLocked.current || reading || !selected
+    if (!signal || signal.aborted || locked.current || contextLocked.current || researchPending.has(scope) || reading || !selected
       || selectedBinding.current !== selected) return;
     const current = ++sequence.current;
     recoverySequence.current = null; setRecovery(null);
@@ -173,6 +180,7 @@ function ResearchAccount({ view, writer }: { view: AccountView; writer: boolean 
         <span> · {run.mode} / {run.status} · revision {run.account_revision} · {run.started_at}</span></li>)}</ul>
       {selected && <ResearchRecord run={selected} readiness={readiness} now={now} />}
       {selected && <ResearchQualityPanel view={view} run={selected} />}
+      {selected && <ResearchIdentityPanel view={view} run={selected} />}
       {selected && <button disabled={disabled || contextReading} onClick={() => inspectContext()}>Inspect current research context</button>}
       {contextReading && <p role="status">Reading saved context...</p>}
       {context && <ResearchContextRecord context={context} now={now} />}
@@ -238,6 +246,9 @@ export function ResearchContextRecord({ context, now }: { context: ResearchConte
     <ul>{view.evidence.map(item => <li key={item.id}>{item.fact} · evidence {item.id} · {item.source} · observed {item.observed_at} · ingested {item.ingested_at}</li>)}</ul>
     <h4>Public context</h4>
     <p>Factual confidence {context.factual_confidence}; provider relevance is not factual confidence.</p>
+    {!!context.identity_decisions?.length && <ul>{context.identity_decisions.map(item => <li key={item.id}>
+      Source {item.source_index + 1} · reviewer identity decision {item.report.decision} · {item.id} · revision {item.revision}.
+      Supplied references remain reviewer evidence assertions; eligibility is rechecked on inspection.</li>)}</ul>}
     {!usable && <p>No currently usable public context is shown. This evaluation is unavailable, expired or excluded; inspect again to recheck saved records. Reading never searches or renews freshness.</p>}
     {usable && <>
       {context.review_question && <p>{context.review_question.question} Internal evidence: {context.review_question.evidence_ids.join(", ") || "None"}.</p>}
@@ -275,7 +286,8 @@ function ResearchRecord({ run, readiness, now }: { run: ResearchRun; readiness: 
       <p>Published {source.published_at || "Unknown"}; fetched {source.fetched_at}. Freshness at fetch: {source.freshness_at_fetch} (30-day horizon).</p>
       <p>Publication age now: {now === null || !source.published_at ? "Unknown" : now - Date.parse(source.published_at) > 30 * 86400000 ? "Older than 30 days" : "Within 30 days"}.</p>
       <p>Provider relevance {source.provider_relevance} (0–1); factual confidence {source.factual_confidence}.
-        Match: {source.match === "configured_publisher_company_mention" ? "configured publisher and company mention" : "configured domain"}; operator-declared, not verified.</p>
+        Match: {source.match === "configured_publisher_identity_candidate" ? "broader identity candidate; separate corroboration required"
+          : source.match === "configured_publisher_company_mention" ? "configured publisher and company mention" : "configured domain"}; not verified.</p>
     </li>)}</ul>
   </section>;
 }

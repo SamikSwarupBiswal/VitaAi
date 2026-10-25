@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from vita_api.config import ResearchTarget
 from vita_api.contracts import AccountView
 from vita_api.factual_evaluation import digest, text_digest
 from vita_api.research import ResearchRun, ResearchSource
@@ -19,12 +20,46 @@ from vita_api.research_evaluation import (
     main,
     narrative_units,
 )
+from vita_api.research_identity_contracts import (
+    IdentityDecision,
+    IdentityRequest,
+    identity_sources_hash,
+)
 from vita_api.research_narrative import NarrativeOutput, NarrativeRun
 from vita_api.sample import SAMPLE_ORG, sample_records
 from vita_api.scoring import assess
 
 
 class ResearchEvaluationTests(unittest.TestCase):
+    def test_broader_candidates_require_exact_corroboration_in_retained_evaluation(self):
+        run = self.artifact()
+        context, parent = run.context, run.context.retained_run
+        parent.target = ResearchTarget(company_name="Example Corporation", domain="example.test", publisher_domains=["publisher.test"])
+        source = parent.sources[0]
+        source.url, source.title, source.match = "https://publisher.test/article", "Example update", "configured_publisher_identity_candidate"
+        context.usable_sources = [source.model_copy(deep=True)]
+        run.output.hypotheses[0].source_urls = [source.url]
+        with self.assertRaises(ValueError):
+            self.evaluate(run, self.dataset(run))
+        report = IdentityRequest(expected_revision=0, expected_run_revision=parent.revision,
+            expected_account_revision=parent.account_revision, expected_snapshot_hash=context.internal.assessment.snapshot_hash,
+            expected_sources_hash=identity_sources_hash(parent), source_index=0, source_url=source.url,
+            decision="corroborated", source_subject="Example", note="Synthetic corroboration",
+            references=[{"url": "https://example.test/about", "subject": "Example Corporation", "excerpt": "Example Corporation",
+                "relation": "Synthetic subject binding"}])
+        decision = IdentityDecision(id=uuid4(), organization_id=parent.organization_id, account_id=parent.account_id,
+            account_revision=parent.account_revision, snapshot_hash=report.expected_snapshot_hash, run_id=parent.id,
+            run_revision=parent.revision, target=parent.target, sources_hash=report.expected_sources_hash,
+            source_index=0, source=source, revision=1, supersedes_id=None, actor_id="synthetic-reviewer",
+            created_at=context.evaluated_at, report=report)
+        context.identity_decisions = [decision]
+        self.assertTrue(self.evaluate(run, self.dataset(run))["meets_current_context_rubric"])
+        for changes in ({"snapshot_hash": "0" * 64}, {"created_at": run.finished_at}, {"source_index": 1},
+                        {"report": report.model_copy(update={"decision": "uncertain"})}):
+            context.identity_decisions = [decision.model_copy(update=changes)]
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.evaluate(run, self.dataset(run))
+
     def artifact(self, interpretation="Recorded usage declined 18%.", question="Can a reviewer verify account identity?"):
         now = datetime(2026, 10, 25, 8, tzinfo=UTC)
         account, evidence = sample_records(now)[0]

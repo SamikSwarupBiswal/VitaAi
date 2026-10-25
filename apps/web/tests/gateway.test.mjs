@@ -17,6 +17,20 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("identity decisions permit only canonical GET and bounded POST without HEAD mutation", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports), base = "integrations/research/runs/29d4bc06-1bb6-483e-bc96-2ed2ff42efc8/identity-decisions";
+  for (const [method, name, size, status] of [["GET", base, 0, 200], ["POST", base, 5000, 200], ["POST", base, 32769, 413],
+    ["HEAD", base, 0, 404], ["GET", base + "/extra", 0, 404], ["POST", base + "/extra", 0, 404]]) {
+    const response = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method,
+      headers: { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000" }, ...(method === "POST" ? { body: "x".repeat(size) } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 2);
+});
+
 test("coaching permits only canonical mission GET/POST without implicit HEAD or extra paths", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json([]));
   const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");

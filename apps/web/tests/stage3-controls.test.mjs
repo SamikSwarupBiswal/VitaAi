@@ -47,6 +47,48 @@ function harness(file, name, props, helpers) {
     focus() { listeners.get("focus")?.(); }, tick() { timers.forEach(fn => fn()); }, unmount() { cleanups.forEach(fn => fn?.()); } };
 }
 
+test("identity decisions bind exact source, invalidate captured forms and never replay uncertain saves", async () => {
+  const run = { id, revision: 2, target: { company_name: "Example Company", domain: "example.test" },
+    sources: [{ url: "https://publisher.test/article", title: "Example Company update" }] };
+  const ready = { organization_id: "org", account_id: "account", account_revision: 1, snapshot_hash: "a".repeat(64),
+    run_id: id, run_revision: 2, sources_hash: "b".repeat(64), decisions: [], history: [], can_review: true };
+  const pending = new Set();
+  const app = harness("research-identity-panel", "ResearchIdentityPanel", { view, run }, () => ({ "@/lib/research": { researchPending: pending } }));
+  app.render(); assert.equal(app.requests.length, 0);
+  app.button("Inspect identity records").props.onClick(); app.requests.shift().resolve(ready); await flush();
+  app.nodes("input")[0].props.onChange({ target: { value: "Example Company" } });
+  app.nodes("textarea")[0].props.onChange({ target: { value: "<script>uncertain subject</script>" } });
+  const captured = app.nodes("form")[0].props.onSubmit;
+  app.nodes("textarea")[0].props.onChange({ target: { value: "Exact current uncertainty" } });
+  await captured({ preventDefault() {} }); assert.equal(app.requests.length, 0);
+  const submit = app.nodes("form")[0].props.onSubmit;
+  const save = submit({ preventDefault() {} }); submit({ preventDefault() {} });
+  assert.equal(app.requests.length, 1); assert.equal(pending.has("org"), true);
+  const request = app.requests.shift(); assert.equal(request.kind, "POST");
+  assert.equal(request.body.expected_sources_hash, ready.sources_hash); assert.equal(request.body.expected_revision, 0);
+  assert.equal(request.body.source_url, run.sources[0].url); assert.equal(request.body.decision, "uncertain");
+  assert.deepEqual(request.body.references, []); assert.equal(request.body.note, "Exact current uncertainty");
+  request.reject(new Error("lost response")); await save;
+  assert.equal(pending.size, 0); assert.equal(app.requests.length, 0); assert.match(app.html(), /may have persisted/);
+  app.button("Inspect identity records").props.onClick(); app.requests.shift().resolve(ready); await flush();
+  const stale = app.nodes("form")[0].props.onSubmit; app.focus();
+  await stale({ preventDefault() {} }); assert.equal(app.requests.length, 0); app.unmount();
+});
+
+test("identity inspection rejects foreign data and corroboration requires reference evidence", async () => {
+  const run = { id, revision: 2, target: { company_name: "Example", domain: "example.test" }, sources: [{ url: "https://example.test/update", title: "Example" }] };
+  const ready = { organization_id: "org", account_id: "account", account_revision: 1, snapshot_hash: "a".repeat(64),
+    run_id: id, run_revision: 2, sources_hash: "b".repeat(64), decisions: [], history: [], can_review: true };
+  const app = harness("research-identity-panel", "ResearchIdentityPanel", { view, run }, () => ({ "@/lib/research": { researchPending: new Set() } }));
+  app.render(); app.button("Inspect identity records").props.onClick(); app.requests.shift().resolve({ ...ready, run_id: "foreign" }); await flush();
+  assert.match(app.html(), /unavailable/); assert.equal(app.nodes("form").length, 0);
+  app.button("Inspect identity records").props.onClick(); app.requests.shift().resolve(ready); await flush();
+  app.nodes("select")[1].props.onChange({ target: { value: "corroborated" } });
+  app.nodes("input")[0].props.onChange({ target: { value: "Example" } });
+  app.nodes("textarea")[0].props.onChange({ target: { value: "Insufficient reference" } });
+  await app.nodes("form")[0].props.onSubmit({ preventDefault() {} }); assert.equal(app.requests.length, 0); app.unmount();
+});
+
 test("quality child rejects captured input/focus and uncertain saves never replay", async () => {
   const run = { id, revision: 1, sources: [{ url: "https://example.test/update", title: "Retained source" }] };
   const ready = { organization_id: "org", account_id: "account", account_revision: 1, snapshot_hash: "a".repeat(64),

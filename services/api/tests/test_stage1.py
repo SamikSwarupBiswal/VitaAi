@@ -271,9 +271,9 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(before, self.store.list_accounts(SAMPLE_ORG))
         self.assertIn("alembic_version", inspect(self.store.engine).get_table_names())
         with self.store.engine.connect() as connection:
-            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0019")
+            self.assertEqual(connection.execute(text("select version_num from alembic_version")).scalar(), "0020")
             self.assertIn("hubspot_ingestion_runs", inspect(connection).get_table_names())
-            self.assertTrue({"hubspot_seed_jobs", "hubspot_seed_versions", "research_quality_reviews"}
+            self.assertTrue({"hubspot_seed_jobs", "hubspot_seed_versions", "research_quality_reviews", "research_identity_decisions"}
                 <= set(inspect(connection).get_table_names()))
             self.assertEqual(connection.execute(select(users.c.id)).scalar(), self.user.id)
 
