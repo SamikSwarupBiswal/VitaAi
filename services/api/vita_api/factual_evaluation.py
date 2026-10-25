@@ -122,14 +122,17 @@ def main():
     parser.add_argument("--annotations", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    run = ComparisonRun.model_validate(load_private(args.artifact, 2_000_000))
-    dataset = EvaluationDataset.model_validate(load_private(args.annotations, 1_000_000))
-    report = evaluate_comparison(run, dataset)
-    output = Path(args.output).resolve()
-    if output.is_relative_to(Path(__file__).resolve().parents[3]):
-        raise ValueError("Reports belong in a private directory outside the checkout")
-    with output.open("x", encoding="utf-8") as stream:
-        stream.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    try:
+        run = ComparisonRun.model_validate(load_private(args.artifact, 2_000_000))
+        dataset = EvaluationDataset.model_validate(load_private(args.annotations, 1_000_000))
+        report = evaluate_comparison(run, dataset)
+        output = Path(args.output).resolve()
+        if output.is_relative_to(Path(__file__).resolve().parents[3]):
+            raise ValueError("Reports belong in a private directory outside the checkout")
+        with output.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    except (OSError, ValueError, RecursionError):
+        parser.exit(2, "Comparison evaluation failed; inspect private inputs and destination locally.\n")
 
 
 if __name__ == "__main__":

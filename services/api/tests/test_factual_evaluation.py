@@ -1,5 +1,6 @@
 """Independent synthetic gold judgments expose factual failures despite valid schemas."""
 import copy
+import io
 import json
 import tempfile
 import unittest
@@ -124,5 +125,30 @@ class FactualEvaluationTests(unittest.TestCase):
                 report = json.loads(output.read_text(encoding="utf8"))
                 self.assertEqual(report["output_units"], 5)
                 self.assertTrue(report["meets_rubric"])
-                with self.assertRaises(FileExistsError):
+                with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as caught:
                     main()
+                self.assertEqual(caught.exception.code, 2)
+                self.assertEqual(json.loads(output.read_text(encoding="utf8")), report)
+
+    def test_cli_invalid_private_artifact_and_annotations_never_print_values(self):
+        run, raw = self.artifact()
+        marker = "private-CRM-content-must-not-be-printed"
+        with tempfile.TemporaryDirectory() as directory:
+            artifact, annotations, output = [Path(directory) / name for name in ("run.json", "labels.json", "report.json")]
+            argv = ["factual_evaluation", "--artifact", str(artifact), "--annotations", str(annotations), "--output", str(output)]
+            for invalid_artifact in (True, False):
+                payload, dataset = run.model_dump(mode="json"), copy.deepcopy(raw)
+                if invalid_artifact:
+                    payload["status"] = marker
+                else:
+                    dataset["annotations"][0]["entailment"] = marker
+                artifact.write_text(json.dumps(payload), encoding="utf8")
+                annotations.write_text(json.dumps(dataset), encoding="utf8")
+                errors = io.StringIO()
+                with self.subTest(invalid_artifact=invalid_artifact), patch("sys.argv", argv), patch("sys.stderr", errors):
+                    with self.assertRaises(SystemExit) as caught:
+                        main()
+                    self.assertEqual(caught.exception.code, 2)
+                    self.assertNotIn(marker, errors.getvalue())
+                    self.assertIn("Comparison evaluation failed", errors.getvalue())
+                    self.assertFalse(output.exists())
