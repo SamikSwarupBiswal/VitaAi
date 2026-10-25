@@ -121,6 +121,13 @@ class ProviderCatalog:
             headers["Authorization"] = "Bearer " + config.api_key.get_secret_value()
         if provider != "foundry":
             endpoint = ENDPOINTS[provider]
+            if provider == "nebius":
+                try:
+                    config = ComparisonProviderConfig.model_validate(config.model_dump())
+                except ValueError:
+                    raise CatalogFailure("invalid_provider_configuration") from None
+                if config.nebius_region == "us-central1":
+                    endpoint = "https://api.tokenfactory.us-central1.nebius.com/v1"
         try:
             with (httpx.Client(timeout=20, follow_redirects=False, transport=self.transport, trust_env=False) as client,
                   client.stream(method, endpoint + path, headers=headers, json=body) as response):

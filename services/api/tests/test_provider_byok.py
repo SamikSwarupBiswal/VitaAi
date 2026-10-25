@@ -6,7 +6,6 @@ import httpx
 import test_provider_comparison as fixtures
 from pydantic import SecretStr
 from sqlalchemy import select, update
-
 from vita_api.identity import users
 from vita_api.provider_catalog import DiscoveryRequest
 from vita_api.provider_comparison import ComparisonRequest, comparisons

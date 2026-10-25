@@ -34,6 +34,26 @@ MODEL = "nvidia/nemotron-synthetic"
 
 
 class NarrativeTests(unittest.TestCase):
+    def test_nebius_us_region_dispatch_and_configuration_change_fence(self):
+        config = self.settings.research_narrative_provider
+        config.nebius_region = "us-central1"
+        calls = []
+        def respond(request):
+            calls.append(request)
+            self.assertEqual(str(request.url), "https://api.tokenfactory.us-central1.nebius.com/v1/chat/completions")
+            config.nebius_region = "default"
+            return httpx.Response(200, json={"model": MODEL, "choices": [{"finish_reason": "stop",
+                "message": {"content": json.dumps(self.output())}}]})
+        operation = NarrativeService(self.store, self.settings, self.client.cookies.get("vitaai_session"),
+            httpx.MockTransport(respond))
+        with self.assertRaises(PolicyDenied):
+            operation.start(UUID(self.saved["id"]), NarrativeRequest(**self.body))
+        self.assertEqual(len(calls), 1)
+        with self.store.engine.connect() as connection:
+            saved = connection.execute(select(narratives.c.payload)).scalar_one()
+        self.assertEqual(saved["status"], "discarded")
+        self.assertIsNone(saved["output"])
+
     def test_identity_decision_during_inference_fences_output_without_retry(self):
         before = self.client.get("/api/portfolio").json()
         def reject_identity():

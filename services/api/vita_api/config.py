@@ -73,6 +73,7 @@ class ComparisonProviderConfig(BaseModel):
         Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_./:-]+$")]] = Field(
             default_factory=dict, max_length=20)
     revision: int = Field(default=1, ge=1)
+    nebius_region: Literal["default", "us-central1"] = "default"
     resource_name: str = Field(default="", pattern=r"^(?:[a-z0-9][a-z0-9-]{0,61}[a-z0-9])?$")
     endpoint_domain: Literal["services.ai.azure.com", "openai.azure.com"] = "services.ai.azure.com"
 

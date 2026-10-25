@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from pydantic import ValidationError
-
 from vita_api.contracts import AccountView
 from vita_api.governance import (
     PolicyDenied,

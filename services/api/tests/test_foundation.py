@@ -7,7 +7,6 @@ from pathlib import Path
 import httpx
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.contracts import Account, AccountView

@@ -7,7 +7,6 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.contracts import ModelRun

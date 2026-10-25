@@ -8,7 +8,6 @@ import test_stage1 as fixtures
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import select, update
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.nebius import Nebius

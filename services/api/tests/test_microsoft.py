@@ -11,7 +11,6 @@ import test_stage2 as fixtures
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.governance import PolicyDenied

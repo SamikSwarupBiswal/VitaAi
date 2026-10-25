@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
-
 from vita_api.app import create_app
 from vita_api.config import Settings
 from vita_api.hubspot import HubSpot, HubSpotFailure

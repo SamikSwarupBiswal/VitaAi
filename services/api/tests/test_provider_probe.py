@@ -9,7 +9,6 @@ from unittest.mock import patch
 import httpx
 import test_provider_comparison as fixtures
 from sqlalchemy import select, update
-
 from vita_api.governance import PolicyDenied
 from vita_api.identity import users
 from vita_api.provider_catalog import ProviderCatalog
@@ -31,6 +30,21 @@ class ProbeTests(unittest.TestCase):
     setUp = fixtures.CatalogApiTests.setUp
     tearDown = fixtures.CatalogApiTests.tearDown
     login = fixtures.CatalogApiTests.login
+
+    def test_nebius_us_region_dispatch_and_configuration_change_fence(self):
+        self.settings.comparison_test_enabled = True
+        config = self.settings.comparison_providers["nebius"]
+        config.nebius_region = "us-central1"
+        def respond(request):
+            self.assertEqual(str(request.url), "https://api.tokenfactory.us-central1.nebius.com/v1/chat/completions")
+            response = self.valid(request)
+            config.nebius_region = "default"
+            return response
+        self.inference = respond
+        response = self.post("nebius", mode="live")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.saved()[0]["status"], "discarded")
 
     def post(self, provider="openai", **changes):
         return self.client.post(fixtures.PREFIX + f"/providers/{provider}/test", headers=fixtures.HEADERS,

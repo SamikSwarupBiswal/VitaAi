@@ -18,7 +18,6 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
-
 from vita_api.app import create_app
 from vita_api.config import ComparisonProviderConfig, Settings
 from vita_api.governance import PolicyDenied
@@ -50,6 +49,32 @@ def settings(**changes):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_nebius_regions_use_exact_hosts_without_error_fallback(self):
+        for region, host in [("default", "api.tokenfactory.nebius.com"),
+                             ("us-central1", "api.tokenfactory.us-central1.nebius.com")]:
+            calls = []
+            def respond(request, calls=calls, host=host):
+                calls.append(request)
+                self.assertEqual(str(request.url), f"https://{host}/v1/models")
+                self.assertEqual(request.headers["authorization"], "Bearer synthetic-nebius")
+                return httpx.Response(401, json={"error": "synthetic rejection"})
+            bound = settings()
+            bound.comparison_providers["nebius"] = ComparisonProviderConfig(
+                **{**bound.comparison_providers["nebius"].model_dump(), "nebius_region": region})
+            result = ProviderCatalog(bound, httpx.MockTransport(respond)).discover(
+                SAMPLE_ORG, "nebius", DiscoveryRequest(mode="live"))
+            self.assertEqual((result.mode, result.error_code), ("fallback", "provider_http_401"))
+            self.assertEqual(len(calls), 1)
+        for region in ["https://foreign.test", "us-central1.foreign.test", "", "eu"]:
+            with self.subTest(region=region), self.assertRaises(ValidationError):
+                ComparisonProviderConfig(nebius_region=region)
+        bound.comparison_providers["nebius"].nebius_region = "foreign"
+        calls.clear()
+        result = ProviderCatalog(bound, httpx.MockTransport(respond)).discover(
+            SAMPLE_ORG, "nebius", DiscoveryRequest(mode="live"))
+        self.assertEqual(result.error_code, "invalid_provider_configuration")
+        self.assertEqual(calls, [])
+
     def test_foundry_configuration_and_discovery_use_only_bound_azure_resource(self):
         config = {"enabled": True, "live_enabled": True, "api_key": "synthetic-foundry",
                   "model": "deployment-test", "response_model": "canonical-test", "resource_name": "test-resource"}
@@ -306,6 +331,23 @@ class ComparisonApiTests(unittest.TestCase):
 
     def compare(self, **changes):
         return self.client.post(self.path + "/compare", headers=HEADERS, json=self.body(**changes))
+
+    def test_nebius_us_region_dispatch_and_configuration_change_fence(self):
+        config = self.settings.comparison_providers["nebius"]
+        config.nebius_region = "us-central1"
+        def respond(request):
+            self.assertEqual(str(request.url), "https://api.tokenfactory.us-central1.nebius.com/v1/chat/completions")
+            response = self.valid_response(request)
+            config.nebius_region = "default"
+            return response
+        self.inference = respond
+        response = self.compare(providers=[{"provider": "nebius", "mode": "live",
+                                           "expected_configuration_revision": 1}])
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(len(self.calls), 1)
+        saved = self.client.get(self.path + "/runs").json()[0]
+        self.assertEqual(saved["results"][0]["status"], "discarded")
+        self.assertIsNone(saved["results"][0]["analysis"])
 
     def test_readiness_is_scoped_network_free_and_retains_old_pending(self):
         before = self.client.get("/api/portfolio").json()

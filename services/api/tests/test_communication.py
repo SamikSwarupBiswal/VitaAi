@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
-
 from vita_api.config import Settings
 from vita_api.contracts import AccountView, CommunicationDrafts
 from vita_api.nebius import Nebius
