@@ -325,6 +325,50 @@ function MissionSourceProvenance({ selection, account }: { selection: NonNullabl
   </details>;
 }
 
+function MissionGuide({ data, step }: { data: MissionData; step: Mission["current_step"] }) {
+  const { mission, account, actions, executions } = data;
+  const instructions: Record<Mission["current_step"], string> = {
+    Review: "Inspect the selected alternative, evidence binding, risks and plan provenance before preparing anything.",
+    Evidence: "Read original source dates and caveats. Missing evidence is not evidence of safety or opportunity.",
+    Outreach: "Review the exact preview for the selected task or unsent draft. Saving content requires fresh review; it does not contact a customer.",
+    "CRM Note": "Prepare a note only if the selected plan includes a note. Save all selected actions before submitting for review.",
+    Approval: "An authenticated reviewer must decide the exact saved revision, mode and destination. Editing invalidates review; an old decision is not current authority.",
+    Execution: "Inspect the retained claim and verified prerequisite receipts. Dispatch is a separate explicit action subject to fresh server authorization.",
+    Outcome: "Inspect receipts separately from the human report. Record only an observed result or identified manual follow-up, never a generated success claim.",
+  };
+  const statusGuidance: Record<Mission["status"], string> = {
+    draft: "Review the saved plan before preparing its selected actions.",
+    prepared: "Inspect all saved previews before submitting for exact review.",
+    awaiting_review: "Wait for an authenticated reviewer decision in Approval.",
+    approved: "A saved approval is not execution permission; the server rechecks current bindings, authority and dependencies.",
+    rejected: "Inspect the rejection decision in Approval. Rejection cannot execute or complete through this guide.",
+    revision_required: "Inspect the revision decision in Approval and revise permitted preparation before fresh review.",
+    executing: "Execution is active. Refresh saved records without dispatching again.",
+    executed: "Inspect receipts and capture the separate observed human report in Outcome.",
+    execution_failed: "Inspect the definite failure and retained claim in Execution before any permitted retry or identified manual follow-up.",
+    reconciliation_required: "Do not repeat the write. Inspect Execution and request authorized reviewer reconciliation.",
+    outcome_recorded: "Inspect the retained report and mission state; a reported result is not independently verified customer impact.",
+    completed: "This is historical completed work. Inspect its report and corrections; choose other unfinished work instead of repeating it.",
+    superseded: "This is replaced work. Use the existing replacement link; preserve the original history.",
+  };
+  const changed = mission.evidence.account_revision !== account.account.revision
+    || mission.evidence.snapshot_hash !== account.assessment.snapshot_hash || mission.evidence.as_of !== account.assessment.as_of;
+  const missing = !mission.evidence.evidence_ids.length
+    || mission.evidence.evidence_ids.some(id => !account.evidence?.some(fact => fact.id === id));
+  return <details className="mission-disclosure" aria-label={`Guidance for ${step}`}>
+    <summary>Guide this step: {step}</summary>
+    <p>{instructions[step]}</p>
+    <p>Saved mission status: {mission.status.replaceAll("_", " ")} · revision {mission.revision}. {statusGuidance[mission.status]}</p>
+    {executions.some(item => item.status === "result_unknown") && <p>Do not repeat a write with an unknown result. Inspect its retained claim in Execution.</p>}
+    {changed && <p>Evidence has changed. Inspect Review recovery before new preparation; this guide cannot renew authority.</p>}
+    {missing && <p>Bound evidence is unavailable in the current account view. Inspect Evidence before proposing further work.</p>}
+    <p>{actions.length ? `Saved action modes: ${[...new Set(actions.map(action => action.mode))].join(", ")}. Simulation is local; live actions require separately configured access and exact approval.`
+      : "Mode not selected: no saved action previews. Preparation defaults to simulation."}</p>
+    <p>Guidance never advances a mission. Viewing a step is not a completed step or verified customer result.</p>
+    <a href={`/walkthrough?${new URLSearchParams({ account: mission.account_id, mission: mission.id })}`}>Full walkthrough for this account and mission</a>
+  </details>;
+}
+
 function MissionPanels({ data, configured, refresh }: { data: MissionData; configured: boolean; refresh: (message?: string) => void }) {
   const { mission, plan, account, actions, decisions, executions, receipts, audit } = data;
   const params = useSearchParams();
@@ -404,6 +448,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
     {op.error && <p role="alert" className="error-banner">{op.error}</p>}
     {op.busy && <p role="status">Saving server records...</p>}
     <section className="mission-step" aria-label={`${step} step`}><h3>{step}</h3>
+      <MissionGuide key={step} data={data} step={step} />
       {step === "Review" && <><p>{choice.rationale}</p><p>Plan: {plan.source} · {plan.validation} · {plan.id}</p>
         {plan.model_run_id && <p>Model planning run: {plan.model_run_id}</p>}<p>{[...choice.risks, ...plan.caveats].join(" ")}</p>
         <ol>{choice.steps.map(item => <li key={item.id}><strong>{kindLabel(item.kind)}</strong><pre>{item.content}</pre>

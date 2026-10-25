@@ -53,7 +53,7 @@ function harness(role = "reviewer", step = "Execution") {
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) },
     "./coaching-panel": { CoachingPanel: () => null },
     "next/navigation": { useSearchParams: () => new URLSearchParams({ step }), useRouter: () => ({ replace() {} }) },
-  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission; exports.priorities=MissionPriorities;");
+  }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission; exports.priorities=MissionPriorities; exports.guide=MissionGuide;");
   function render(component, props) {
     cursor = 0; const tree = component(props), pending = effects; effects = []; pending.forEach(fn => fn()); return tree;
   }
@@ -62,6 +62,44 @@ function harness(role = "reviewer", step = "Execution") {
     unmount() { cleanups.forEach(fn => fn?.()); } };
 }
 const button = (tree, label) => walk(tree, n => n.type === "button" && [n.props.children].flat().join("") === label)[0];
+
+test("contextual guide follows the selected step and exact saved mission without actions or inferred progress", () => {
+  const app = harness(), value = data();
+  value.account.evidence = [{ id: "evidence" }];
+  const original = structuredClone(value);
+  const expected = [["Review", /selected alternative/], ["Evidence", /source dates/], ["Outreach", /exact preview/],
+    ["CRM Note", /selected plan includes a note/], ["Approval", /authenticated reviewer/],
+    ["Execution", /retained claim/], ["Outcome", /human report/]];
+  for (const [step, text] of expected) {
+    const tree = app.components.guide({ data: value, step });
+    const html = renderToStaticMarkup(tree);
+    assert.match(html, new RegExp(`Guide this step: ${step}`)); assert.match(html, text);
+    assert.match(html, /Saved mission status: approved/); assert.match(html, /Saved action modes: live/);
+    assert.match(html, /Guidance never advances/); assert.match(html, /not execution permission/);
+    assert.equal(tree.type, "details"); assert.equal(tree.props.open, undefined);
+    assert.equal(walk(tree, n => n.type === "button" || n.type === "form").length, 0);
+    assert.deepEqual(walk(tree, n => n.type === "a").map(n => n.props.href), ["/walkthrough?account=account&mission=mission"]);
+  }
+  assert.deepEqual(value, original); assert.equal(app.requests.length, 0);
+  assert.equal(walk(app.panels(value), n => n.type === app.components.guide)[0].props.step, "Execution");
+});
+
+test("contextual guide keeps unknown, active, rejected, completed and stale states distinct", () => {
+  const app = harness();
+  for (const [status, expected] of [["reconciliation_required", /Do not repeat/], ["executing", /active/],
+    ["execution_failed", /definite failure/], ["rejected", /decision/], ["revision_required", /decision/],
+    ["completed", /historical/], ["superseded", /replacement/], ["awaiting_review", /reviewer/]]) {
+    const value = data(); value.mission.status = status;
+    value.account.evidence = []; value.account.assessment.snapshot_hash = "changed"; value.actions = [];
+    const html = renderToStaticMarkup(app.components.guide({ data: value, step: "Outcome" }));
+    assert.match(html, expected); assert.match(html, /Evidence has changed/);
+    assert.match(html, /Bound evidence is unavailable/); assert.match(html, /Mode not selected/);
+    assert.match(html, /not a completed step or verified customer result/);
+  }
+  const value = data(); value.executions = [{ status: "result_unknown" }];
+  assert.match(renderToStaticMarkup(app.components.guide({ data: value, step: "Review" })), /Do not repeat/);
+  assert.equal(app.requests.length, 0);
+});
 
 test("seller priorities exclude terminal and foreign work and hand off to the exact unfinished mission", () => {
   const app = harness("seller"), account = data().account;
