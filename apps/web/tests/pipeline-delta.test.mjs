@@ -134,6 +134,80 @@ test("parent shows seller priorities only for current saved snapshots and hides 
   }
 });
 
+function preparationHarness(deferPassive = false) {
+  const states = [], refs = [], effects = [], layouts = [], requests = [], writes = [];
+  const passive = [];
+  let s = 0, r = 0, e = 0, l = 0;
+  const lifecycle = (list, index, fn, deps) => {
+    if (!list[index] || deps.some((value, i) => value !== list[index].deps[i])) {
+      list[index]?.cleanup?.(); list[index] = { deps, cleanup: fn() };
+    }
+  };
+  const hooks = {
+    useState(initial) { const i = s++; if (!(i in states)) states[i] = initial; return [states[i], value => { states[i] = value; }]; },
+    useRef(initial) { return refs[r++] ??= { current: initial }; },
+    useEffect(fn, deps) { const i = e++; if (deferPassive) passive.push(() => lifecycle(effects, i, fn, deps)); else lifecycle(effects, i, fn, deps); },
+    useLayoutEffect(fn, deps) { lifecycle(layouts, l++, fn, deps); },
+  };
+  const { PipelinePanel } = load("../components/pipeline-panel.tsx", { react: hooks, "@/lib/pipeline-delta": helper,
+    "@/lib/api": { api(url, init) { return new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })); } } });
+  let organizationId = "org";
+  return { requests, states, writes,
+    flushPassive() { passive.splice(0).forEach(fn => fn()); },
+    render() { s = r = e = l = 0; return PipelinePanel({ seller: true, organizationId, snapshots: { account: "a".repeat(64) }, configured: false, onSelect() {} }); },
+    changeOrganization(value) { organizationId = value; return this.render(); },
+    unmount() { [...layouts, ...effects].forEach(value => value.cleanup?.()); },
+  };
+}
+
+test("preparation rejects captured duplicates, unmounted handlers and obsolete organization responses", async t => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  let writes;
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem() { return null; }, setItem(...args) { writes.push(args); } } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "localStorage", previous); else delete globalThis.localStorage; });
+  for (const mode of ["normal", "organization", "unmount", "foreign-result"]) {
+    const app = preparationHarness(); writes = app.writes;
+    const captured = walk(app.render()).find(n => n.type === "button" && n.props.children === "Prepare recommendations").props.onClick;
+    const pending = captured(), duplicate = captured(); assert.equal(app.requests.length, 1, mode); await duplicate;
+    if (mode === "organization") app.changeOrganization("new-org");
+    if (mode === "unmount") app.unmount();
+    const saved = run(); saved.steps = []; saved.caveats = [];
+    saved.recommendations[0].action.evidence_ids = ["fact"];
+    saved.recommendations[0].governance = { status: "review_required", caveats: [] };
+    saved.recommendations[0].communication = { status: "blocked" };
+    if (mode === "foreign-result") saved.organization_id = "foreign";
+    app.requests[0].resolve(saved); await pending;
+    if (mode === "normal") { assert.equal(app.states[1], saved); assert.deepEqual(writes, [["vitaai-pipeline:org", firstId]]); }
+    else { assert.equal(app.states[1], null, mode); assert.deepEqual(writes, [], mode); }
+    if (mode === "organization" || mode === "unmount") { await captured(); assert.equal(app.requests.length, 1); }
+    app.unmount();
+  }
+});
+
+test("restore rejects a different saved run or organization without publishing it", async t => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem() { return firstId; } } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "localStorage", previous); else delete globalThis.localStorage; });
+  for (const saved of [run(secondId), { ...run(), organization_id: "foreign" }]) {
+    const app = preparationHarness(); app.render(); assert.equal(app.requests.length, 1);
+    app.requests[0].resolve(saved); for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.equal(app.states[1], null); assert.match(app.states[3], /Saved preparation unavailable/); app.unmount();
+  }
+});
+
+test("explicit preparation started before passive restore keeps its result and releases its lock", async () => {
+  for (const completesFirst of [false, true]) {
+    const app = preparationHarness(true);
+    const captured = walk(app.render()).find(n => n.type === "button" && n.props.children === "Prepare recommendations").props.onClick;
+    const pending = captured(); if (!completesFirst) app.flushPassive();
+    const saved = run(); app.requests[0].resolve(saved); await pending;
+    if (completesFirst) { app.flushPassive(); await Promise.resolve(); }
+    assert.equal(app.states[1], saved); assert.equal(app.states[2], false);
+    const next = captured(); assert.equal(app.requests.length, 2);
+    app.unmount(); app.requests[1].resolve(saved); await next;
+  }
+});
+
 test("saved comparison preserves exact history and distinguishes selection from account deletion", () => {
   const before = run(), after = run(secondId, "2026-10-24T01:00:00Z");
   const original = structuredClone([before, after]);

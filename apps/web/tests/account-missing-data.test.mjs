@@ -297,7 +297,7 @@ test("account source exposes raw observation and missing or invalid normalized f
 });
 
 test("pipeline suppresses saved drafts after source revision or snapshot changes", () => {
-  const saved = { id: "saved", started_at: "2026-10-17T00:00:00Z", status: "deterministic", steps: [], caveats: [],
+  const saved = { id: "saved", organization_id: "org", started_at: "2026-10-17T00:00:00Z", status: "deterministic", steps: [], caveats: [],
     contexts: [{ account: { id: "a", name: "Account" } }], recommendations: [{ account_id: "a",
       assessment: { snapshot_hash: "original" }, action: { kind: "follow_up" }, governance: { status: "ready_for_preparation" },
       communication: { status: "deterministic_template", internal_note: "Original saved draft" } }] };
@@ -321,7 +321,7 @@ test("pipeline suppresses saved drafts after source revision or snapshot changes
 });
 
 test("pipeline specialist findings retain failures, sources, conflicts and exact highlight navigation", () => {
-  const saved = { id: "saved", started_at: "2026-10-24", status: "partial", steps: [], caveats: [],
+  const saved = { id: "saved", organization_id: "org", started_at: "2026-10-24", status: "partial", steps: [], caveats: [],
     contexts: [{ account: { id: "a", name: "Selected account" }, evidence: [{ id: "fact", metric: "usage_change", value: -20,
       fact: "<script>untrusted source</script>", source: "CRM", source_record: "record", observed_at: "2026-10-23", ingested_at: "2026-10-24", synthetic: true }] },
       { account: { id: "b", name: "Full-pool opportunity" }, evidence: [] }],
@@ -365,7 +365,7 @@ test("pipeline specialist findings retain failures, sources, conflicts and exact
 test("pipeline legacy and empty specialist records show no invented findings", () => {
   for (const portfolio_specialists of [null, { account_count: 0, policy_version: "specialists-1", input_snapshots: {}, highest_risk: null, highest_opportunity: null, caveats: [] }]) {
     let cursor = 0;
-    const state = ["attention", { id: "old", steps: [], contexts: [], recommendations: [], caveats: [], portfolio_specialists }, false, null, false];
+    const state = ["attention", { id: "old", organization_id: "org", steps: [], contexts: [], recommendations: [], caveats: [], portfolio_specialists }, false, null, false];
     const pipeline = load("../components/pipeline-panel.tsx", { react: { useEffect() {}, useRef: initial => ({ current: initial }),
       useState: initial => [state[cursor++] ?? initial, () => {}] }, "@/lib/api": api });
     const html = renderToStaticMarkup(pipeline.PipelinePanel({ onSelect() {}, organizationId: "org", snapshots: {}, configured: false }));

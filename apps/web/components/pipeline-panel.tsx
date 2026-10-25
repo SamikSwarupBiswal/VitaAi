@@ -16,30 +16,53 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
   const [useModel, setUseModel] = useState(false);
   const requestSequence = useRef(0);
   const storageKey = `vitaai-pipeline:${organizationId}`;
-  const stale = run && (run.recommendations.some(item => snapshots[item.account_id] !== item.assessment.snapshot_hash)
+  const preparation = useRef({ active: true, storageKey, pending: false, explicitStarted: false });
+  useLayoutEffect(() => {
+    const binding = preparation.current;
+    ++requestSequence.current;
+    binding.active = true; binding.storageKey = storageKey; binding.pending = false; binding.explicitStarted = false;
+    return () => { binding.active = false; };
+  }, [storageKey, organizationId]);
+  const stale = run && (run.organization_id !== organizationId
+    || run.recommendations.some(item => snapshots[item.account_id] !== item.assessment.snapshot_hash)
     || Object.entries(run.portfolio_specialists?.input_snapshots ?? {}).some(([id, hash]) => snapshots[id] !== hash));
   useEffect(() => {
+    if (preparation.current.explicitStarted) return;
     let active = true;
     const sequence = ++requestSequence.current;
+    queueMicrotask(() => {
+      if (active && sequence === requestSequence.current) { setRun(null); setError(null); setBusy(false); }
+    });
     let id: string | null = null;
     try { id = localStorage.getItem(storageKey); } catch { /* Storage is optional. */ }
     if (id) api<PipelineRun>(`pipeline/${encodeURIComponent(id)}`)
-      .then(saved => { if (active && sequence === requestSequence.current) setRun(saved); })
+      .then(saved => {
+        if (!active || sequence !== requestSequence.current) return;
+        if (saved.id !== id || saved.organization_id !== organizationId) throw new Error("Saved preparation binding changed");
+        setRun(saved);
+      })
       .catch(() => { if (active && sequence === requestSequence.current) setError("Saved preparation unavailable. Prepare a new run."); });
     return () => { active = false; };
-  }, [storageKey]);
+  }, [storageKey, organizationId]);
   async function start() {
-    ++requestSequence.current;
+    const binding = preparation.current;
+    if (!binding.active || binding.pending || binding.storageKey !== storageKey) return;
+    binding.pending = true;
+    binding.explicitStarted = true;
+    const sequence = ++requestSequence.current;
+    const matches = () => binding.active && binding.storageKey === storageKey && sequence === requestSequence.current;
     setBusy(true);
     setError(null);
     setRun(null);
     try {
       const prepared = await api<PipelineRun>("pipeline", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ intent, limit: useModel ? 1 : 3, communicate: useModel, communication_mode: "drafts" }) });
+      if (!matches()) return;
+      if (prepared.organization_id !== organizationId) throw new Error("Prepared recommendations do not match this organization.");
       setRun(prepared);
       try { localStorage.setItem(storageKey, prepared.id); } catch { /* The API still retains the run. */ }
-    } catch (error) { setError(error instanceof Error ? error.message : "Pipeline failed."); }
-    finally { setBusy(false); }
+    } catch (error) { if (matches()) setError(error instanceof Error ? error.message : "Pipeline failed."); }
+    finally { if (matches()) { binding.pending = false; setBusy(false); } }
   }
   return <details className="pipeline-panel" open={expanded || undefined}><summary>Intelligence pipeline</summary>
     <p>Six roles prepare recommendations and drafts from the current evidence. Templates by default; drafts require human review. No external actions.</p>
