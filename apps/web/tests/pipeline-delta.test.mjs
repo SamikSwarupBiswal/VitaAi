@@ -67,6 +67,49 @@ test("empty seller priorities invent no work; missing context has no navigation"
   assert.match(renderToStaticMarkup(SellerPriorities({ run: saved, onSelect() {} })), /No recommendations selected/);
 });
 
+test("seller effort and intended outcomes are action-specific review proposals, never measured impact", () => {
+  const { SellerPriorities } = load("../components/seller-priorities.tsx");
+  const expectations = [
+    ["manual_review", /Scope unknown/, /Identify the missing or contradictory evidence/],
+    ["support_escalation", /Extended review/, /Identify unresolved support questions/],
+    ["renewal_prep", /Focused review/, /Prepare renewal evidence and open questions/],
+    ["optimization_review", /Extended review/, /Explore usage and growth signals together/],
+    ["reactivation", /Focused review/, /Prepare questions about declining usage/],
+    ["follow_up", /Focused review/, /Assess whether growth evidence supports a follow-up/],
+    ["monitor", /Brief review/, /Review retained signals without preparing outreach/],
+  ];
+  for (const [kind, effort, outcome] of expectations) {
+    const saved = run(), item = saved.recommendations[0];
+    item.action = { kind, rationale: `Original ${kind} rationale`, evidence_ids: ["fact"] };
+    item.governance = { status: kind === "manual_review" ? "review_required" : "ready_for_preparation", caveats: [] };
+    item.communication = { status: "failed" };
+    const original = structuredClone(saved);
+    const html = renderToStaticMarkup(SellerPriorities({ run: saved, onSelect() {} }));
+    assert.match(html, /Proposed review effort:/); assert.match(html, effort);
+    assert.match(html, /Intended outcome \(proposal\):/); assert.match(html, outcome);
+    assert.match(html, /Actual time and customer impact are unknown/);
+    assert.match(html, /Communication: failed/); assert.match(html, new RegExp(`Original ${kind} rationale`));
+    assert.doesNotMatch(html, /\d+ minutes|reduces churn|protects revenue|scheduled follow-up/i);
+    assert.deepEqual(saved, original);
+  }
+});
+
+test("seller proposals retain evidence blockers and cannot infer work from absent context or sources", () => {
+  const { SellerPriorities } = load("../components/seller-priorities.tsx");
+  for (const mode of ["review-required", "missing-context", "missing-evidence"]) {
+    const saved = run(), item = saved.recommendations[0];
+    item.action = { kind: "follow_up", rationale: "Historical growth proposal", evidence_ids: ["fact"] };
+    item.governance = { status: mode === "review-required" ? "review_required" : "ready_for_preparation", caveats: [] };
+    item.communication = { status: "blocked" };
+    if (mode === "missing-context") saved.contexts = [];
+    if (mode === "missing-evidence") saved.contexts[0].evidence = [];
+    const html = renderToStaticMarkup(SellerPriorities({ run: saved, onSelect() {} }));
+    assert.match(html, /Proposed review effort:.*Scope unknown/);
+    assert.doesNotMatch(html, /Assess whether growth evidence supports a follow-up/);
+    assert.match(html, mode === "review-required" ? /Identify the missing or contradictory evidence/ : /Retained account evidence is unavailable/);
+  }
+});
+
 test("parent shows seller priorities only for current saved snapshots and hides them during a new run", async () => {
   const saved = run(); saved.steps = []; saved.caveats = [];
   saved.recommendations[0].action.evidence_ids = ["fact"];
