@@ -17,6 +17,7 @@ import { SourceDetectionPanel } from "./source-detection-panel";
 import { HubSpotIngestionPanel } from "./hubspot-ingestion-panel";
 import { HubSpotRefreshPanel } from "./hubspot-refresh-panel";
 import { OperationsReadiness } from "./operations-readiness";
+import { ManagerReports } from "./manager-reports";
 
 export function Workspace({ accountDirectory = false }: { accountDirectory?: boolean }) {
   const params = useSearchParams();
@@ -141,10 +142,11 @@ function ManagerWorkSummary({ portfolio, missions }: { portfolio: Portfolio; mis
           <Link href={`/missions?${new URLSearchParams({ account: mission.account_id, mission: mission.id, step: "Outcome" })}`}>
             {portfolio.accounts.find(view => view.account.id === mission.account_id)!.account.name} — inspect recorded outcome</Link>
           <p>Mission {mission.id} / revision {mission.revision} / created {mission.created_at}. Creation is not completion time.</p>
+          <ManagerReports mission={mission} />
         </li>)}</ul>
       </section>;
     })}
-    <p className="caveat">Outcome links load original human reports, corrections, receipts and provenance in the mission workspace. Completed status alone does not independently verify a reported business result. Coaching review and assignments remain unavailable here.</p>
+    <p className="caveat">Inspect saved reports here, or use Outcome links for full human reports, corrections, receipts and provenance. Completed status alone does not independently verify a reported business result. Use Outcome for separately authorized coaching decisions. Assignments remain unavailable.</p>
   </details>;
 }
 

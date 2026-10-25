@@ -10,7 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
-  mocks = { "./saved-research-fusion": { SavedResearchFusion: () => null }, ...mocks };
+  mocks = { "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const compiled = ts.transpileModule(readFileSync(filename, "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -31,6 +31,7 @@ const api = load("../lib/api.ts");
 const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
+function ManagerReportsMarker() { return null; }
 const view = (id, value, renewal) => ({
   account: { id, name: id, industry: "Test", annual_value: value, revision: 1 }, renewal_days: renewal,
   assessment: { health: 100, risk: 0, opportunity: 0, confidence: 75, caveats: [], factors: [],
@@ -138,6 +139,7 @@ test("manager summary counts exact owner lifecycle records and links only actual
   const original = structuredClone(missions), tree = workspace.managerForAcceptance({ portfolio, missions });
   const html = renderToStaticMarkup(tree), hrefs = walk(tree).filter(n => n.props?.href).map(n => n.props.href);
   assert.deepEqual(hrefs, ["/missions?account=account&mission=complete&step=Outcome"]);
+  assert.deepEqual(walk(tree).filter(n => n.type === ManagerReportsMarker).map(n => n.props.mission.id), ["complete"]);
   for (const text of ["completed: 1", "reconciliation required: 1", "rejected: 1", "awaiting review: 1", "superseded: 1",
     "Owner owner &lt;one&gt;", "Creation is not completion time", "not a verified seller directory", "does not independently verify"]) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /foreign-owner|missing-owner|<one>/);
