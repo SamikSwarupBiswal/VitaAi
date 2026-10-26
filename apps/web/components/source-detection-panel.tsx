@@ -70,7 +70,7 @@ function DetectionAccount({ view, admin }: { view: AccountView; admin: boolean }
       if (!signal.aborted) setNotice("Detection response could not be confirmed and may have persisted. Refresh reads saved records; it never repeats detection. An aborted request does not prove rollback.");
     } finally {
       locked.current = false;
-      if (!signal.aborted) { setBusy(false); await refresh(); }
+      if (!signal.aborted) { setBusy(false); await refresh(); window.dispatchEvent(new Event("vitaai-source-history-changed")); }
       else window.dispatchEvent(new Event("vitaai-detections-changed"));
     }
   }

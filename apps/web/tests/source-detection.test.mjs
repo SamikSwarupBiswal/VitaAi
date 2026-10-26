@@ -78,6 +78,7 @@ test("reads never detect; explicit admin batches bind displayed revision/source 
   const request = env.requests.shift(); assert.match(request.url, /accounts\/a\/detect-changes$/);
   assert.deepEqual(JSON.parse(request.init.body), { schema_version: "1", expected_account_revision: 25, expected_source_id: id(25) });
   request.resolve(batch); await flush(); await env.settle(view, [record(20)]); await pending;
+  assert.deepEqual(env.events, ["vitaai-source-history-changed"]);
   let html = renderToStaticMarkup(app.render()); assert.match(html, /Backlog remains/); assert.match(html, /20/);
   env.focus(); await flush(); await env.settle(view, [record(20)]);
   assert.equal(env.requests.length, 0);
@@ -90,6 +91,7 @@ test("lost responses refresh saved records without mutation retry; failed refres
   const env = environment(t), app = env.mount(); await env.ready(app);
   const pending = app.button("Detect saved source changes").props.onClick(); env.requests.shift().reject(new Error("lost response")); await flush();
   const reads = env.requests.splice(0); reads[0].reject(new Error("refresh failed")); reads[1].resolve([]); await pending;
+  assert.deepEqual(env.events, ["vitaai-source-history-changed"]);
   assert.match(renderToStaticMarkup(app.render()), /may have persisted/);
   assert.equal(app.button("Detect saved source changes").props.disabled, true);
   await app.button("Detect saved source changes").props.onClick(); assert.equal(env.requests.length, 0);
