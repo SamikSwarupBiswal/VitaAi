@@ -2,6 +2,8 @@ import { ChartNoAxesColumn, LoaderCircle } from "lucide-react";
 import type { AccountView, ModelRun, ProviderStatus } from "@/lib/api";
 import { AccountChronology } from "./account-chronology";
 import { AccountMissionHistory } from "./account-mission-history";
+import { SavedPipelineHistory } from "./saved-pipeline-history";
+import { SavedRunComparison } from "./pipeline-panel";
 
 export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
   view: AccountView; provider: ProviderStatus | null; busy: boolean;
@@ -34,6 +36,10 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
       </details>)}
     </div></section>
     <AccountChronology view={view} />
+    <SavedPipelineHistory organizationId={account.organization_id} accountId={account.id}
+      snapshots={{ [account.id]: assessment.snapshot_hash }}
+      key={JSON.stringify([account.id, account.revision, view.source?.id, assessment.as_of, assessment.snapshot_hash])}
+      renderComparison={(saved, baselines) => <SavedRunComparison key={saved.id} current={saved} baselines={baselines} accountId={account.id} />} />
     <AccountMissionHistory view={view} />
     <section><h3>Assessment</h3><p>{assessment.recommendation}</p>
       <p className="muted">Confidence {assessment.confidence}%</p>

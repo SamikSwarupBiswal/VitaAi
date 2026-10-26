@@ -131,7 +131,7 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
 
 const savedRunId = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 
-export function SavedRunComparison({ current, baselines = [] }: { current: PipelineRun; baselines?: PipelineRunSummary[] }) {
+export function SavedRunComparison({ current, baselines = [], accountId }: { current: PipelineRun; baselines?: PipelineRunSummary[]; accountId?: string }) {
   const [baselineId, setBaselineId] = useState("");
   const [result, setResult] = useState<ReturnType<typeof comparePipelineRuns> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -139,32 +139,35 @@ export function SavedRunComparison({ current, baselines = [] }: { current: Pipel
   const active = useRef({ mounted: false, input: "", busy: false, sequence: 0 });
   const controller = useRef<AbortController | null>(null);
   const currentRef = useRef<PipelineRun | null>(current);
-  useLayoutEffect(() => { currentRef.current = current; return () => { currentRef.current = null; controller.current?.abort(); }; }, [current]);
+  const accountRef = useRef(accountId);
+  useLayoutEffect(() => { currentRef.current = current; accountRef.current = accountId;
+    return () => { currentRef.current = null; controller.current?.abort(); }; }, [current, accountId]);
   useEffect(() => { const binding = active.current; binding.mounted = true;
     return () => { binding.mounted = false; controller.current?.abort(); }; }, []);
   const choices = baselines.filter(item => {
-    try { return item.id !== current.id && savedRunInstant(item.started_at) <= savedRunInstant(current.started_at); }
+    try { return item.id !== current.id && (accountId === undefined || item.input_account_ids.includes(accountId))
+      && savedRunInstant(item.started_at) <= savedRunInstant(current.started_at); }
     catch { return false; }
   });
   function chooseBaseline(value: string) {
-    if (currentRef.current !== current) return;
+    if (currentRef.current !== current || accountRef.current !== accountId) return;
     active.current.input = value; active.current.sequence++; active.current.busy = false;
     controller.current?.abort(); setBaselineId(value); setBusy(false); setResult(null); setError(null);
   }
   async function inspect() {
     const binding = active.current;
-    if (!binding.mounted || binding.busy || binding.input !== baselineId || currentRef.current !== current
+    if (!binding.mounted || binding.busy || binding.input !== baselineId || currentRef.current !== current || accountRef.current !== accountId
       || !savedRunId.test(baselineId) || baselineId === current.id) return;
     const sequence = ++binding.sequence;
     binding.busy = true; setBusy(true); setError(null); setResult(null);
     const request = new AbortController(); controller.current = request;
     const matches = () => binding.mounted && !request.signal.aborted && binding.sequence === sequence
-      && binding.input === baselineId && currentRef.current === current;
+      && binding.input === baselineId && currentRef.current === current && accountRef.current === accountId;
     try {
       const baseline = await api<PipelineRun>(`pipeline/${encodeURIComponent(baselineId)}`, { signal: request.signal });
       if (!matches()) return;
       if (baseline.id !== baselineId) throw new Error("Saved baseline identity does not match the requested run.");
-      setResult(comparePipelineRuns(baseline, current));
+      setResult(comparePipelineRuns(baseline, current, accountId));
     } catch (failure) {
       if (matches()) setError(failure instanceof Error ? failure.message : "Saved baseline unavailable.");
     } finally { if (matches()) { binding.busy = false; setBusy(false); } }
@@ -179,7 +182,7 @@ export function SavedRunComparison({ current, baselines = [] }: { current: Pipel
       onChange={event => chooseBaseline(event.target.value)} /></label>
     <button onClick={inspect} disabled={busy || !savedRunId.test(baselineId) || baselineId === current.id}>{busy ? "Inspecting baseline..." : "Compare saved baseline"}</button>
     {error && <p role="alert">{error}</p>}
-    {result && <div aria-live="polite"><p>Baseline {result.beforeId} · {result.beforeAt} · assessment {result.beforeAsOf}<br />Displayed {result.afterId} · {result.afterAt} · assessment {result.afterAsOf}</p>
+    {result && result.accountScope === accountId && result.afterId === current.id && <div aria-live="polite"><p>Baseline {result.beforeId} · {result.beforeAt} · assessment {result.beforeAsOf}<br />Displayed {result.afterId} · {result.afterAt} · assessment {result.afterAsOf}</p>
       {result.caveats.map(text => <p className="caveat" key={text}>{text}</p>)}
       {!result.rows.length && <p>Both selected results are empty. No recommendation changes can be established.</p>}
       <ul>{result.rows.map(row => <li key={row.accountId}>

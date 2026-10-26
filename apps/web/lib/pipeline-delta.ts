@@ -12,7 +12,7 @@ export function savedRunInstant(value: string): bigint {
 
 export type PipelineDelta = {
   accountId: string;
-  kind: "entered_selection" | "left_selection" | "changed" | "unchanged";
+  kind: "entered_selection" | "left_selection" | "changed" | "unchanged" | "outside_selection";
   before: Recommendation | null;
   after: Recommendation | null;
   beforeContext: Context | null;
@@ -20,7 +20,7 @@ export type PipelineDelta = {
   caveats: string[];
 };
 
-export function comparePipelineRuns(before: PipelineRun, after: PipelineRun) {
+export function comparePipelineRuns(before: PipelineRun, after: PipelineRun, accountId?: string) {
   if (before.organization_id !== after.organization_id) throw new Error("Saved runs belong to different organizations.");
   if (before.id === after.id) throw new Error("Choose a different saved baseline run.");
   if (savedRunInstant(before.started_at) > savedRunInstant(after.started_at)) throw new Error("Baseline must be dated no later than the displayed run.");
@@ -33,6 +33,9 @@ export function comparePipelineRuns(before: PipelineRun, after: PipelineRun) {
         || context.evidence.some(item => item.account_id !== context.account.id || item.organization_id !== run.organization_id))
       || run.recommendations.some(item => !ids.has(item.account_id))) throw new Error("Saved run context is inconsistent; comparison unavailable.");
   }
+  if (accountId !== undefined && [before, after].some(run => !run.contexts.some(context => context.account.id === accountId))) {
+    throw new Error("Both saved runs must contain this account's retained input.");
+  }
   const caveats = ["Historical comparison only. Changes do not establish cause, freshness, approval, execution or business impact.",
     "Entering or leaving a selected result does not mean an account was created, deleted or resolved."];
   if (before.request.intent !== after.request.intent || before.request.limit !== after.request.limit) {
@@ -42,22 +45,24 @@ export function comparePipelineRuns(before: PipelineRun, after: PipelineRun) {
     caveats.push("Communication settings differ. Provider/template differences are not changes to account facts.");
   }
   if (before.as_of !== after.as_of) caveats.push("Assessment dates differ; elapsed time can change renewal and evidence eligibility without a new observation.");
-  const accountIds = [...new Set([...after.recommendations.map(item => item.account_id), ...before.recommendations.map(item => item.account_id)])];
+  const accountIds = accountId !== undefined ? [accountId]
+    : [...new Set([...after.recommendations.map(item => item.account_id), ...before.recommendations.map(item => item.account_id)])];
   const rows: PipelineDelta[] = accountIds.map(accountId => {
     const prior = before.recommendations.find(item => item.account_id === accountId) ?? null;
     const current = after.recommendations.find(item => item.account_id === accountId) ?? null;
     return {
       accountId,
-      kind: !prior ? "entered_selection" : !current ? "left_selection"
+      kind: !prior && !current ? "outside_selection" : !prior ? "entered_selection" : !current ? "left_selection"
         : prior.rank !== current.rank || prior.action.kind !== current.action.kind
           || prior.assessment.snapshot_hash !== current.assessment.snapshot_hash ? "changed" : "unchanged",
       before: prior, after: current,
       beforeContext: before.contexts.find(context => context.account.id === accountId) ?? null,
       afterContext: after.contexts.find(context => context.account.id === accountId) ?? null,
-      caveats: prior && current && prior.assessment.policy_version !== current.assessment.policy_version
+      caveats: !prior && !current ? ["The account is retained in both inputs but outside both selected results; no recommendation, resolution or score is inferred."]
+        : prior && current && prior.assessment.policy_version !== current.assessment.policy_version
         ? ["Assessment policy differs; score and recommendation changes are not like-for-like."] : [],
     };
   });
   return { beforeId: before.id, afterId: after.id, beforeAt: before.started_at, afterAt: after.started_at,
-    beforeAsOf: before.as_of, afterAsOf: after.as_of, caveats, rows };
+    beforeAsOf: before.as_of, afterAsOf: after.as_of, caveats, rows, accountScope: accountId };
 }

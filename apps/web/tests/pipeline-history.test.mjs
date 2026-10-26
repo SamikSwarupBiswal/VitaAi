@@ -34,7 +34,7 @@ const summary = saved => ({ id: saved.id, actor_id: saved.actor_id, started_at: 
 const history = () => ({ organization_id: "org", limit: 20, total_count: 2, window_count: 2, undated_count: 0, unavailable_count: 0, has_more: false,
   items: [summary(run(second)), summary(run())] });
 
-function setup(t) {
+function setup(t, supplied = {}) {
   const slots = [], cleanups = [], requests = [], events = new Map(), selected = [];
   let cursor = 0, effects = [], session = { mode: "session", actor: { id: "viewer", organization_id: "org", role: "viewer" } };
   const prior = globalThis.window;
@@ -50,7 +50,7 @@ function setup(t) {
     "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
     "./session-gate": { useSession: () => session } });
   let props = { organizationId: "org", snapshots: { account: "current hash" }, onSelect: id => selected.push(id),
-    renderComparison: saved => `Comparison for ${saved.id}` };
+    renderComparison: saved => `Comparison for ${saved.id}`, ...supplied };
   const outer = () => component.SavedPipelineHistory(props);
   const render = () => { cursor = 0; const node = outer(); const tree = typeof node?.type === "function" ? node.type(node.props) : node;
     const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
@@ -144,4 +144,25 @@ test("saved instant comparison retains microseconds and timezone equivalence", (
   older.started_at = "2026-10-24T00:00:00.000001Z"; newer.started_at = "2026-10-24T05:30:00.000002+05:30";
   assert.doesNotThrow(() => helper.comparePipelineRuns(older, newer));
   assert.throws(() => helper.comparePipelineRuns(newer, older), /no later/);
+});
+
+test("account history filters the organization window, shows only that retained input and discloses coverage", async t => {
+  const app = setup(t, { accountId: "outside" }), data = history();
+  data.items[0].input_account_ids = ["account"];
+  await app.list(data);
+  let html = renderToStaticMarkup(app.render());
+  assert.match(html, /1 matching run.*organization/); assert.doesNotMatch(html, new RegExp(`Inspect run ${second}`));
+  await app.detail(); html = renderToStaticMarkup(app.render());
+  assert.match(html, /Outside selected result/); assert.match(html, /Annual value 0/);
+  assert.doesNotMatch(html, /Original rationale|Saved name|Open current account/);
+  const originalKey = app.outer().key; app.props({ accountId: "account" }); assert.notEqual(app.outer().key, originalKey);
+});
+
+test("account history never invents missing input or complete coverage from a window or older ID", async t => {
+  const app = setup(t, { accountId: "missing" }); await app.list();
+  let html = renderToStaticMarkup(app.render());
+  assert.match(html, /0 matching run/); assert.match(html, /not.*complete account history/);
+  const input = walk(app.render()).find(x => x.type === "input"); input.props.onChange({ target: { value: first } });
+  const pending = app.button("Inspect saved run ID").props.onClick(); app.requests.shift().resolve(run()); await pending;
+  html = renderToStaticMarkup(app.render()); assert.match(html, /unavailable or changed/); assert.doesNotMatch(html, /Original rationale|Saved name/);
 });

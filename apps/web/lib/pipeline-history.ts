@@ -29,10 +29,10 @@ export function validatePipelineHistory(saved: PipelineHistory, organizationId: 
   return saved;
 }
 
-export function validateSavedPipelineRun(run: PipelineRun, organizationId: string, id: string, summary?: PipelineRunSummary): PipelineRun {
+export function validateSavedPipelineRun(run: PipelineRun, organizationId: string, id: string, summary?: PipelineRunSummary, accountId?: string): PipelineRun {
   const inputs = run.contexts.map(context => context.account.id), selected = run.recommendations.map(item => item.account_id);
   if (run.id !== id || run.organization_id !== organizationId || !unique(inputs) || !unique(selected)
-    || selected.some(accountId => !inputs.includes(accountId))
+    || selected.some(selectedId => !inputs.includes(selectedId)) || (accountId !== undefined && !inputs.includes(accountId))
     || run.contexts.some(context => context.account.organization_id !== organizationId
       || !unique(context.evidence.map(fact => fact.id))
       || context.evidence.some(fact => fact.organization_id !== organizationId || fact.account_id !== context.account.id))) {

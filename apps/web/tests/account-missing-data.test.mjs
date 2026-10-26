@@ -10,7 +10,8 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
-  mocks = { "./saved-pipeline-history": { SavedPipelineHistory: () => null }, ...mocks };
+  mocks = { "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
+    "./pipeline-panel": { SavedRunComparison: ComparisonMarker }, ...mocks };
   mocks = { "./executive-change-brief": { ExecutiveChangeBrief: ChangeBriefMarker }, ...mocks };
   mocks = { "./account-mission-history": { AccountMissionHistory: MissionHistoryMarker }, "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
@@ -37,6 +38,8 @@ function ManagerReportsMarker() { return null; }
 function ChronologyMarker() { return null; }
 function MissionHistoryMarker() { return null; }
 function ChangeBriefMarker() { return null; }
+function PipelineHistoryMarker() { return null; }
+function ComparisonMarker() { return null; }
 const view = (id, value, renewal) => ({
   account: { id, name: id, industry: "Test", annual_value: value, revision: 1 }, renewal_days: renewal,
   assessment: { health: 100, risk: 0, opportunity: 0, confidence: 75, caveats: [], factors: [],
@@ -55,6 +58,21 @@ function briefingWorkspace(hooks = {}, navigation = {}, session = null, apiOverr
 }
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object"
   ? [node, ...walk(node.props?.children)] : [];
+
+test("account recommendation history and comparison bind the exact displayed account/source/revision/date", () => {
+  const selected = view("account", null, null); selected.account.organization_id = "org";
+  selected.assessment.as_of = "2026-10-26"; selected.source = { id: "source", kind: "hubspot" };
+  const render = value => detail.AccountDetail({ view: value, provider: null, busy: false, onAnalyze() { assert.fail("No analysis"); }, run: null, error: null });
+  const history = walk(render(selected)).find(x => x.type === PipelineHistoryMarker);
+  assert.ok(history); assert.equal(history.props.accountId, "account"); assert.equal(history.props.organizationId, "org");
+  assert.deepEqual(history.props.snapshots, { account: "account" });
+  const saved = { id: "run" }, comparison = history.props.renderComparison(saved, []);
+  assert.equal(comparison.type, ComparisonMarker); assert.equal(comparison.props.accountId, "account"); assert.equal(comparison.props.current, saved);
+  for (const next of [{ ...selected, account: { ...selected.account, revision: 2 } }, { ...selected, source: { id: "next" } },
+    { ...selected, assessment: { ...selected.assessment, as_of: "2026-10-27" } }]) {
+    assert.notEqual(walk(render(next)).find(x => x.type === PipelineHistoryMarker).key, history.key);
+  }
+});
 
 test("operations inspects scoped saved attention with exact links; refresh failure and obsolete reads cannot show success", async t => {
   const prior = Object.getOwnPropertyDescriptor(globalThis, "window"), listeners = new Map();

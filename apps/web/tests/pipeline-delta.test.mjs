@@ -252,21 +252,23 @@ test("crossed, duplicate, inconsistent and reversed saved contexts fail visibly"
   assert.throws(() => helper.comparePipelineRuns(good, before), /no later/);
 });
 
-function mount(current = run(secondId, "2026-10-24T01:00:00Z"), baselines = []) {
+function mount(current = run(secondId, "2026-10-24T01:00:00Z"), baselines = [], accountId) {
   const states = [], refs = [], effects = [], layouts = [], calls = [];
   let s = 0, r = 0, e = 0, l = 0, component;
   const hooks = {
     useState(initial) { const index = s++; if (!(index in states)) states[index] = initial; return [states[index], value => { states[index] = value; }]; },
     useRef(initial) { const index = r++; return refs[index] ??= { current: initial }; },
     useEffect(fn) { const index = e++; if (!(index in effects)) effects[index] = fn(); },
-    useLayoutEffect(fn) { const index = l++; if (!(index in layouts)) layouts[index] = fn(); },
+    useLayoutEffect(fn, deps) { const index = l++; if (!layouts[index] || deps.some((value, i) => value !== layouts[index].deps[i])) {
+      layouts[index]?.cleanup?.(); layouts[index] = { deps, cleanup: fn() }; } },
   };
   component = load("../components/pipeline-panel.tsx", { react: hooks, "@/lib/pipeline-delta": helper,
     "@/lib/api": { api(url, options) { return new Promise((resolve, reject) => calls.push({ url, options, resolve, reject })); } } });
   return {
     calls, states,
-    render() { s = r = e = l = 0; return component.SavedRunComparison({ current, baselines }); },
-    unmount() { [...layouts, ...effects].forEach(cleanup => cleanup?.()); },
+    render() { s = r = e = l = 0; return component.SavedRunComparison({ current, baselines, accountId }); },
+    scope(value) { accountId = value; return this.render(); },
+    unmount() { layouts.forEach(value => value?.cleanup?.()); effects.forEach(cleanup => cleanup?.()); },
   };
 }
 const input = tree => walk(tree).find(n => n.type === "input");
@@ -347,4 +349,33 @@ test("invalid or same baseline cannot issue a read", async () => {
     const tree = enter(app, id); assert.equal(button(tree).props.disabled, true); await button(tree).props.onClick();
   }
   assert.equal(app.calls.length, 0);
+});
+
+test("account comparison retains outside-selection inputs, original Unknowns and membership changes without unrelated rows", () => {
+  const before = run(), after = run(secondId, "2026-10-24T01:00:00Z"), original = structuredClone([before, after]);
+  for (const saved of [before, after]) saved.contexts.push({ account: { id: "outside", organization_id: "org", name: "Other", revision: 1 }, evidence: [] });
+  const scoped = helper.comparePipelineRuns(before, after, "outside");
+  assert.deepEqual(scoped.rows.map(item => item.accountId), ["outside"]); assert.equal(scoped.rows[0].kind, "outside_selection");
+  assert.equal(scoped.rows[0].before, null); assert.equal(scoped.rows[0].after, null);
+  assert.equal(scoped.rows[0].beforeContext.account.id, "outside");
+  assert.equal(helper.comparePipelineRuns({ ...before, recommendations: [] }, after, "account").rows[0].kind, "entered_selection");
+  assert.equal(helper.comparePipelineRuns(before, { ...after, recommendations: [] }, "account").rows[0].kind, "left_selection");
+  assert.throws(() => helper.comparePipelineRuns(before, { ...after, contexts: after.contexts.filter(x => x.account.id !== "outside") }, "outside"), /retained input/);
+  before.contexts.pop(); after.contexts.pop(); assert.deepEqual([before, after], original);
+});
+
+test("account comparison hides obsolete results and fences captured/late handlers when account scope changes", async () => {
+  const older = run(), current = run(secondId, "2026-10-24T01:00:00Z");
+  for (const saved of [older, current]) saved.contexts.push({ account: { id: "outside", organization_id: "org", name: "Other", revision: 1 }, evidence: [] });
+  const baselines = [{ id: firstId, started_at: older.started_at, request: older.request, input_account_ids: ["account", "outside"] },
+    { id: "33333333-3333-4333-8333-333333333333", started_at: older.started_at, request: older.request, input_account_ids: ["unrelated"] }];
+  const app = mount(current, baselines, "account"), select = () => walk(app.render()).find(n => n.type === "select");
+  assert.deepEqual(walk(select()).filter(n => n.type === "option").map(n => n.props.value), ["", firstId]);
+  let pending = button(enter(app, firstId)).props.onClick(); app.calls[0].resolve(older); await pending;
+  assert.match(renderToStaticMarkup(app.render()), /Historical comparison only/);
+  app.scope("outside"); assert.doesNotMatch(renderToStaticMarkup(app.render()), /Historical comparison only/);
+  const captured = button(app.render()).props.onClick; pending = captured(); app.scope("account");
+  assert.equal(app.calls[1].options.signal.aborted, true); await captured(); assert.equal(app.calls.length, 2);
+  app.calls[1].resolve(older); await pending; assert.doesNotMatch(renderToStaticMarkup(app.render()), /Historical comparison only/);
+  app.unmount();
 });
