@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import Field, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from .contracts import (
     Account,
@@ -115,6 +115,28 @@ class PipelineRun(Contract):
     steps: list[PipelineStep]
     caveats: list[str]
     portfolio_specialists: PortfolioSpecialists | None = None
+
+
+class PipelineRunSummary(Contract):
+    id: str
+    actor_id: str | None
+    started_at: AwareDatetime
+    as_of: date
+    request: PipelineRequest
+    status: Literal["deterministic", "model_validated", "partial"]
+    input_account_ids: list[str]
+    selected_account_ids: list[str]
+
+
+class PipelineHistory(Contract):
+    organization_id: str
+    limit: Literal[20] = 20
+    total_count: int = Field(ge=0)
+    window_count: int = Field(ge=0, le=20)
+    undated_count: int = Field(ge=0)
+    unavailable_count: int = Field(ge=0, le=20)
+    has_more: bool
+    items: list[PipelineRunSummary] = Field(max_length=20)
 
 
 def ingest(organization_id: str, account: Account, facts: list[Evidence]) -> SignalContext:

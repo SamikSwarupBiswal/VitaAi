@@ -2,9 +2,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type PipelineRequest, type PipelineRun } from "@/lib/api";
-import { comparePipelineRuns } from "@/lib/pipeline-delta";
+import { comparePipelineRuns, savedRunInstant } from "@/lib/pipeline-delta";
+import type { PipelineRunSummary } from "@/lib/pipeline-history";
 import { SellerPriorities } from "./seller-priorities";
 import { SavedResearchFusion } from "./saved-research-fusion";
+import { SavedPipelineHistory } from "./saved-pipeline-history";
 
 export function PipelinePanel({ onSelect, organizationId, snapshots, configured, expanded = false, seller = false }: {
   onSelect: (id: string) => void; organizationId: string; snapshots: Record<string, string>; configured: boolean; expanded?: boolean; seller?: boolean;
@@ -62,7 +64,10 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
       setRun(prepared);
       try { localStorage.setItem(storageKey, prepared.id); } catch { /* The API still retains the run. */ }
     } catch (error) { if (matches()) setError(error instanceof Error ? error.message : "Pipeline failed."); }
-    finally { if (matches()) { binding.pending = false; setBusy(false); } }
+    finally {
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("vitaai-pipeline-history-changed"));
+      if (matches()) { binding.pending = false; setBusy(false); }
+    }
   }
   return <details className="pipeline-panel" open={expanded || undefined}><summary>Intelligence pipeline</summary>
     <p>Six roles prepare recommendations and drafts from the current evidence. Templates by default; drafts require human review. No external actions.</p>
@@ -73,6 +78,8 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
     <button onClick={start} disabled={busy}>{busy ? "Preparing..." : "Prepare recommendations"}</button>
     {error && <p role="alert" className="error-banner">{error}</p>}
     {stale && <p role="status" className="caveat">Saved preparation belongs to an older account snapshot. Prepare a new run to view current drafts.</p>}
+    <SavedPipelineHistory organizationId={organizationId} snapshots={snapshots} onSelect={onSelect}
+      renderComparison={(saved, baselines) => <SavedRunComparison key={saved.id} current={saved} baselines={baselines} />} />
     {run && !stale && <div aria-live="polite">{seller && <SellerPriorities run={run} onSelect={onSelect} />}
       <p>{run.steps.map(step => `${step.role} (${step.processed})`).join(" → ")}</p>
       <details className="preparation-provenance"><summary>Preparation provenance</summary><p>{run.id} / {run.started_at} / {run.status}</p></details>
@@ -124,7 +131,7 @@ export function PipelinePanel({ onSelect, organizationId, snapshots, configured,
 
 const savedRunId = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 
-export function SavedRunComparison({ current }: { current: PipelineRun }) {
+export function SavedRunComparison({ current, baselines = [] }: { current: PipelineRun; baselines?: PipelineRunSummary[] }) {
   const [baselineId, setBaselineId] = useState("");
   const [result, setResult] = useState<ReturnType<typeof comparePipelineRuns> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -135,6 +142,15 @@ export function SavedRunComparison({ current }: { current: PipelineRun }) {
   useLayoutEffect(() => { currentRef.current = current; return () => { currentRef.current = null; controller.current?.abort(); }; }, [current]);
   useEffect(() => { const binding = active.current; binding.mounted = true;
     return () => { binding.mounted = false; controller.current?.abort(); }; }, []);
+  const choices = baselines.filter(item => {
+    try { return item.id !== current.id && savedRunInstant(item.started_at) <= savedRunInstant(current.started_at); }
+    catch { return false; }
+  });
+  function chooseBaseline(value: string) {
+    if (currentRef.current !== current) return;
+    active.current.input = value; active.current.sequence++; active.current.busy = false;
+    controller.current?.abort(); setBaselineId(value); setBusy(false); setResult(null); setError(null);
+  }
   async function inspect() {
     const binding = active.current;
     if (!binding.mounted || binding.busy || binding.input !== baselineId || currentRef.current !== current
@@ -155,10 +171,12 @@ export function SavedRunComparison({ current }: { current: PipelineRun }) {
   }
   return <details><summary>Compare saved recommendations</summary>
     <p>Displayed run {current.id} · {current.started_at}. Enter an older saved pipeline run ID. Inspection reads history only.</p>
-    <label>Baseline run ID <input aria-label="Baseline pipeline run ID" value={baselineId} maxLength={36} onChange={event => {
-      active.current.input = event.target.value; active.current.sequence++; active.current.busy = false;
-      controller.current?.abort(); setBaselineId(event.target.value); setBusy(false); setResult(null); setError(null);
-    }} /></label>
+    {choices.length > 0 && <label>Listed baseline <select aria-label="Listed baseline pipeline run" value={choices.some(item => item.id === baselineId) ? baselineId : ""}
+      onChange={event => chooseBaseline(event.target.value)}><option value="">Choose a saved baseline</option>
+      {choices.map(item => <option key={item.id} value={item.id}>{item.started_at} · {item.request.intent} · {item.id}</option>)}
+    </select></label>}
+    <label>Baseline run ID <input aria-label="Baseline pipeline run ID" value={baselineId} maxLength={36}
+      onChange={event => chooseBaseline(event.target.value)} /></label>
     <button onClick={inspect} disabled={busy || !savedRunId.test(baselineId) || baselineId === current.id}>{busy ? "Inspecting baseline..." : "Compare saved baseline"}</button>
     {error && <p role="alert">{error}</p>}
     {result && <div aria-live="polite"><p>Baseline {result.beforeId} · {result.beforeAt} · assessment {result.beforeAsOf}<br />Displayed {result.afterId} · {result.afterAt} · assessment {result.afterAsOf}</p>

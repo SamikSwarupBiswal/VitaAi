@@ -3,6 +3,13 @@ import type { PipelineRun } from "./api";
 type Recommendation = PipelineRun["recommendations"][number];
 type Context = PipelineRun["contexts"][number];
 
+export function savedRunInstant(value: string): bigint {
+  const parts = /^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  const milliseconds = Date.parse(value);
+  if (!parts || !Number.isFinite(milliseconds)) throw new Error("Saved run date is not orderable.");
+  return BigInt(milliseconds) * 1000n + BigInt((parts[1] ?? "").padEnd(6, "0").slice(3));
+}
+
 export type PipelineDelta = {
   accountId: string;
   kind: "entered_selection" | "left_selection" | "changed" | "unchanged";
@@ -16,8 +23,7 @@ export type PipelineDelta = {
 export function comparePipelineRuns(before: PipelineRun, after: PipelineRun) {
   if (before.organization_id !== after.organization_id) throw new Error("Saved runs belong to different organizations.");
   if (before.id === after.id) throw new Error("Choose a different saved baseline run.");
-  if (!Number.isFinite(Date.parse(before.started_at)) || !Number.isFinite(Date.parse(after.started_at))
-    || Date.parse(before.started_at) > Date.parse(after.started_at)) throw new Error("Baseline must be dated no later than the displayed run.");
+  if (savedRunInstant(before.started_at) > savedRunInstant(after.started_at)) throw new Error("Baseline must be dated no later than the displayed run.");
   for (const run of [before, after]) {
     const ids = new Set(run.contexts.map(context => context.account.id));
     const selected = new Set(run.recommendations.map(item => item.account_id));

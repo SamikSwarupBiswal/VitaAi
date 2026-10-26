@@ -169,6 +169,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pipeline/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pipeline History */
+        get: operations["pipeline_history_api_pipeline_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pipeline/{run_id}": {
         parameters: {
             query?: never;
@@ -4316,6 +4333,35 @@ export interface components {
             /** Body Text */
             body_text: string;
         };
+        /** PipelineHistory */
+        PipelineHistory: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Limit
+             * @default 20
+             * @constant
+             */
+            limit: 20;
+            /** Total Count */
+            total_count: number;
+            /** Window Count */
+            window_count: number;
+            /** Undated Count */
+            undated_count: number;
+            /** Unavailable Count */
+            unavailable_count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["PipelineRunSummary"][];
+        };
         /** PipelineRequest */
         PipelineRequest: {
             /**
@@ -4386,6 +4432,39 @@ export interface components {
             /** Caveats */
             caveats: string[];
             portfolio_specialists?: components["schemas"]["PortfolioSpecialists"] | null;
+        };
+        /** PipelineRunSummary */
+        PipelineRunSummary: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Id */
+            id: string;
+            /** Actor Id */
+            actor_id: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            request: components["schemas"]["PipelineRequest"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "deterministic" | "model_validated" | "partial";
+            /** Input Account Ids */
+            input_account_ids: string[];
+            /** Selected Account Ids */
+            selected_account_ids: string[];
         };
         /** PipelineStep */
         PipelineStep: {
@@ -7217,6 +7296,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pipeline_history_api_pipeline_history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineHistory"];
                 };
             };
         };

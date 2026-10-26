@@ -17,6 +17,24 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("pipeline history allows only its canonical GET without implicit HEAD, extra paths or POST", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(url, "http://127.0.0.1:8000/api/pipeline/history");
+    assert.equal(init.method, "GET"); assert.equal(init.cache, "no-store");
+    return Response.json({ organization_id: "synthetic" });
+  });
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  for (const [method, name, status] of [["GET", "pipeline/history", 200], ["HEAD", "pipeline/history", 404],
+    ["POST", "pipeline/history", 404], ["GET", "pipeline/history/extra", 404]]) {
+    const response = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, {
+      method, headers: { host: "127.0.0.1:3000" },
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 1);
+});
+
 test("identity decisions permit only canonical GET and bounded POST without HEAD mutation", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
   const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");

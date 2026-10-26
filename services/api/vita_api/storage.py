@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Column,
     ForeignKeyConstraint,
     Integer,
@@ -18,7 +21,7 @@ from sqlalchemy.engine import make_url
 
 from .contracts import Account, AccountSource, Evidence, ModelRun
 from .migrate import upgrade
-from .pipeline import PipelineRun
+from .pipeline import PipelineHistory, PipelineRun, PipelineRunSummary
 
 metadata = MetaData()
 accounts = Table(
@@ -58,6 +61,7 @@ pipeline_runs = Table(
     Column("id", String(80), primary_key=True),
     Column("organization_id", String(80), nullable=False),
     Column("actor_id", String(80), nullable=True),
+    Column("started_at_us", BigInteger, nullable=True),
     Column("payload", JSON, nullable=False),
 )
 
@@ -89,6 +93,13 @@ def selected_evidence(connection, organization_id, account_id):
     return [Evidence.model_validate(item) for item in rows]
 
 
+def pipeline_time(value: datetime) -> int:
+    if value.utcoffset() is None:
+        raise ValueError("Pipeline history requires an aware original timestamp")
+    delta = value.astimezone(UTC) - datetime(1970, 1, 1, tzinfo=UTC)
+    return (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
 class Store:
     def __init__(self, url: str):
         parsed = make_url(url)
@@ -107,6 +118,7 @@ class Store:
         with self.engine.begin() as connection:
             connection.execute(pipeline_runs.insert().values(
                 id=run.id, organization_id=run.organization_id, actor_id=run.actor_id,
+                started_at_us=pipeline_time(run.started_at),
                 payload=run.model_dump(mode="json"),
             ))
 
@@ -116,6 +128,44 @@ class Store:
                 pipeline_runs.c.organization_id == organization_id, pipeline_runs.c.id == run_id,
             )).scalar()
         return PipelineRun.model_validate(row) if row else None
+
+    def list_pipeline_history(self, organization_id: str) -> PipelineHistory:
+        # One snapshot for counts and the bounded window, independent of current account facts.
+        with self.engine.connect() as connection:
+            if self.engine.dialect.name == "sqlite":
+                connection.exec_driver_sql("BEGIN")
+            else:
+                connection = connection.execution_options(isolation_level="REPEATABLE READ")
+            scoped = pipeline_runs.c.organization_id == organization_id
+            total = connection.execute(select(func.count()).select_from(pipeline_runs).where(scoped)).scalar_one()
+            undated = connection.execute(select(func.count()).select_from(pipeline_runs).where(
+                scoped, pipeline_runs.c.started_at_us.is_(None))).scalar_one()
+            rows = connection.execute(select(pipeline_runs).where(scoped, pipeline_runs.c.started_at_us.is_not(None))
+                .order_by(pipeline_runs.c.started_at_us.desc(), pipeline_runs.c.id.desc()).limit(20)).mappings().all()
+        items = []
+        for row in rows:
+            try:
+                run = PipelineRun.model_validate(row["payload"])
+                inputs = [context.account.id for context in run.contexts]
+                selected = [item.account_id for item in run.recommendations]
+                if (run.id != row["id"] or run.organization_id != organization_id or run.actor_id != row["actor_id"]
+                        or pipeline_time(run.started_at) != row["started_at_us"]
+                        or len(set(inputs)) != len(inputs) or len(set(selected)) != len(selected)
+                        or not set(selected).issubset(inputs)
+                        or any(context.account.organization_id != organization_id
+                               or len({fact.id for fact in context.evidence}) != len(context.evidence)
+                               or any(fact.organization_id != organization_id or fact.account_id != context.account.id
+                                      for fact in context.evidence) for context in run.contexts)):
+                    continue
+                items.append(PipelineRunSummary(id=run.id, actor_id=run.actor_id, started_at=run.started_at,
+                    as_of=run.as_of, request=run.request, status=run.status,
+                    input_account_ids=inputs, selected_account_ids=selected))
+            except (ValidationError, ValueError):
+                # Retain unreadable legacy payloads; disclose omissions without leaking their content.
+                continue
+        return PipelineHistory(organization_id=organization_id, total_count=total, window_count=len(rows),
+                               undated_count=undated, unavailable_count=len(rows) - len(items),
+                               has_more=total - undated > len(rows), items=items)
 
     def seed(self, items: list[tuple[Account, list[Evidence]]]):
         # Seed only missing external identities; restarting never refreshes old facts.

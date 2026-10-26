@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url), ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 function load(relative, mocks = {}) {
-  mocks = { "./saved-research-fusion": { SavedResearchFusion: () => null }, ...mocks };
+  mocks = { "./saved-research-fusion": { SavedResearchFusion: () => null },
+    "./saved-pipeline-history": { SavedPipelineHistory: () => null }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const target = new Module(filename); target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target); target.require = name => mocks[name]
@@ -251,7 +252,7 @@ test("crossed, duplicate, inconsistent and reversed saved contexts fail visibly"
   assert.throws(() => helper.comparePipelineRuns(good, before), /no later/);
 });
 
-function mount(current = run(secondId, "2026-10-24T01:00:00Z")) {
+function mount(current = run(secondId, "2026-10-24T01:00:00Z"), baselines = []) {
   const states = [], refs = [], effects = [], layouts = [], calls = [];
   let s = 0, r = 0, e = 0, l = 0, component;
   const hooks = {
@@ -264,13 +265,46 @@ function mount(current = run(secondId, "2026-10-24T01:00:00Z")) {
     "@/lib/api": { api(url, options) { return new Promise((resolve, reject) => calls.push({ url, options, resolve, reject })); } } });
   return {
     calls, states,
-    render() { s = r = e = l = 0; return component.SavedRunComparison({ current }); },
+    render() { s = r = e = l = 0; return component.SavedRunComparison({ current, baselines }); },
     unmount() { [...layouts, ...effects].forEach(cleanup => cleanup?.()); },
   };
 }
 const input = tree => walk(tree).find(n => n.type === "input");
 const button = tree => walk(tree).find(n => n.type === "button");
 function enter(app, value) { input(app.render()).props.onChange({ target: { value } }); return app.render(); }
+
+test("listed baselines preserve precise chronology, require explicit compare and invalidate previous results", async () => {
+  const current = run(secondId, "2026-10-24T00:00:00.000002Z"), older = run(firstId, "2026-10-24T00:00:00.000001Z");
+  const otherId = "33333333-3333-4333-8333-333333333333";
+  const baselines = [current, older, run(otherId, "2026-10-24T00:00:00.000003Z")].map(saved => ({
+    id: saved.id, started_at: saved.started_at, request: saved.request,
+  }));
+  const app = mount(current, baselines), select = () => walk(app.render()).find(n => n.type === "select");
+  assert.deepEqual(walk(select()).filter(n => n.type === "option").map(n => n.props.value), ["", firstId]);
+  select().props.onChange({ target: { value: firstId } }); assert.equal(input(app.render()).props.value, firstId);
+  assert.equal(app.calls.length, 0);
+  let pending = button(app.render()).props.onClick(); app.calls[0].resolve(older); await pending;
+  assert.equal(app.calls[0].url, `pipeline/${firstId}`);
+  assert.match(renderToStaticMarkup(app.render()), /Historical comparison only/);
+  select().props.onChange({ target: { value: "" } }); assert.doesNotMatch(renderToStaticMarkup(app.render()), /Historical comparison only/);
+  select().props.onChange({ target: { value: firstId } }); pending = button(app.render()).props.onClick();
+  select().props.onChange({ target: { value: "" } }); assert.equal(app.calls[1].options.signal.aborted, true);
+  app.calls[1].resolve(older); await pending; assert.doesNotMatch(renderToStaticMarkup(app.render()), /Historical comparison only/);
+});
+
+test("settled preparation invalidates history once even after navigation or an uncertain response without replay", async t => {
+  const prior = globalThis.window; const surface = new EventTarget(); globalThis.window = surface;
+  t.after(() => { globalThis.window = prior; });
+  let completions = 0; surface.addEventListener("vitaai-pipeline-history-changed", () => { ++completions; });
+  for (const mode of ["success", "unmount", "uncertain"]) {
+    const app = preparationHarness(), start = walk(app.render()).find(n => n.type === "button").props.onClick;
+    const pending = start(); assert.equal(app.requests.length, 1);
+    if (mode === "unmount") app.unmount();
+    if (mode === "uncertain") app.requests[0].reject(new Error("Response lost")); else app.requests[0].resolve(run());
+    await pending; assert.equal(app.requests.length, 1); app.unmount();
+  }
+  assert.equal(completions, 3);
+});
 
 test("comparison makes one explicit scoped GET, renders Unknown/source facts safely and never prepares", async () => {
   const app = mount(); app.render(); assert.equal(app.calls.length, 0);

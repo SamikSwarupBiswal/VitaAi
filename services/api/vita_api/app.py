@@ -21,7 +21,7 @@ from .microsoft import PREFIX as MICROSOFT_PREFIX
 from .microsoft import Microsoft, decode_callback
 from .models import AdvisoryProvider
 from .nebius import Nebius
-from .pipeline import Pipeline, PipelineRequest, PipelineRun
+from .pipeline import Pipeline, PipelineHistory, PipelineRequest, PipelineRun
 from .provider_catalog import PREFIX as COMPARISON_PREFIX
 from .provider_catalog import install_catalog_routes
 from .provider_comparison import install_comparison_routes
@@ -238,6 +238,10 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
                                      records, datetime.now(UTC).date(), body)
         store.save_pipeline(run)
         return run
+
+    @app.get("/api/pipeline/history", response_model=PipelineHistory)
+    def pipeline_history(current: Annotated[Actor, Depends(actor)]):
+        return store.list_pipeline_history(current.organization_id)
 
     @app.get("/api/pipeline/{run_id}", response_model=PipelineRun)
     def get_pipeline(run_id: str, current: Annotated[Actor, Depends(actor)]):
