@@ -1,0 +1,2 @@
+# Optional offline PDF regeneration only; not an application dependency.
+reportlab==4.4.9

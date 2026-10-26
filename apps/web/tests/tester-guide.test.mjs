@@ -4,6 +4,7 @@ import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const require = createRequire(import.meta.url), ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
@@ -19,7 +20,9 @@ function load(relative, mocks = {}) {
   target._compile(compiled, filename); return target.exports;
 }
 const content = load("../lib/tester-guide.ts");
-function harness(t, copy = async () => {}) {
+const pdfManifest = JSON.parse(readFileSync(new URL("../lib/guide-pdf.generated.json", import.meta.url), "utf8"));
+const pdfBytes = readFileSync(new URL(`../public/guides/${content.guideVersion}.pdf`, import.meta.url));
+function harness(t, copy = async () => {}, manifest = pdfManifest) {
   let cursor = 0, cleanup;
   const slots = [], copied = [];
   const hooks = {
@@ -29,7 +32,8 @@ function harness(t, copy = async () => {}) {
     useEffect(callback) { const i = cursor++; if (!(i in slots)) { slots[i] = true; cleanup = callback(); } },
   };
   t.mock.getter(globalThis, "navigator", () => ({ clipboard: { writeText: value => { copied.push(value); return copy(); } } }));
-  const component = load("../components/tester-guide-exports.tsx", { react: hooks, "@/lib/tester-guide": content }).TesterGuideExports;
+  const component = load("../components/tester-guide-exports.tsx", { react: hooks, "@/lib/tester-guide": content,
+    "@/lib/guide-pdf.generated.json": { default: manifest } }).TesterGuideExports;
   const render = () => { cursor = 0; return component(); };
   return { copied, render, unmount: () => cleanup?.(),
     button: label => walk(render(), node => node.type === "button" && node.props.children === label)[0],
@@ -90,4 +94,54 @@ test("download builds exactly the public text, releases resources and discloses 
   app.button("Download guide (.txt)").props.onClick();
   assert.equal(app.message().props.role, "alert"); assert.match(app.message().props.children, /no file save was confirmed/);
   assert.deepEqual(revoked, []); app.unmount();
+});
+
+test("public PDF manifest binds the exact shared guide and distributed artifact", () => {
+  assert.equal(pdfManifest.guide_version, content.guideVersion);
+  assert.equal(pdfManifest.content_sha256, createHash("sha256").update(content.guideText).digest("hex"));
+  assert.equal(pdfManifest.pdf_sha256, createHash("sha256").update(pdfBytes).digest("hex"));
+  assert.equal(pdfBytes.subarray(0, 5).toString(), "%PDF-");
+});
+
+test("PDF download reads only the public file, locks duplicates, verifies bytes and releases resources", async t => {
+  const app = harness(t), requests = [], links = [], revoked = []; let resolve, blob;
+  t.mock.method(globalThis, "fetch", (url, init) => new Promise(done => { requests.push({ url, init }); resolve = done; }));
+  t.mock.getter(globalThis, "crypto", () => ({ subtle: { digest: async (_name, bytes) => new Uint8Array(createHash("sha256").update(Buffer.from(bytes)).digest()).buffer } }));
+  t.mock.method(URL, "createObjectURL", value => { blob = value; return "blob:pdf"; });
+  t.mock.method(URL, "revokeObjectURL", url => revoked.push(url));
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { body: { appendChild: link => links.push(link) }, createElement: () => ({ click() {}, remove() { this.removed = true; } }) } });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "document", previous); else delete globalThis.document; });
+  const click = app.button("Download illustrated guide (.pdf)").props.onClick;
+  click(); click(); assert.equal(requests.length, 1); assert.equal(requests[0].url, `/guides/${content.guideVersion}.pdf`);
+  assert.equal(requests[0].init.credentials, "omit"); assert.equal(requests[0].init.cache, "no-store");
+  assert.equal(app.button("Download illustrated guide (.pdf)").props.disabled, true);
+  resolve({ ok: true, headers: new Headers({ "content-type": "application/pdf" }), arrayBuffer: async () => pdfBytes });
+  await new Promise(done => setImmediate(done));
+  assert.equal(blob.type, "application/pdf"); assert.equal(links[0].download, "VitaAi_Local_Simulation_Tester_Guide.pdf");
+  assert.equal(links[0].removed, true); assert.deepEqual(revoked, ["blob:pdf"]);
+  assert.match(app.message().props.children, /no file save was confirmed/); assert.equal(app.copied.length, 0);
+  app.unmount(); click(); assert.equal(requests.length, 1);
+});
+
+test("PDF network, wrong content, stale version and unmount failures never claim a save", async t => {
+  for (const mode of ["network", "missing", "wrong-mime", "wrong-bytes", "stale-version", "unmount"]) {
+    await t.test(mode, async sub => {
+      let resolve, calls = 0, creates = 0, signal;
+      const app = harness(sub, async () => {}, mode === "stale-version" ? { ...pdfManifest, guide_version: "older" } : pdfManifest);
+      sub.mock.method(globalThis, "fetch", (_url, init) => { calls++; signal = init.signal;
+        if (mode === "network") return Promise.reject(new Error("offline"));
+        return new Promise(done => { resolve = done; });
+      });
+      sub.mock.getter(globalThis, "crypto", () => ({ subtle: { digest: async () => new Uint8Array(32).buffer } }));
+      sub.mock.method(URL, "createObjectURL", () => { creates++; return "blob:unexpected"; });
+      app.button("Download illustrated guide (.pdf)").props.onClick();
+      if (mode === "unmount") app.unmount();
+      resolve?.({ ok: mode !== "missing", headers: new Headers({ "content-type": mode === "wrong-mime" ? "text/html" : "application/pdf" }), arrayBuffer: async () => pdfBytes });
+      await new Promise(done => setImmediate(done));
+      assert.equal(creates, 0); assert.equal(calls, mode === "stale-version" ? 0 : 1);
+      if (mode === "unmount") { assert.equal(signal.aborted, true); assert.equal(app.message(), undefined); }
+      else { assert.equal(app.message().props.role, "alert"); assert.match(app.message().props.children, /no file save was confirmed/); app.unmount(); }
+    });
+  }
 });
