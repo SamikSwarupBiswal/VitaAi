@@ -209,6 +209,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   const readController = useRef<AbortController | null>(null);
   const analysisController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
+  const guideRoot = useRef<HTMLDivElement | null>(null);
   const selectedId = params.get("account");
 
   useEffect(() => {
@@ -287,6 +288,9 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   const selected = rows.find(view => view.account.id === selectedId) || rows[0];
   const title = accountDirectory ? "Accounts" : persona === "seller" ? "Seller preparation" : persona === "operations" ? "Operations" : "Portfolio";
   const selectedQuery = `?persona=${persona}${selected ? `&account=${encodeURIComponent(selected.account.id)}` : ""}`;
+  const guideContext = JSON.stringify([portfolio?.organization_id, portfolio?.as_of, persona, selected?.account.id,
+    selected?.account.revision, selected?.source?.id, selected?.assessment.as_of, selected?.assessment.snapshot_hash,
+    sourceGeneration, loading, error, authorityBlocked]);
 
   function selectAccount(id: string) {
     setAnalysisError(null);
@@ -324,7 +328,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
     finally { if (!controller.signal.aborted) setBusyAccount(null); }
   }
 
-  return <div className="workspace">
+  return <div className="workspace" ref={guideRoot} data-guide-context={guideContext}>
     <a href="#main" className="skip-link">Skip to accounts</a>
     <aside className="sidebar"><Link href="/" className="brand">VitaAi</Link>
       <span className="nav-label">Workspace</span><nav aria-label="Workspace">
@@ -335,14 +339,14 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       </nav><footer><p><Settings size={18} />Local workspace</p><p><Code2 size={18} />Local development</p></footer>
     </aside>
     <div className="workspace-body"><header className="topbar"><span>Workspace <span className="slash">/</span> <strong>{title}</strong></span>
-      <label>Perspective <select aria-label="Workspace perspective" value={persona} onChange={event => router.replace(`${accountDirectory ? "/accounts" : "/"}?persona=${event.target.value}${selected ? `&account=${encodeURIComponent(selected.account.id)}` : ""}`, { scroll: false })}>
+      <label>Perspective <select data-guide-target="perspective" aria-label="Workspace perspective" value={persona} onChange={event => router.replace(`${accountDirectory ? "/accounts" : "/"}?persona=${event.target.value}${selected ? `&account=${encodeURIComponent(selected.account.id)}` : ""}`, { scroll: false })}>
         {perspectives.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
       </select></label>
       <button className="icon-button" aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} title={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme}>{dark ? <Moon size={22} /> : <Sun size={22} />}</button></header>
       <main id="main" className="main-grid"><div className="portfolio-main">
         <div className="page-heading"><div><h1>{title}</h1><p>{accountDirectory ? "Customer accounts and source evidence." : "Customer signals, ranked by attention."}</p></div>
           <button className="icon-button refresh" disabled={loading || sourcePending} aria-label="Refresh portfolio" title="Refresh portfolio" onClick={() => { setLoading(true); setError(null); void refresh(); }}><RefreshCw size={20} className={loading ? "spinning" : ""} /></button></div>
-        {portfolio && !loading && !error && !authorityBlocked && <WorkspaceGuide portfolio={portfolio} selected={selected || null} persona={persona} />}
+        {portfolio && !loading && !error && !authorityBlocked && <WorkspaceGuide portfolio={portfolio} selected={selected || null} persona={persona} root={guideRoot} context={guideContext} />}
         {portfolio && <dl className="kpi-band"><div><dt>{portfolio.annual_value_missing_count ? "Known portfolio value" : "Portfolio value"}</dt><dd>{currency(portfolio.annual_value, true)}</dd></div>
           <div><dt>Accounts</dt><dd>{portfolio.accounts.length}</dd></div>
           <div><dt>Need attention</dt><dd className="risk-text">{portfolio.attention_count}</dd></div>

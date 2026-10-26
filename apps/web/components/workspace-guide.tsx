@@ -1,21 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import type { AccountView, Portfolio } from "@/lib/api";
 import { useSession } from "./session-gate";
+import { GuideTarget } from "./guide-target";
 
-type Props = { portfolio: Portfolio; selected: AccountView | null; persona: "executive" | "seller" | "operations" };
+type Props = { portfolio: Portfolio; selected: AccountView | null; persona: "executive" | "seller" | "operations";
+  root: RefObject<HTMLElement | null>; context: string };
 export function WorkspaceGuide(props: Props) {
   const session = useSession(), actor = session?.actor;
   if (!session || (session.mode === "session" && (!actor || actor.organization_id !== props.portfolio.organization_id))) return null;
   const { selected, portfolio, persona } = props;
   if (selected && (selected.account.organization_id !== portfolio.organization_id || !portfolio.accounts.includes(selected))) return null;
   return <Guide {...props} role={actor?.role ?? null} key={JSON.stringify([session.mode, actor?.id, actor?.organization_id, actor?.role,
-    persona, portfolio.organization_id, portfolio.as_of, selected?.account.id, selected?.account.revision, selected?.source?.id, selected?.assessment.snapshot_hash])} />;
+    props.context, persona, portfolio.organization_id, portfolio.as_of, selected?.account.id, selected?.account.revision, selected?.source?.id, selected?.assessment.snapshot_hash])} />;
 }
 
-function Guide({ portfolio, selected, persona, role }: Props & { role: string | null }) {
+function Guide({ portfolio, selected, persona, role, root, context }: Props & { role: string | null }) {
   const [step, setStep] = useState(0);
   const query = new URLSearchParams({ persona });
   if (selected) query.set("account", selected.account.id);
@@ -43,13 +45,14 @@ function Guide({ portfolio, selected, persona, role }: Props & { role: string | 
         <p>{role === "viewer" ? "Viewers can inspect saved work but cannot prepare, review or execute it."
           : role === "seller" ? "Sellers can prepare permitted work; a current admin or reviewer must make the exact review decision."
             : "Presentation and guide navigation grant no approval or execution authority."} A receipt and a separately recorded human outcome have different meanings.</p>
-        {selected ? <Link href={`/missions${accountQuery}`}>Inspect this account&apos;s saved missions</Link> : <p>Select an account first to retain its mission context.</p>}
+        {selected ? <Link data-guide-target="missions" href={`/missions${accountQuery}`}>Inspect this account&apos;s saved missions</Link> : <p>Select an account first to retain its mission context.</p>}
       </>}
       {step === 3 && <>
         <p>End of workspace guide. Continue with the seven-step walkthrough or the local simulation tester guide. This does not establish onboarding, mission or business completion.</p>
-        <Link href={`/walkthrough${accountQuery}`}>Open the contextual walkthrough</Link>{" · "}<Link href="/tester-guide">Open the local simulation tester guide</Link>
+        <Link data-guide-target="walkthrough" href={`/walkthrough${accountQuery}`}>Open the contextual walkthrough</Link>{" · "}<Link href="/tester-guide">Open the local simulation tester guide</Link>
       </>}
     </section>
+    <GuideTarget key={step} root={root} context={context} target={(["perspective", "evidence", "missions", "walkthrough"] as const)[step]} />
     <nav aria-label="Workspace guide controls">
       <button type="button" disabled={step === 0} onClick={() => setStep(value => Math.max(0, value - 1))}>Back</button>{" "}
       {step < 3 ? <button type="button" onClick={() => setStep(value => Math.min(3, value + 1))}>Next</button>

@@ -148,7 +148,15 @@ test("integration summary is Operations-only, uses the selected account and has 
     assert.equal(!!summary, persona === "operations" && !loading && !error && !blocked);
     const guide = nodes.find(n => n.type === WorkspaceGuideMarker);
     assert.equal(!!guide, !loading && !error && !blocked);
-    if (guide) { assert.equal(guide.props.selected, selected); assert.equal(guide.props.persona, persona); }
+    if (guide) {
+      assert.equal(guide.props.selected, selected); assert.equal(guide.props.persona, persona);
+      assert.equal(guide.props.root, tree.props.ref); assert.equal(guide.props.context, tree.props["data-guide-context"]);
+      const context = JSON.parse(guide.props.context); assert.equal(context[2], persona); assert.equal(context[3], selected.account.id);
+      assert.equal(nodes.filter(node => node.props?.["data-guide-target"] === "perspective").length, 1);
+      const evidence = walk(detail.AccountDetail({ view: selected, provider: null, busy: false, onAnalyze() { assert.fail("No analysis"); }, run: null, error: null }))
+        .find(node => node.props?.["data-guide-target"] === "evidence");
+      assert.equal(evidence.props.tabIndex, -1); assert.equal(evidence.props["aria-label"], "Selected account evidence");
+    }
     if (summary) {
       assert.equal(summary.props.view, selected);
       for (const target of ["scheduled-staging", "associated-records", "advisory-research", "provider-comparison"]) {

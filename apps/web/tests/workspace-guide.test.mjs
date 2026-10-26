@@ -9,12 +9,14 @@ const selected = { account: { id: "account", name: "<script>Account</script>", o
   source: { id: "source" }, assessment: { as_of: "2026-10-27", snapshot_hash: "hash", requires_review: true } };
 const portfolio = { organization_id: "org", as_of: "2026-10-27", mode: "local_sample", accounts: [selected] };
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object" ? [node, ...walk(node.props?.children)] : [];
+function GuideTargetMarker() { return null; }
 function setup() {
-  let step = 0, props = { portfolio, selected, persona: "seller" }, session = { mode: "session", actor: { id: "actor", organization_id: "org", role: "viewer" } };
+  let step = 0, props = { portfolio, selected, persona: "seller", context: "current", root: { current: null } }, session = { mode: "session", actor: { id: "actor", organization_id: "org", role: "viewer" } };
   const filename = fileURLToPath(new URL("../components/workspace-guide.tsx", import.meta.url)), target = new Module(filename);
   target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename)); const normal = target.require.bind(target);
   target.require = name => name === "react" ? { ...React, useState: () => [step, value => { step = typeof value === "function" ? value(step) : value; }] }
     : name === "next/link" ? { __esModule: true, default: p => React.createElement("a", p) }
+      : name === "./guide-target" ? { GuideTarget: GuideTargetMarker }
       : name === "./session-gate" ? { useSession: () => session } : normal(name);
   target._compile(ts.transpileModule(readFileSync(filename, "utf8"), { fileName: filename, compilerOptions: {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
@@ -60,4 +62,16 @@ test("actual actor/account/source/date/hash and perspective keys reset presentat
   }
   app.props({ portfolio, selected, persona: "operations" }); assert.notEqual(app.outer().key, key);
   app.props({ persona: "seller" }); app.session({ mode: "session", actor: { id: "actor", organization_id: "org", role: "admin" } }); assert.notEqual(app.outer().key, key);
+});
+
+test("each instruction maps to its actual focus target without navigating or changing data", () => {
+  const app = setup(), original = JSON.stringify(portfolio), key = app.outer().key;
+  for (const [index, target] of ["perspective", "evidence", "missions", "walkthrough"].entries()) {
+    const tree = app.render(), focus = walk(tree).find(node => node.type === GuideTargetMarker);
+    assert.equal(focus.props.target, target); assert.equal(focus.props.context, "current"); assert.equal(focus.key, String(index));
+    if (index >= 2) assert.equal(walk(tree).filter(node => node.props?.["data-guide-target"] === target).length, 1);
+    if (index < 3) app.click("Next");
+  }
+  app.props({ context: "new-source-generation" }); assert.notEqual(app.outer().key, key);
+  assert.equal(JSON.stringify(portfolio), original);
 });

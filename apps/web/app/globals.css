@@ -9,6 +9,8 @@ button { cursor: pointer; color: inherit; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 a { color: var(--green); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+[data-guide-highlight="true"] { outline: 3px solid var(--focus); outline-offset: 4px; scroll-margin-block: 6rem; }
+.guide-target-controls { margin: 16px 0; }
 h1, h2, h3, h4, p, dl { margin: 0; }
 h1 { font-size: 30px; line-height: 1.2; }
 h2 { font-size: 28px; line-height: 1.25; overflow-wrap: anywhere; }

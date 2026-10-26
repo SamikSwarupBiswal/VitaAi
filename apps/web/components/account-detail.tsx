@@ -28,7 +28,7 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
         <div><dt>Opportunity</dt><dd className="growth-text">{assessment.opportunity}</dd></div>
         <div><dt>Renewal</dt><dd>{view.renewal_days === null ? "Unknown" : `${view.renewal_days} days`}</dd></div></dl>
     </section>
-    <section><h3>Evidence</h3><div className="evidence-list">
+    <section data-guide-target="evidence" tabIndex={-1} aria-label="Selected account evidence"><h3>Evidence</h3><div className="evidence-list">
       {view.evidence.map(item => <details key={item.id} id={`evidence-${item.id}`}>
         <summary><span>{item.fact}</span><small>{item.source}</small></summary>
         <dl><div><dt>Observed</dt><dd>{new Date(item.observed_at).toLocaleString()}</dd></div>
