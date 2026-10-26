@@ -10,7 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
-  mocks = { "./manager-coaching-queue": { ManagerCoachingQueue: CoachingQueueMarker }, "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
+  mocks = { "./workspace-guide": { WorkspaceGuide: WorkspaceGuideMarker }, "./manager-coaching-queue": { ManagerCoachingQueue: CoachingQueueMarker }, "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
     "./pipeline-panel": { SavedRunComparison: ComparisonMarker }, ...mocks };
   mocks = { "./executive-change-brief": { ExecutiveChangeBrief: ChangeBriefMarker }, ...mocks };
   mocks = { "./account-mission-history": { AccountMissionHistory: MissionHistoryMarker }, "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
@@ -35,6 +35,7 @@ const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
 function ManagerReportsMarker() { return null; }
+function WorkspaceGuideMarker() { return null; }
 function CoachingQueueMarker() { return null; }
 function TimelineMarker() { return null; }
 function ChronologyMarker() { return null; }
@@ -145,6 +146,9 @@ test("integration summary is Operations-only, uses the selected account and has 
     const tree = workspace.contentForAcceptance({ accountDirectory: false, persona });
     const nodes = walk(tree), summary = nodes.find(n => n.type === ReadinessMarker);
     assert.equal(!!summary, persona === "operations" && !loading && !error && !blocked);
+    const guide = nodes.find(n => n.type === WorkspaceGuideMarker);
+    assert.equal(!!guide, !loading && !error && !blocked);
+    if (guide) { assert.equal(guide.props.selected, selected); assert.equal(guide.props.persona, persona); }
     if (summary) {
       assert.equal(summary.props.view, selected);
       for (const target of ["scheduled-staging", "associated-records", "advisory-research", "provider-comparison"]) {

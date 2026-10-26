@@ -19,6 +19,7 @@ import { HubSpotRefreshPanel } from "./hubspot-refresh-panel";
 import { OperationsReadiness } from "./operations-readiness";
 import { ManagerCoachingQueue } from "./manager-coaching-queue";
 import { ManagerReports } from "./manager-reports";
+import { WorkspaceGuide } from "./workspace-guide";
 import { ExecutiveChangeBrief } from "./executive-change-brief";
 
 export function Workspace({ accountDirectory = false }: { accountDirectory?: boolean }) {
@@ -341,6 +342,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       <main id="main" className="main-grid"><div className="portfolio-main">
         <div className="page-heading"><div><h1>{title}</h1><p>{accountDirectory ? "Customer accounts and source evidence." : "Customer signals, ranked by attention."}</p></div>
           <button className="icon-button refresh" disabled={loading || sourcePending} aria-label="Refresh portfolio" title="Refresh portfolio" onClick={() => { setLoading(true); setError(null); void refresh(); }}><RefreshCw size={20} className={loading ? "spinning" : ""} /></button></div>
+        {portfolio && !loading && !error && !authorityBlocked && <WorkspaceGuide portfolio={portfolio} selected={selected || null} persona={persona} />}
         {portfolio && <dl className="kpi-band"><div><dt>{portfolio.annual_value_missing_count ? "Known portfolio value" : "Portfolio value"}</dt><dd>{currency(portfolio.annual_value, true)}</dd></div>
           <div><dt>Accounts</dt><dd>{portfolio.accounts.length}</dd></div>
           <div><dt>Need attention</dt><dd className="risk-text">{portfolio.attention_count}</dd></div>
