@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 type Props = {
   root: RefObject<HTMLElement | null>;
   context: string;
-  target: "perspective" | "evidence" | "missions" | "walkthrough";
+  target: "perspective" | "evidence" | "missions" | "walkthrough" | "mission-content";
 };
 
 export function GuideTarget({ root, context, target }: Props) {

@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { api, type AccountView, type ModelRun, type Portfolio, type ProviderStatus } from "@/lib/api";
 import { currentDecision, kindLabel, postWorkflow, readMission, steps, type Action, type Decision,
   type Mission, type MissionData, type OutcomeRequest, type Payload, type Plan, type PlanRequest, type Step } from "@/lib/workflow";
 import { useSession } from "./session-gate";
 import { CoachingPanel } from "./coaching-panel";
+import { GuideTarget } from "./guide-target";
 import type { components } from "@/lib/api.generated";
 
 function useOperation() {
@@ -325,7 +326,8 @@ function MissionSourceProvenance({ selection, account }: { selection: NonNullabl
   </details>;
 }
 
-function MissionGuide({ data, step }: { data: MissionData; step: Mission["current_step"] }) {
+function MissionGuide({ data, step, root, context, blocked }: { data: MissionData; step: Mission["current_step"];
+  root: RefObject<HTMLDivElement | null>; context: string; blocked: boolean }) {
   const { mission, account, actions, executions } = data;
   const instructions: Record<Mission["current_step"], string> = {
     Review: "Inspect the selected alternative, evidence binding, risks and plan provenance before preparing anything.",
@@ -365,6 +367,7 @@ function MissionGuide({ data, step }: { data: MissionData; step: Mission["curren
     <p>{actions.length ? `Saved action modes: ${[...new Set(actions.map(action => action.mode))].join(", ")}. Simulation is local; live actions require separately configured access and exact approval.`
       : "Mode not selected: no saved action previews. Preparation defaults to simulation."}</p>
     <p>Guidance never advances a mission. Viewing a step is not a completed step or verified customer result.</p>
+    {!blocked && <GuideTarget root={root} context={context} target="mission-content" />}
     <a href={`/walkthrough?${new URLSearchParams({ account: mission.account_id, mission: mission.id })}`}>Full walkthrough for this account and mission</a>
   </details>;
 }
@@ -376,8 +379,12 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
   const actor = useSession()?.actor;
   const op = useOperation();
   const mutationStarted = useRef(false);
+  const guideRoot = useRef<HTMLDivElement | null>(null);
   const requestedStep = params.get("step");
   const step = steps.find(item => item === requestedStep) || mission.current_step;
+  const guideContext = JSON.stringify([actor?.id, actor?.organization_id, actor?.role, mission.organization_id, mission.id,
+    mission.account_id, mission.revision, mission.content_revision, mission.status, account.account.id, account.account.revision,
+    account.source?.id, account.assessment.as_of, account.assessment.snapshot_hash, step, op.blocked]);
   const choice = plan.alternatives.find(item => item.id === (mission.alternative_id || plan.selected_alternative_id))!;
   const stale = account.account.revision !== mission.evidence.account_revision || account.assessment.snapshot_hash !== mission.evidence.snapshot_hash;
   const writer = !!actor && actor.role !== "viewer";
@@ -423,7 +430,7 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
     });
   }
   const actionFor = (item: Step) => actions.find(action => action.step_id === item.id || (choice.steps.length === 1 && action.step_id == null));
-  return <><div className="mission-heading"><div><h2>{account.account.name}</h2><p>{mission.status.replaceAll("_", " ")} · revision {mission.revision}</p></div>
+  return <div ref={guideRoot} data-guide-context={guideContext}><div className="mission-heading"><div><h2>{account.account.name}</h2><p>{mission.status.replaceAll("_", " ")} · revision {mission.revision}</p></div>
     <span className="mission-id">{mission.id}</span></div>
     <p className="muted">Server step: {mission.current_step}. Viewing a step does not advance this mission.</p>
     {mission.source_detection_id && !data.sourceSelection && <p role="status">Original source provenance unavailable. Refresh records or check source access. Retained mission records remain subject to their separate authority checks.</p>}
@@ -448,7 +455,8 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
     {op.error && <p role="alert" className="error-banner">{op.error}</p>}
     {op.busy && <p role="status">Saving server records...</p>}
     <section className="mission-step" aria-label={`${step} step`}><h3>{step}</h3>
-      <MissionGuide key={step} data={data} step={step} />
+      <MissionGuide key={guideContext} data={data} step={step} root={guideRoot} context={guideContext} blocked={op.blocked} />
+      <div data-guide-target="mission-content" tabIndex={-1} role="region" aria-label={`${step} content for ${account.account.name}`}>
       {step === "Review" && <><p>{choice.rationale}</p><p>Plan: {plan.source} · {plan.validation} · {plan.id}</p>
         {plan.model_run_id && <p>Model planning run: {plan.model_run_id}</p>}<p>{[...choice.risks, ...plan.caveats].join(" ")}</p>
         <ol>{choice.steps.map(item => <li key={item.id}><strong>{kindLabel(item.kind)}</strong><pre>{item.content}</pre>
@@ -532,12 +540,13 @@ function MissionPanels({ data, configured, refresh }: { data: MissionData; confi
         })}</>}
       {step === "Outcome" && <><OutcomeForm data={data} disabled={op.blocked || !writer || superseded} save={body => mutate(`missions/${mission.id}/outcomes`, body)} />
         <CoachingPanel data={data} blocked={op.blocked} refresh={refresh} /></>}
+      </div>
     </section>
     <details className="mission-audit"><summary>Audit trail · {audit.length} events</summary><ol>{audit.map(event => <li key={event.id}>
       {event.sequence}. {event.event_kind} · {event.previous_state || "Created"} → {event.new_state}<br /><small>{event.created_at} / actor {event.actor_id} / entity {event.entity_id}</small>
     </li>)}</ol></details>
     {mission.status === "completed" && <p>This mission has a recorded outcome. Choose another unfinished mission in Resume work, or plan a new mission.</p>}
-  </>;
+  </div>;
 }
 
 function ActionEditor({ item, action, disabled, liveAvailable, save }: {

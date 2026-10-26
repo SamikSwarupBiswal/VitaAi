@@ -10,6 +10,7 @@ const { renderToStaticMarkup } = require("react-dom/server");
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 const walk = (node, predicate) => Array.isArray(node) ? node.flatMap(item => walk(item, predicate))
   : !node || typeof node !== "object" ? [] : [...(predicate(node) ? [node] : []), ...walk(node.props?.children, predicate)];
+function GuideTargetMarker() { return null; }
 function load(relative, mocks, extra = "") {
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const compiled = ts.transpileModule(readFileSync(filename, "utf8"), {
@@ -51,7 +52,7 @@ function harness(role = "reviewer", step = "Execution") {
   const workflow = load("../lib/workflow.ts", { "./api": { api } });
   const components = load("../components/mission-workspace.tsx", { react: hooks, "@/lib/api": { api }, "@/lib/workflow": workflow,
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", role, organization_id: "org" } }) },
-    "./coaching-panel": { CoachingPanel: () => null },
+    "./coaching-panel": { CoachingPanel: () => null }, "./guide-target": { GuideTarget: GuideTargetMarker },
     "next/navigation": { useSearchParams: () => new URLSearchParams({ step }), useRouter: () => ({ replace() {} }) },
   }, "\nexports.panels=MissionPanels; exports.editor=ActionEditor; exports.loader=MissionLoader; exports.preview=ExactPreview; exports.connection=MicrosoftConnection; exports.directory=MissionDirectory; exports.newMission=NewMission; exports.priorities=MissionPriorities; exports.guide=MissionGuide;");
   function render(component, props) {
@@ -99,6 +100,31 @@ test("contextual guide keeps unknown, active, rejected, completed and stale stat
   const value = data(); value.executions = [{ status: "result_unknown" }];
   assert.match(renderToStaticMarkup(app.components.guide({ data: value, step: "Review" })), /Do not repeat/);
   assert.equal(app.requests.length, 0);
+});
+
+test("seven-step guide focuses the exact rendered content and remounts on mission, source and revision changes", () => {
+  for (const step of ["Review", "Evidence", "Outreach", "CRM Note", "Approval", "Execution", "Outcome"]) {
+    const app = harness("viewer", step), value = data(); value.account.evidence = [{ id: "evidence", fact: "Retained fact" }];
+    value.plan.caveats = []; value.plan.alternatives[0].risks = [];
+    value.plan.alternatives[0].steps[0] = { ...item, evidence_ids: ["evidence"] };
+    const original = structuredClone(value), tree = app.panels(value);
+    const guide = walk(tree, node => node.type === app.components.guide)[0];
+    assert.equal(guide.props.root, tree.props.ref); assert.equal(guide.props.context, tree.props["data-guide-context"]);
+    assert.equal(guide.props.step, step); assert.equal(guide.props.blocked, false);
+    const target = walk(tree, node => node.props?.["data-guide-target"] === "mission-content");
+    assert.equal(target.length, 1); assert.equal(target[0].props.tabIndex, -1); assert.equal(target[0].props.role, "region");
+    assert.equal(target[0].props["aria-label"], `${step} content for Account`);
+    assert.equal(walk(target[0], node => node.type === app.components.guide).length, 0);
+    const focus = walk(app.components.guide(guide.props), node => node.type === GuideTargetMarker)[0];
+    assert.equal(focus.props.target, "mission-content"); assert.equal(focus.props.context, guide.props.context);
+    assert.equal(walk(app.components.guide({ ...guide.props, blocked: true }), node => node.type === GuideTargetMarker).length, 0);
+    for (const change of [next => next.mission.revision++, next => next.mission.id = "other", next => next.mission.status = "completed",
+      next => next.account.account.revision++, next => next.account.source = { id: "source-change" }, next => next.account.assessment.snapshot_hash = "changed"]) {
+      const next = structuredClone(value); change(next); const changed = app.panels(next);
+      assert.notEqual(walk(changed, node => node.type === app.components.guide)[0].key, guide.key);
+    }
+    assert.deepEqual(value, original); assert.equal(app.requests.length, 0); app.unmount();
+  }
 });
 
 test("seller priorities exclude terminal and foreign work and hand off to the exact unfinished mission", () => {
