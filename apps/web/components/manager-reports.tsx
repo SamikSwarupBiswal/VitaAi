@@ -1,12 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import type { Mission, Outcome } from "@/lib/workflow";
-import type { components } from "@/lib/api.generated";
+import { readManagerReports, type ReportData } from "@/lib/manager-reports";
+import type { Mission } from "@/lib/workflow";
 import { useSession } from "./session-gate";
-
-type Review = components["schemas"]["CoachingReview"];
 
 export function ManagerReports({ mission }: { mission: Mission }) {
   const actor = useSession()?.actor;
@@ -15,7 +12,7 @@ export function ManagerReports({ mission }: { mission: Mission }) {
 }
 
 function ReportInspection({ mission }: { mission: Mission }) {
-  const [result, setResult] = useState<{ outcomes: Outcome[]; reviews: Review[] } | null>(null);
+  const [result, setResult] = useState<ReportData | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lifetime = useRef<AbortController | null>(null);
@@ -30,26 +27,8 @@ function ReportInspection({ mission }: { mission: Mission }) {
     if (!signal || signal.aborted || started.current) return;
     started.current = true; setBusy(true); setError(null); setResult(null);
     try {
-      const [outcomes, reviews] = await Promise.all([
-        api<Outcome[]>(`missions/${mission.id}/outcomes`, { signal }),
-        api<Review[]>(`missions/${mission.id}/coaching-reviews`, { signal }),
-      ]);
-      if (signal.aborted) return;
-      const fresh = await api<Mission>(`missions/${mission.id}`, { signal });
-      if (signal.aborted) return;
-      if (fresh.id !== mission.id || fresh.organization_id !== mission.organization_id || fresh.account_id !== mission.account_id
-        || fresh.owner_id !== mission.owner_id || fresh.revision !== mission.revision || fresh.status !== "completed"
-        || !Array.isArray(outcomes) || !Array.isArray(reviews)
-        || new Set(outcomes.map(item => item.id)).size !== outcomes.length || new Set(reviews.map(item => item.id)).size !== reviews.length
-        || outcomes.some((item, index) => item.organization_id !== mission.organization_id || item.mission_id !== mission.id
-          || item.revision !== index + 1 || (item.supersedes_id ?? null) !== (index ? outcomes[index - 1].id : null))
-        || reviews.some((item, index) => item.organization_id !== mission.organization_id || item.mission_id !== mission.id
-          || item.revision !== index + 1 || item.mission_revision > mission.revision
-          || (item.supersedes_id ?? null) !== (index ? reviews[index - 1].id : null)
-          || !outcomes.some(report => report.id === item.outcome_id && report.revision === item.outcome_revision))) {
-        throw new Error("Report bindings changed");
-      }
-      setResult({ outcomes, reviews });
+      const value = await readManagerReports(mission, signal);
+      if (!signal.aborted) setResult(value);
     } catch {
       if (!signal.aborted) setError("Saved reports unavailable or changed. Refresh mission attention before inspecting again.");
     } finally {

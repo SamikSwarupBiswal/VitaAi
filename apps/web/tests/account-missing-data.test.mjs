@@ -10,7 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
-  mocks = { "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
+  mocks = { "./manager-coaching-queue": { ManagerCoachingQueue: CoachingQueueMarker }, "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
     "./pipeline-panel": { SavedRunComparison: ComparisonMarker }, ...mocks };
   mocks = { "./executive-change-brief": { ExecutiveChangeBrief: ChangeBriefMarker }, ...mocks };
   mocks = { "./account-mission-history": { AccountMissionHistory: MissionHistoryMarker }, "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
@@ -35,6 +35,7 @@ const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
 function ManagerReportsMarker() { return null; }
+function CoachingQueueMarker() { return null; }
 function TimelineMarker() { return null; }
 function ChronologyMarker() { return null; }
 function MissionHistoryMarker() { return null; }
@@ -165,6 +166,9 @@ test("manager summary counts exact owner lifecycle records and links only actual
   const original = structuredClone(missions), tree = workspace.managerForAcceptance({ portfolio, missions });
   const html = renderToStaticMarkup(tree), hrefs = walk(tree).filter(n => n.props?.href).map(n => n.props.href);
   assert.deepEqual(hrefs, ["/missions?account=account&mission=complete&step=Outcome"]);
+  const queue = walk(tree).find(n => n.type === CoachingQueueMarker);
+  assert.equal(queue.props.portfolio, portfolio);
+  assert.deepEqual(queue.props.missions.map(item => item.id), ["complete", "unknown", "rejected", "review", "replaced"]);
   assert.deepEqual(walk(tree).filter(n => n.type === ManagerReportsMarker).map(n => n.props.mission.id), ["complete"]);
   for (const text of ["completed: 1", "reconciliation required: 1", "rejected: 1", "awaiting review: 1", "superseded: 1",
     "Owner owner &lt;one&gt;", "Creation is not completion time", "not a verified seller directory", "does not independently verify"]) assert.ok(html.includes(text), text);

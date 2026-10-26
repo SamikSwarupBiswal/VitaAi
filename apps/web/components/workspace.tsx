@@ -17,6 +17,7 @@ import { SourceDetectionPanel } from "./source-detection-panel";
 import { HubSpotIngestionPanel } from "./hubspot-ingestion-panel";
 import { HubSpotRefreshPanel } from "./hubspot-refresh-panel";
 import { OperationsReadiness } from "./operations-readiness";
+import { ManagerCoachingQueue } from "./manager-coaching-queue";
 import { ManagerReports } from "./manager-reports";
 import { ExecutiveChangeBrief } from "./executive-change-brief";
 
@@ -129,6 +130,7 @@ function ManagerWorkSummary({ portfolio, missions }: { portfolio: Portfolio; mis
   const owners = [...new Set(scoped.map(mission => mission.owner_id))].sort();
   return <details><summary>Manager review · saved work by owner</summary>
     <p>Server owner IDs identify these saved missions; they are not a verified seller directory or performance ranking. Counts describe workflow records, not customer impact or coaching effectiveness.</p>
+    <ManagerCoachingQueue portfolio={portfolio} missions={scoped} />
     {!scoped.length && <p>No saved missions for current portfolio accounts.</p>}
     {owners.map(owner => {
       const records = scoped.filter(mission => mission.owner_id === owner);

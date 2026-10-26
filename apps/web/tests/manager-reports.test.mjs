@@ -27,9 +27,14 @@ function setup(actor = { id: "actor", organization_id: "org", role: "viewer" }, 
   };
   const target = new Module(filename); target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target);
-  target.require = name => name === "react" ? hooks : name === "@/lib/api" ? {
-    api(url, init) { return new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })); },
-  } : name === "./session-gate" ? { useSession: () => ({ actor }) } : normal(name);
+  const api = (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject }));
+  const helperFile = fileURLToPath(new URL("../lib/manager-reports.ts", import.meta.url)), helper = new Module(helperFile);
+  helper.require = name => name === "./api" ? { api } : normal(name);
+  helper._compile(ts.transpileModule(readFileSync(helperFile, "utf8"), { fileName: helperFile, compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+  } }).outputText, helperFile);
+  target.require = name => name === "react" ? hooks : name === "@/lib/manager-reports" ? helper.exports
+    : name === "./session-gate" ? { useSession: () => ({ actor }) } : normal(name);
   target._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: {
     module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
   } }).outputText, filename);
