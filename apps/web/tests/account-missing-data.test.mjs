@@ -10,6 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
+  mocks = { "./executive-change-brief": { ExecutiveChangeBrief: ChangeBriefMarker }, ...mocks };
   mocks = { "./account-mission-history": { AccountMissionHistory: MissionHistoryMarker }, "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const compiled = ts.transpileModule(readFileSync(filename, "utf8"), {
@@ -34,6 +35,7 @@ function ReadinessMarker() { return null; }
 function ManagerReportsMarker() { return null; }
 function ChronologyMarker() { return null; }
 function MissionHistoryMarker() { return null; }
+function ChangeBriefMarker() { return null; }
 const view = (id, value, renewal) => ({
   account: { id, name: id, industry: "Test", annual_value: value, revision: 1 }, renewal_days: renewal,
   assessment: { health: 100, risk: 0, opportunity: 0, confidence: 75, caveats: [], factors: [],
@@ -187,6 +189,16 @@ test("brief empty and unavailable states offer no priorities", () => {
   const empty = renderToStaticMarkup(workspace.briefForAcceptance({ portfolio: { ...portfolio, accounts: [] }, persona: "executive",
     runs: {}, provider: null, unavailable: false, onSelect() {} }));
   assert.match(empty, /No accounts available/); assert.match(empty, /Model unavailable or unconfigured/);
+});
+
+test("saved source change brief is Executive-only, current and bound to existing account navigation", () => {
+  const workspace = briefingWorkspace(), portfolio = { accounts: [], organization_id: "org", as_of: "2026-10-26" }, onSelect = () => {};
+  for (const [persona, unavailable] of [["executive", false], ["executive", true], ["seller", false]]) {
+    const tree = workspace.briefForAcceptance({ portfolio, persona, provider: null, runs: {}, unavailable, onSelect });
+    const child = walk(tree).find(node => node.type === ChangeBriefMarker);
+    assert.equal(!!child, persona === "executive" && !unavailable);
+    if (child) { assert.equal(child.props.portfolio, portfolio); assert.equal(child.props.onSelect, onSelect); }
+  }
 });
 
 test("seller brief links the exact account to saved missions without creating work", () => {

@@ -18,6 +18,7 @@ import { HubSpotIngestionPanel } from "./hubspot-ingestion-panel";
 import { HubSpotRefreshPanel } from "./hubspot-refresh-panel";
 import { OperationsReadiness } from "./operations-readiness";
 import { ManagerReports } from "./manager-reports";
+import { ExecutiveChangeBrief } from "./executive-change-brief";
 
 export function Workspace({ accountDirectory = false }: { accountDirectory?: boolean }) {
   const params = useSearchParams();
@@ -64,6 +65,7 @@ function PortfolioBriefing({ portfolio, persona, provider, runs, unavailable, on
         })}</ol>
         {portfolio.accounts.length > 5 && <p className="caveat">Showing the first 5 of {portfolio.accounts.length} accounts. The table contains the full portfolio.</p>}
       </>}
+    {persona === "executive" && !unavailable && <ExecutiveChangeBrief portfolio={portfolio} onSelect={onSelect} />}
   </section>;
 }
 
