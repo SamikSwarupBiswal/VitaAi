@@ -10,7 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
-  mocks = { "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
+  mocks = { "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
     "./pipeline-panel": { SavedRunComparison: ComparisonMarker }, ...mocks };
   mocks = { "./executive-change-brief": { ExecutiveChangeBrief: ChangeBriefMarker }, ...mocks };
   mocks = { "./account-mission-history": { AccountMissionHistory: MissionHistoryMarker }, "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
@@ -35,6 +35,7 @@ const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
 function ManagerReportsMarker() { return null; }
+function TimelineMarker() { return null; }
 function ChronologyMarker() { return null; }
 function MissionHistoryMarker() { return null; }
 function ChangeBriefMarker() { return null; }
@@ -63,6 +64,8 @@ test("account recommendation history and comparison bind the exact displayed acc
   const selected = view("account", null, null); selected.account.organization_id = "org";
   selected.assessment.as_of = "2026-10-26"; selected.source = { id: "source", kind: "hubspot" };
   const render = value => detail.AccountDetail({ view: value, provider: null, busy: false, onAnalyze() { assert.fail("No analysis"); }, run: null, error: null });
+  const timeline = walk(render(selected)).find(x => x.type === TimelineMarker);
+  assert.ok(timeline); assert.equal(timeline.props.view, selected);
   const history = walk(render(selected)).find(x => x.type === PipelineHistoryMarker);
   assert.ok(history); assert.equal(history.props.accountId, "account"); assert.equal(history.props.organizationId, "org");
   assert.deepEqual(history.props.snapshots, { account: "account" });

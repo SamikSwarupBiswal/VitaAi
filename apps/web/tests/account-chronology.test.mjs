@@ -19,6 +19,11 @@ const record = n => ({ id: `detection${n}`, organization_id: "org", account_id: 
   policy_version: "source-change-1", detected_at: "2026-10-26T03:00:00Z", status: "unchanged", reason: "values_unchanged",
   before: snapshot(n - 1), after: snapshot(n), event: null });
 
+function historyHelper() {
+  const filename = fileURLToPath(new URL("../lib/account-history.ts", import.meta.url)), target = new Module(filename);
+  target._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
+  return target.exports;
+}
 function setup(t, session = { mode: "session", actor: { id: "actor", organization_id: "org", role: "viewer" } }) {
   const filename = fileURLToPath(new URL("../components/account-chronology.tsx", import.meta.url));
   const slots = [], cleanups = [], requests = [], listeners = new Map(); let cursor = 0, effects = [], selected = view, unmounted = false;
@@ -40,7 +45,7 @@ function setup(t, session = { mode: "session", actor: { id: "actor", organizatio
     useRef(initial) { const i = cursor++; return slots[i] ??= { current: initial }; } };
   const target = new Module(filename); target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename));
   const normal = target.require.bind(target);
-  const mocks = { react: hooks, "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
+  const mocks = { "@/lib/account-history": historyHelper(), react: hooks, "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
     "./session-gate": { useSession: () => session } };
   target.require = name => name in mocks ? mocks[name] : normal(name);
   target._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: {

@@ -27,6 +27,11 @@ const data = () => ({ mission, account: view, plan: { id: "plan", organization_i
   audit: [audit("audit-mission", 3, mission, "completed"), audit("audit-action", 7, action, "approval_invalidated"),
     audit("audit-correction", 12, correction, "outcome_corrected")] });
 
+function historyHelper() {
+  const filename = fileURLToPath(new URL("../lib/account-history.ts", import.meta.url)), target = new Module(filename);
+  target._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
+  return target.exports;
+}
 function setup(t, session = { mode: "session", actor: { id: "actor", organization_id: "org", role: "viewer" } }) {
   const filename = fileURLToPath(new URL("../components/account-mission-history.tsx", import.meta.url));
   let cursor = 0, effects = [], selectedView = view, unmounted = false; const slots = [], cleanups = [], requests = [], activity = [], listeners = new Map();
@@ -42,7 +47,7 @@ function setup(t, session = { mode: "session", actor: { id: "actor", organizatio
       return [slots[i], value => { slots[i] = typeof value === "function" ? value(slots[i]) : value; }]; },
     useRef(initial) { const i = cursor++; return slots[i] ??= { current: initial }; } };
   const target = new Module(filename); target.filename = filename; target.paths = Module._nodeModulePaths(path.dirname(filename)); const normal = target.require.bind(target);
-  const mocks = { react: hooks, "next/link": { __esModule: true, default: props => require("react").createElement("a", props) },
+  const mocks = { "@/lib/account-history": historyHelper(), react: hooks, "next/link": { __esModule: true, default: props => require("react").createElement("a", props) },
     "./session-gate": { useSession: () => session }, "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
     "@/lib/workflow": { readMission: (id, signal) => new Promise((resolve, reject) => activity.push({ id, signal, resolve, reject })) } };
   target.require = name => name in mocks ? mocks[name] : normal(name);

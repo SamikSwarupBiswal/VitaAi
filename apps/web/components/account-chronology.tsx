@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type AccountView } from "@/lib/api";
 import type { components } from "@/lib/api.generated";
+import { sameAccount, validateDetections } from "@/lib/account-history";
 import { useSession } from "./session-gate";
 
 type Detection = components["schemas"]["SourceDetection"];
@@ -47,19 +48,8 @@ function ChronologyInspection({ view }: { view: AccountView }) {
       if (!active()) return;
       const fresh = await api<AccountView>(`accounts/${encodeURIComponent(view.account.id)}`, { signal });
       if (!active()) return;
-      if (fresh.account.id !== view.account.id || fresh.account.organization_id !== view.account.organization_id
-        || fresh.account.revision !== view.account.revision || fresh.source?.id !== view.source?.id
-        || fresh.assessment.snapshot_hash !== view.assessment.snapshot_hash || fresh.assessment.as_of !== view.assessment.as_of
-        || !Array.isArray(saved) || saved.length > 20
-        || new Set(saved.map(item => item.id)).size !== saved.length
-        || new Set(saved.map(item => item.after.source_version_id)).size !== saved.length
-        || new Set(saved.map(item => item.after.account_revision)).size !== saved.length
-        || saved.some(item => item.organization_id !== view.account.organization_id || item.account_id !== view.account.id
-          || item.after.account_revision > view.account.revision
-          || (item.after.account_revision === view.account.revision && item.after.source_version_id !== view.source?.id))) {
-        throw new Error("Saved history binding changed");
-      }
-      setRecords([...saved].sort((left, right) => right.after.account_revision - left.after.account_revision));
+      if (!sameAccount(view, fresh)) throw new Error("Account changed");
+      setRecords(validateDetections(saved, view));
     } catch {
       if (active()) setError("Saved source chronology unavailable or changed. Refresh portfolio and inspect again.");
     } finally {
@@ -104,7 +94,7 @@ function FieldValue({ field }: { field: Field }) {
   return <span>{field.value === null ? "Unknown" : String(field.value)} · {field.status} · {field.unit}; measured {field.observed_at || "Unknown"}; evidence {field.evidence_id || "none"}</span>;
 }
 
-function SourceSnapshot({ snapshot, label }: { snapshot: Snapshot | null; label: string }) {
+export function SourceSnapshot({ snapshot, label }: { snapshot: Snapshot | null; label: string }) {
   return <section aria-label={`${label} retained source snapshot`}><h4>{label} retained source snapshot</h4>
     {!snapshot ? <p>No earlier source snapshot.</p> : <>
       <p>{snapshot.kind} · source {snapshot.source_version_id} · revision {snapshot.account_revision} · selected {snapshot.selected_at}.</p>

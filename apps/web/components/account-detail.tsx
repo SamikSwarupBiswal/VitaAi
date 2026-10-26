@@ -2,6 +2,7 @@ import { ChartNoAxesColumn, LoaderCircle } from "lucide-react";
 import type { AccountView, ModelRun, ProviderStatus } from "@/lib/api";
 import { AccountChronology } from "./account-chronology";
 import { AccountMissionHistory } from "./account-mission-history";
+import { AccountTimeline } from "./account-timeline";
 import { SavedPipelineHistory } from "./saved-pipeline-history";
 import { SavedRunComparison } from "./pipeline-panel";
 
@@ -35,6 +36,7 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
           <div><dt>Polarity</dt><dd>{item.polarity}</dd></div></dl>
       </details>)}
     </div></section>
+    <AccountTimeline view={view} />
     <AccountChronology view={view} />
     <SavedPipelineHistory organizationId={account.organization_id} accountId={account.id}
       snapshots={{ [account.id]: assessment.snapshot_hash }}
