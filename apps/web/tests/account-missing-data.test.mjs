@@ -10,7 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
-  mocks = { "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
+  mocks = { "./account-mission-history": { AccountMissionHistory: MissionHistoryMarker }, "./account-chronology": { AccountChronology: ChronologyMarker }, "./saved-research-fusion": { SavedResearchFusion: () => null }, "./manager-reports": { ManagerReports: ManagerReportsMarker }, ...mocks };
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const compiled = ts.transpileModule(readFileSync(filename, "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -33,6 +33,7 @@ const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
 function ManagerReportsMarker() { return null; }
 function ChronologyMarker() { return null; }
+function MissionHistoryMarker() { return null; }
 const view = (id, value, renewal) => ({
   account: { id, name: id, industry: "Test", annual_value: value, revision: 1 }, renewal_days: renewal,
   assessment: { health: 100, risk: 0, opportunity: 0, confidence: 75, caveats: [], factors: [],
@@ -291,6 +292,8 @@ test("account source exposes raw observation and missing or invalid normalized f
   const chronology = walk(detail.AccountDetail({ view: sourced, provider: null, busy: false, onAnalyze() {}, run: null, error: null }))
     .find(node => node.type === ChronologyMarker);
   assert.equal(chronology.props.view, sourced);
+  assert.equal(walk(detail.AccountDetail({ view: sourced, provider: null, busy: false, onAnalyze() {}, run: null, error: null }))
+    .find(node => node.type === MissionHistoryMarker).props.view, sourced);
   assert.match(html, /HubSpot.*revision 1/);
   assert.match(html, /Observation observation-1.*2026-10-17T00:00:00Z/);
   assert.match(html, /annual value: unconfigured/);

@@ -1,6 +1,7 @@
 import { ChartNoAxesColumn, LoaderCircle } from "lucide-react";
 import type { AccountView, ModelRun, ProviderStatus } from "@/lib/api";
 import { AccountChronology } from "./account-chronology";
+import { AccountMissionHistory } from "./account-mission-history";
 
 export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
   view: AccountView; provider: ProviderStatus | null; busy: boolean;
@@ -33,6 +34,7 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
       </details>)}
     </div></section>
     <AccountChronology view={view} />
+    <AccountMissionHistory view={view} />
     <section><h3>Assessment</h3><p>{assessment.recommendation}</p>
       <p className="muted">Confidence {assessment.confidence}%</p>
       {assessment.caveats.map(caveat => <p className="caveat" key={caveat}>{caveat}</p>)}
