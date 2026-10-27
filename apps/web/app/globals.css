@@ -149,7 +149,8 @@ details dd { overflow-wrap: anywhere; font-size: 12px; }
 }
 @media (max-width: 600px) {
   .workspace { display: block; }
-  .sidebar { width: 100%; min-height: 0; padding: 14px 16px; display: flex; flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--border); gap: 16px; }
+  .sidebar { width: 100%; min-height: 0; padding: 14px 16px; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; border-right: 0; border-bottom: 1px solid var(--border); gap: 16px; }
+  .sidebar nav { flex-wrap: wrap; }
   .brand { font-size: 22px; padding: 0; }
   .nav-label, .sidebar footer { display: none; }
   nav { display: flex; margin-left: auto; gap: 6px; }
