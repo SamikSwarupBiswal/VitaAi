@@ -11,6 +11,7 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
   onAnalyze: () => void; run: ModelRun | null; error: string | null;
 }) {
   const { account, assessment } = view;
+  const evidence = view.evidence.filter(item => item.account_id === account.id && item.organization_id === account.organization_id);
   const currentRun = run || view.latest_run;
   const staleRun = currentRun && currentRun.snapshot_hash !== assessment.snapshot_hash;
   return <aside className="detail-rail" aria-label="Account details">
@@ -29,9 +30,13 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
         <div><dt>Renewal</dt><dd>{view.renewal_days === null ? "Unknown" : `${view.renewal_days} days`}</dd></div></dl>
     </section>
     <section data-guide-target="evidence" tabIndex={-1} aria-label="Selected account evidence"><h3>Evidence</h3><div className="evidence-list">
-      {view.evidence.map(item => <details key={item.id} id={`evidence-${item.id}`}>
+      {evidence.map(item => <details key={item.id} id={`evidence-${item.id}`} data-account-id={account.id}
+        data-organization-id={account.organization_id} data-snapshot-hash={assessment.snapshot_hash}>
         <summary><span>{item.fact}</span><small>{item.source}</small></summary>
-        <dl><div><dt>Observed</dt><dd>{new Date(item.observed_at).toLocaleString()}</dd></div>
+        <dl><div><dt>Evidence ID</dt><dd>{item.id}</dd></div>
+          <div><dt>Metric</dt><dd>{item.metric.replaceAll("_", " ")}</dd></div>
+          <div><dt>Value</dt><dd>{item.value ?? "Unknown"}</dd></div>
+          <div><dt>Observed</dt><dd><time dateTime={item.observed_at}>{item.observed_at}</time></dd></div>
           <div><dt>Source record</dt><dd>{item.source_record}</dd></div>
           <div><dt>Polarity</dt><dd>{item.polarity}</dd></div></dl>
       </details>)}
@@ -47,8 +52,20 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
       <p className="muted">Confidence {assessment.confidence}%</p>
       {assessment.caveats.map(caveat => <p className="caveat" key={caveat}>{caveat}</p>)}
       <details className="score-details"><summary>Score factors</summary>
-        <dl>{assessment.factors.map(factor => <div key={factor.metric}><dt>{factor.metric.replaceAll("_", " ")}</dt>
-          <dd>Risk +{factor.risk_contribution}; opportunity +{factor.opportunity_contribution}</dd></div>)}</dl>
+        <dl>{assessment.factors.map(factor => {
+          const sources = evidence.filter(item => item.id === factor.evidence_id);
+          return <div key={factor.metric}><dt>{factor.metric.replaceAll("_", " ")}</dt>
+            <dd>Input {factor.value ?? "Unknown"}; risk +{factor.risk_contribution}; opportunity +{factor.opportunity_contribution}.
+              {sources.length === 1 ? <> <a href={`#evidence-${sources[0].id}`} onClick={event => {
+                const target = document.getElementById(`evidence-${sources[0].id}`);
+                if (target?.getAttribute("data-account-id") !== account.id
+                  || target.getAttribute("data-organization-id") !== account.organization_id
+                  || target.getAttribute("data-snapshot-hash") !== assessment.snapshot_hash) { event.preventDefault(); return; }
+                target.setAttribute("open", ""); target.querySelector("summary")?.focus();
+              }}>Inspect source evidence {sources[0].id}</a></>
+                : <> Source evidence unavailable{factor.evidence_id ? ` for ${factor.evidence_id}` : "; no evidence ID recorded"}.</>}
+            </dd></div>;
+        })}</dl>
         <p className="caveat">Policy {assessment.policy_version} / revision {account.revision}</p>
       </details>
       <button className="primary analyze" disabled={busy || !provider?.configured} onClick={onAnalyze}>

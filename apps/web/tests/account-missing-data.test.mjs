@@ -340,6 +340,57 @@ test("account displays distinguish missing value and renewal from actual zero", 
   assert.match(account, /<dt>Renewal<\/dt><dd>Unknown<\/dd>/);
 });
 
+test("factor inputs link only their exact selected same-account evidence and preserve original source details", t => {
+  const selected = view("account", 0, 0); selected.account.organization_id = "org";
+  selected.assessment.factors = [{ metric: "usage_change", value: 0, evidence_id: "selected-source", risk_contribution: 0, opportunity_contribution: 0 }];
+  selected.evidence = ["other-observation", "selected-source"].map((id, index) => ({
+    id, account_id: "account", organization_id: "org", metric: "usage_change", value: index ? 0 : -20,
+    fact: index ? "<script>Selected observation</script>" : "Older duplicate metric", source: "CRM <source>",
+    source_record: `record-${id}`, observed_at: "2026-10-27T01:02:03.123456Z", polarity: "neutral",
+  }));
+  const before = JSON.stringify(selected), tree = detail.AccountDetail({ view: selected, provider: null, busy: false,
+    onAnalyze() { assert.fail("No analysis requested"); }, run: null, error: null }), html = renderToStaticMarkup(tree);
+  const factor = walk(tree).find(node => node.type === "details" && node.props.className === "score-details");
+  const links = walk(factor).filter(node => node.type === "a");
+  assert.equal(links.length, 1); assert.equal(links[0].props.href, "#evidence-selected-source");
+  assert.match(renderToStaticMarkup(factor), /Input 0; risk \+0; opportunity \+0/);
+  for (const text of ["Evidence ID", "selected-source", "other-observation", "usage change", "record-selected-source", "2026-10-27T01:02:03.123456Z"]) assert.ok(html.includes(text), text);
+  assert.match(html, /&lt;script&gt;Selected observation&lt;\/script&gt;/); assert.match(html, /CRM &lt;source&gt;/);
+  assert.doesNotMatch(html, /<script>/); assert.equal(JSON.stringify(selected), before);
+  const prior = Object.getOwnPropertyDescriptor(globalThis, "document"), opened = [], focused = [];
+  const scope = { "data-account-id": "account", "data-organization-id": "org", "data-snapshot-hash": "account" };
+  const target = { getAttribute: name => scope[name],
+    setAttribute: (...args) => opened.push(args), querySelector(selector) { assert.equal(selector, "summary"); return { focus() { focused.push(true); } }; } };
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { getElementById(id) { assert.equal(id, "evidence-selected-source"); return target; } } });
+  t.after(() => { if (prior) Object.defineProperty(globalThis, "document", prior); else delete globalThis.document; });
+  links[0].props.onClick({ preventDefault() { assert.fail("Current source should remain a native link"); } });
+  assert.deepEqual(opened, [["open", ""]]); assert.deepEqual(focused, [true]);
+  for (const attribute of Object.keys(scope)) {
+    opened.length = 0; focused.length = 0; let prevented = false;
+    const saved = scope[attribute]; scope[attribute] = "other";
+    links[0].props.onClick({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true); assert.deepEqual(opened, []); assert.deepEqual(focused, []);
+    scope[attribute] = saved;
+  }
+});
+
+test("missing or crossed factor sources stay unavailable without substituting another observation", () => {
+  for (const binding of [null, "missing", "foreign-account", "foreign-org"]) {
+    const selected = view("account", null, null); selected.account.organization_id = "org";
+    selected.assessment.factors = [{ metric: "support_cases", value: null, evidence_id: binding, risk_contribution: 0, opportunity_contribution: 0 }];
+    selected.evidence = [{ id: "other-observation", account_id: "account", organization_id: "org", metric: "support_cases", value: 2,
+      fact: "Independent observation", source: "CRM", source_record: "record", observed_at: "2026-10-27T01:02:03Z", polarity: "negative" },
+    { id: "foreign-account", account_id: "other", organization_id: "org", fact: "Private foreign account" },
+    { id: "foreign-org", account_id: "account", organization_id: "other", fact: "Private foreign organization" }];
+    const tree = detail.AccountDetail({ view: selected, provider: null, busy: false, onAnalyze() { assert.fail("No analysis requested"); }, run: null, error: null });
+    const factor = walk(tree).find(node => node.type === "details" && node.props.className === "score-details"), html = renderToStaticMarkup(tree);
+    assert.equal(walk(factor).filter(node => node.type === "a").length, 0);
+    assert.match(renderToStaticMarkup(factor), /Input Unknown; risk \+0; opportunity \+0/);
+    assert.match(renderToStaticMarkup(factor), /Source evidence unavailable/);
+    assert.doesNotMatch(html, /Private foreign account|Private foreign organization/);
+  }
+});
+
 test("account source exposes raw observation and missing or invalid normalized fields", () => {
   const sourced = { ...view("Sourced", null, null), source: { kind: "hubspot", observation_id: "observation-1",
     provider_updated_at: "2026-10-17T00:00:00Z", field_status: { annual_value: "unconfigured", renewal_date: "invalid", name: "valid" } } };
