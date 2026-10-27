@@ -17,6 +17,8 @@ from .hubspot import PREFIX as HUBSPOT_PREFIX
 from .hubspot_refresh import RefreshScheduler, RefreshWorker
 from .hubspot_sync import install_hubspot_routes
 from .identity import Actor, Identity, LoginFailure, LoginRequest, SessionView
+from .memory_api import PREFIX as MEMORY_PREFIX
+from .memory_api import install_memory_routes
 from .microsoft import PREFIX as MICROSOFT_PREFIX
 from .microsoft import Microsoft, decode_callback
 from .models import AdvisoryProvider
@@ -75,7 +77,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
         if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX, RESEARCH_PREFIX,
-                                        COMPARISON_PREFIX)):
+                                        COMPARISON_PREFIX, MEMORY_PREFIX)):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
@@ -258,6 +260,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_catalog_routes(app, store, identity, settings, comparison_transport)
     install_comparison_routes(app, store, identity, settings, comparison_transport)
     install_probe_routes(app, store, identity, settings, comparison_transport)
+    install_memory_routes(app, store, settings)
     return app
 
 
