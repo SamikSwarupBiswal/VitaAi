@@ -17,6 +17,7 @@ import { SourceDetectionPanel } from "./source-detection-panel";
 import { HubSpotIngestionPanel } from "./hubspot-ingestion-panel";
 import { HubSpotRefreshPanel } from "./hubspot-refresh-panel";
 import { OperationsReadiness } from "./operations-readiness";
+import { OperationsReceipts } from "./operations-receipts";
 import { ManagerCoachingQueue } from "./manager-coaching-queue";
 import { ManagerReports } from "./manager-reports";
 import { WorkspaceGuide } from "./workspace-guide";
@@ -120,7 +121,10 @@ function OperationsMissions({ portfolio }: { portfolio: Portfolio }) {
                   {["executed", "outcome_recorded"].includes(mission.status) && <p className="caveat">Receipt and business outcome are separate; inspect the saved human report.</p>}
                 </li>;
               })}</ul>}
-        {current && !current.error && <ManagerWorkSummary portfolio={portfolio} missions={current.missions} />}
+        {current && !current.error && <>
+          <OperationsReceipts portfolio={portfolio} missions={current.missions} />
+          <ManagerWorkSummary portfolio={portfolio} missions={current.missions} />
+        </>}
       </>}
   </section>;
 }

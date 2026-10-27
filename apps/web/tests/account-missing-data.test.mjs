@@ -10,6 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
+  mocks = { "./operations-receipts": { OperationsReceipts: ReceiptsMarker }, ...mocks };
   mocks = { "./workspace-guide": { WorkspaceGuide: WorkspaceGuideMarker }, "./manager-coaching-queue": { ManagerCoachingQueue: CoachingQueueMarker }, "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
     "./pipeline-panel": { SavedRunComparison: ComparisonMarker }, ...mocks };
   mocks = { "./executive-change-brief": { ExecutiveChangeBrief: ChangeBriefMarker }, ...mocks };
@@ -34,6 +35,7 @@ const api = load("../lib/api.ts");
 const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
+function ReceiptsMarker() { return null; }
 function ManagerReportsMarker() { return null; }
 function WorkspaceGuideMarker() { return null; }
 function CoachingQueueMarker() { return null; }
@@ -108,6 +110,9 @@ test("operations inspects scoped saved attention with exact links; refresh failu
     mission("outcome", "executed"), mission("done", "completed"), mission("draft", "draft"),
     mission("foreign", "execution_failed", { organization_id: "other" }), mission("missing", "executing", { account_id: "missing" })]);
   await flush(); let tree = render(), html = renderToStaticMarkup(tree);
+  const diagnostics = walk(tree).find(node => node.type === ReceiptsMarker);
+  assert.equal(diagnostics.props.portfolio, portfolio);
+  assert.deepEqual(diagnostics.props.missions.map(item => item.id), ["unknown", "review", "outcome", "done", "draft", "foreign", "missing"]);
   assert.match(html, /Uncertain result/); assert.match(html, /historical evidence binding/); assert.match(html, /business outcome are separate/);
   const links = walk(tree).filter(node => node.props?.href).map(node => node.props.href);
   assert.deepEqual(links.map(href => new URL(href, "http://localhost").searchParams.get("mission")), ["unknown", "review", "outcome"]);
@@ -117,6 +122,7 @@ test("operations inspects scoped saved attention with exact links; refresh failu
   listeners.get("vitaai-workflow-changed")(); render(); assert.equal(requests[1].init.signal.aborted, true);
   requests[1].resolve([mission("obsolete", "awaiting_review")]); requests[2].reject(new Error("private server detail")); await flush();
   html = renderToStaticMarkup(render()); assert.match(html, /Mission attention is unavailable/);
+  assert.equal(walk(render()).some(node => node.type === ReceiptsMarker), false);
   assert.doesNotMatch(html, /obsolete|private server detail|inspect Approval/);
   walk(render()).find(node => node.type === "button").props.onClick(); render(); requests[3].resolve([]); await flush();
   assert.match(renderToStaticMarkup(render()), /No saved review, execution or outcome attention/);
