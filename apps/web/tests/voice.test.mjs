@@ -5,10 +5,10 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url), ts = require("typescript");
-const filename = fileURLToPath(new URL("../lib/voice.ts", import.meta.url)), module = new Module(filename);
-module.filename = filename; module.paths = Module._nodeModulePaths(path.dirname(filename));
-module._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
-const { LocalVoice, normalizeTranscript } = module.exports;
+const filename = fileURLToPath(new URL("../lib/voice.ts", import.meta.url)), compiled = new Module(filename);
+compiled.filename = filename; compiled.paths = Module._nodeModulePaths(path.dirname(filename));
+compiled._compile(ts.transpileModule(readFileSync(filename, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
+const { LocalVoice, normalizeTranscript } = compiled.exports;
 function environment() {
   const states = [], transcripts = [], timers = new Map(), calls = { start: 0, abort: 0, stop: 0, cancel: 0, speak: [] };
   let number = 0;

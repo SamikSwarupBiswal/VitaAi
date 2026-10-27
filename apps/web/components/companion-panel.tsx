@@ -5,6 +5,7 @@ import { api, type AccountView } from "@/lib/api";
 import { conversationScope, conversationHistory, navigationHref, type Conversation, type ConversationHistory, type Persona, type Turn } from "@/lib/companion";
 import { useSession } from "./session-gate";
 import { VoiceControls } from "./voice-controls";
+import { AvatarControls } from "./avatar-controls";
 
 export function CompanionPanel({ view }: { view: AccountView }) {
   const session = useSession(), actor = session?.actor;
@@ -75,6 +76,7 @@ function ConversationPanel({ view, actor, role }: { view: AccountView; actor: st
   }
   return <section aria-label="Sourced companion" style={{ overflowWrap: "anywhere" }}>
     <h3>Workspace companion</h3><p>Deterministic sourced answers. Persona changes presentation only. Chat cannot approve, send or execute.</p>
+    <AvatarControls key={JSON.stringify([view.assessment.snapshot_hash, history?.conversation.id, history?.turns.at(-1)?.id, busy])} />
     <a href={`/companion?${new URLSearchParams({ account: view.account.id })}`}>Open companion workspace</a>
     <label>Advisor <select disabled={busy} value={persona} onChange={event => { if (!pending.current) setPersona(event.target.value as Persona); }}>
       <option value="companion">Account companion</option><option value="executive_advisor">Executive Advisor</option>
