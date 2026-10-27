@@ -33,16 +33,18 @@ export function Workspace({ accountDirectory = false }: { accountDirectory?: boo
 
 type Persona = "executive" | "seller" | "operations";
 
-function PortfolioBriefing({ portfolio, persona, provider, runs, unavailable, onSelect }: {
+function PortfolioBriefing({ portfolio, persona, provider, runs, unavailable, readAt, onSelect }: {
   portfolio: Portfolio; persona: Persona; provider: ProviderStatus | null;
-  runs: Record<string, ModelRun>; unavailable: boolean; onSelect: (id: string) => void;
+  runs: Record<string, ModelRun>; unavailable: boolean; readAt: string | null; onSelect: (id: string) => void;
 }) {
   return <section className="portfolio-brief" aria-label={`${persona === "seller" ? "Seller" : "Executive"} briefing`}>
     <h2>{persona === "seller" ? "Your work brief" : "Portfolio briefing"}</h2>
     <p className="muted">Assessment date {portfolio.as_of}. Priorities follow server risk order across all accounts.</p>
     <p className="caveat">{portfolio.mode === "local_sample" ? "Synthetic sample" : portfolio.mode === "mixed" ? "Mixed synthetic and HubSpot sources" : "HubSpot sources"}. Recommendations are proposals; review evidence before acting.</p>
     {unavailable ? <p role="status">Briefing paused while portfolio data is refreshing or unavailable. Refresh successfully to inspect current priorities.</p>
-      : <>{!provider?.configured && <p className="caveat">Model unavailable or unconfigured. This brief uses deterministic assessments.</p>}
+      : <>{readAt ? <p className="muted">Local portfolio read completed <time dateTime={readAt}>{readAt}</time>. Source observation and model run times remain separate.</p>
+        : <p className="muted">Local portfolio read time unavailable.</p>}
+        {!provider?.configured && <p className="caveat">Model unavailable or unconfigured. This brief uses deterministic assessments.</p>}
         {provider?.status === "failed" && <p className="caveat">Provider reported a failure. No generated briefing is shown.</p>}
         {!portfolio.accounts.length && <p>No accounts available. No priorities can be established.</p>}
         <ol>{portfolio.accounts.slice(0, 5).map(view => {
@@ -210,6 +212,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
   const [sourceGeneration, setSourceGeneration] = useState(0);
   const [sourcePending, setSourcePending] = useState(false);
+  const [readAt, setReadAt] = useState<string | null>(null);
   const readController = useRef<AbortController | null>(null);
   const analysisController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
@@ -222,6 +225,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
 
   const refresh = useCallback(async () => {
     if (!mounted.current) return;
+    setReadAt(null);
     readController.current?.abort();
     const controller = new AbortController();
     readController.current = controller;
@@ -231,6 +235,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
       if (controller.signal.aborted) return;
       setPortfolio(data);
       setProvider(status);
+      setReadAt(new Date().toISOString());
       setAuthorityBlocked(false);
       setSourceGeneration(value => value + 1);
     } catch (error) {
@@ -239,6 +244,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
   }, []);
 
   const invalidateAuthority = useCallback(() => {
+    setReadAt(null);
     readController.current?.abort();
     analysisController.current?.abort();
     setBusyAccount(null); setRuns({}); setAnalysisError(null); setAuthorityBlocked(true);
@@ -258,7 +264,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
     readController.current = controller;
     Promise.all([api<Portfolio>("portfolio", { signal: controller.signal }),
       api<ProviderStatus>("providers/nebius", { signal: controller.signal })])
-      .then(([data, status]) => { if (!controller.signal.aborted) { setPortfolio(data); setProvider(status); } })
+      .then(([data, status]) => { if (!controller.signal.aborted) { setPortfolio(data); setProvider(status); setReadAt(new Date().toISOString()); } })
       .catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Unable to load workspace."); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     const sourceChanged = () => { invalidateAuthority(); setLoading(true); setError(null); void refresh(); };
@@ -357,7 +363,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
           <div><dt>Growth signals</dt><dd className="growth-text">{portfolio.growth_count}</dd></div></dl>}
         {!!portfolio?.annual_value_missing_count && <p className="caveat">{portfolio.annual_value_missing_count} account{portfolio.annual_value_missing_count === 1 ? " is" : "s are"} missing annual value. The total includes known values only.</p>}
         {portfolio && !accountDirectory && persona !== "operations" && <PortfolioBriefing portfolio={portfolio} persona={persona}
-          provider={provider} runs={runs} unavailable={loading || !!error || authorityBlocked} onSelect={openBriefAccount} />}
+          provider={provider} runs={runs} unavailable={loading || !!error || authorityBlocked} readAt={readAt} onSelect={openBriefAccount} />}
         <div className="table-toolbar"><div className="filters" role="group" aria-label="Account filters">
           {[["all", "All accounts"], ["attention", "Needs attention"], ["growth", "Growth"]].map(([key, label]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""}
             onClick={() => { setFilter(key); setAnalysisError(null); }}>{label}</button>)}</div>
