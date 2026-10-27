@@ -11,6 +11,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .companion_api import PREFIX as COMPANION_PREFIX
+from .companion_api import install_companion_routes
 from .config import Settings
 from .contracts import AccountView, AnalyzeRequest, ModelRun, Portfolio, ProviderStatus
 from .hubspot import PREFIX as HUBSPOT_PREFIX
@@ -77,7 +79,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
         if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX, RESEARCH_PREFIX,
-                                        COMPARISON_PREFIX, MEMORY_PREFIX)):
+                                        COMPARISON_PREFIX, MEMORY_PREFIX, COMPANION_PREFIX)):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
@@ -261,6 +263,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_comparison_routes(app, store, identity, settings, comparison_transport)
     install_probe_routes(app, store, identity, settings, comparison_transport)
     install_memory_routes(app, store, settings)
+    install_companion_routes(app, store, settings)
     return app
 
 

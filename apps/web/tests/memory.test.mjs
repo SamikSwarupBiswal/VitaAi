@@ -22,7 +22,7 @@ const item = () => ({ id, organization_id: "org", account_id: account, revision:
   recommendation: { account_id: account, action: { kind: "manual_review", rationale: "Retained proposal" } } });
 const history = () => ({ organization_id: "org", account_id: account, limit: 20, total_count: 1, has_more: false, items: [item()] });
 const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === "object" ? [node, ...walk(node.props?.children)] : [];
-function setup(t, role = "admin") {
+function setup(t, role = "admin", subject = "memory") {
   const slots = [], cleanups = [], requests = [], events = new Map(); let cursor = 0, effects = [];
   const old = globalThis.window;
   globalThis.window = { addEventListener(name, fn) { if (!events.has(name)) events.set(name, new Set()); events.get(name).add(fn); }, removeEventListener(name, fn) { events.get(name)?.delete(fn); } };
@@ -31,10 +31,10 @@ function setup(t, role = "admin") {
     useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], value => { slots[i] = value; }]; },
     useRef(initial) { const i = cursor++; return slots[i] ??= { current: initial }; } };
   const helper = load("../lib/memory.ts");
-  const component = load("../components/memory-panel.tsx", { react: hooks, "@/lib/memory": helper,
+  const component = load(`../components/${subject}-panel.tsx`, { react: hooks, "@/lib/memory": helper, "@/lib/companion": load("../lib/companion.ts"),
     "@/lib/pipeline-history": load("../lib/pipeline-history.ts"), "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", organization_id: "org", role } }) } });
-  const render = () => { cursor = 0; const outer = component.MemoryPanel({ view: { account: { id: account, organization_id: "org", revision: 1 }, assessment: { snapshot_hash: "hash" } } });
+  const render = () => { cursor = 0; const outer = (component.MemoryPanel ?? component.CompanionPanel)({ view: { account: { id: account, organization_id: "org", revision: 1 }, assessment: { snapshot_hash: "hash" } } });
     const tree = outer.type(outer.props), pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
   const unmount = () => cleanups.forEach(fn => fn?.());
   t.after(() => { unmount(); globalThis.window = old; });
@@ -59,4 +59,27 @@ test("duplicate reads, captured lifecycle handlers and obsolete results are fenc
   const oldEvents = app.button("Inspect memory events"); app.emit("focus"); await oldEvents.props.onClick(); assert.equal(app.requests.length, 0);
   const late = app.button("Inspect account memory").props.onClick(), request = app.requests.shift(); app.unmount(); request.resolve(history()); await late;
   assert.doesNotMatch(renderToStaticMarkup(app.render()), /Retained proposal/);
+});
+
+test("companion navigation denies arbitrary, crossed and incomplete targets", () => {
+  const { navigationHref } = load("../lib/companion.ts");
+  assert.equal(navigationHref({ target: "mission", account_id: account, mission_id: id, step: "Outcome" }, account), `/missions?account=${account}&mission=${id}&step=Outcome`);
+  for (const value of [{ target: "execute", account_id: account }, { target: "account", account_id: id },
+    { target: "mission", account_id: account, mission_id: "https://foreign", step: "Outcome" },
+    { target: "mission", account_id: account, mission_id: id, step: "send" }]) assert.equal(navigationHref(value, account), null);
+});
+
+test("companion questions cite context and duplicate/captured handlers cannot submit or navigate", async t => {
+  const app = setup(t, "admin", "companion"); app.render(); assert.equal(app.requests.length, 0);
+  const start = app.button("Start sourced conversation").props.onClick();
+  app.requests.shift().resolve({ id, actor_id: "actor", organization_id: "org", account_id: account, revision: 1, snapshot_hash: "hash", persona: "companion" }); await start;
+  const textarea = walk(app.render()).find(node => node.type === "textarea"); textarea.props.onChange({ target: { value: "Explain risk" } });
+  const ask = app.button("Ask from this context"), first = ask.props.onClick(); await ask.props.onClick(); assert.equal(app.requests.length, 1);
+  const request = app.requests.shift(); assert.equal(JSON.parse(request.init.body).message, "Explain risk");
+  request.resolve({ id, organization_id: "org", session_id: id, number: 1, mode: "deterministic_sourced", status: "answered", message: "Explain risk", answer: "<script>Sourced answer</script>",
+    citations: [{ kind: "evidence", id: "fact", label: "Synthetic", text: "Original source", source_time: "2026-10-20" }], caveats: ["Uncertainty retained"], navigation: { target: "evidence", account_id: account } }); await first;
+  const html = renderToStaticMarkup(app.render()); assert.match(html, /&lt;script&gt;Sourced answer/); assert.match(html, /Original source/);
+  const link = walk(app.render()).find(node => node.type === "a" && node.props.children === "Open cited workspace");
+  app.emit("focus"); let prevented = false; link.props.onClick({ preventDefault() { prevented = true; } }); assert.ok(prevented);
+  await ask.props.onClick(); assert.equal(app.requests.length, 0);
 });

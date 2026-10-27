@@ -51,8 +51,8 @@ class RecallResult(WorkflowContract):
     items: tuple[RecallItem, ...]
 
 
-def recall(memory, account_id, body: RecallRequest):
-    with memory.transaction() as (connection, actor):
+def recall(memory, account_id, body: RecallRequest, *, transaction=None):
+    with transaction or memory.transaction() as (connection, actor):
         account = memory.account(connection, actor, account_id)
         facts = selected_evidence(connection, actor.organization_id, account_id)
         now = memory.clock()

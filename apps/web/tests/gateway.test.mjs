@@ -17,6 +17,22 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("companion session and turn paths have explicit methods and no implicit HEAD", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports), id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
+  for (const [method, suffix, status] of [["GET", `accounts/${id}/sessions`, 200], ["POST", `accounts/${id}/sessions`, 200],
+    ["GET", `sessions/${id}`, 200], ["POST", `sessions/${id}/turns`, 200], ["HEAD", `sessions/${id}`, 404],
+    ["GET", `sessions/${id}/turns`, 404], ["POST", `sessions/${id}`, 404], ["GET", `sessions/${id}/extra`, 404]]) {
+    const name = `companion/${suffix}`;
+    const result = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method,
+      headers: { host: "127.0.0.1:3000" }, ...(method === "POST" ? { body: "{}" } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(result.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 4);
+});
+
 test("memory allows only canonical scoped methods and bounds bodies", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
   const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");

@@ -1065,6 +1065,8 @@ class HubSpotApiTests(unittest.TestCase):
 
     def test_source_event_selection_migration_preserves_populated_detection_and_plan_history(self):
         from sqlalchemy import text
+        from vita_api.companion import sessions as companion_sessions
+        from vita_api.companion import turns as companion_turns
         from vita_api.memory import entries as memory_entries
         from vita_api.memory import events as memory_events
         from vita_api.migrate import upgrade
@@ -1079,7 +1081,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
             self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
-            for table in (memory_events, memory_entries, identity_decisions, quality_reviews, seed_versions, seeds):
+            for table in (companion_turns, companion_sessions, memory_events, memory_entries, identity_decisions, quality_reviews, seed_versions, seeds):
                 self.assertEqual(connection.execute(select(table)).all(), [])
                 table.drop(connection)
             coaching_reviews.drop(connection)
@@ -1097,7 +1099,7 @@ class HubSpotApiTests(unittest.TestCase):
         with self.app.state.store.engine.connect() as connection:
             for table in (detections, source_versions, observations, plans, audits, versions):
                 self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
-            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0022")
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0023")
         selected = self.client.post(path, headers=HEADERS, json=body)
         self.assertEqual(selected.status_code, 200, selected.text)
         self.assertEqual(selected.json()["selection"]["detection"], changed)
@@ -1400,6 +1402,8 @@ class HubSpotApiTests(unittest.TestCase):
 
     def test_source_detection_migration_preserves_populated_prior_history(self):
         from sqlalchemy import text
+        from vita_api.companion import sessions as companion_sessions
+        from vita_api.companion import turns as companion_turns
         from vita_api.memory import entries as memory_entries
         from vita_api.memory import events as memory_events
         self.promote_source(name="Historical before")
@@ -1415,7 +1419,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
             self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
-            for table in (memory_events, memory_entries, identity_decisions, quality_reviews, seed_versions, seeds):
+            for table in (companion_turns, companion_sessions, memory_events, memory_entries, identity_decisions, quality_reviews, seed_versions, seeds):
                 self.assertEqual(connection.execute(select(table)).all(), [])
                 table.drop(connection)
             coaching_reviews.drop(connection)
@@ -1435,7 +1439,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0022")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0023")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)

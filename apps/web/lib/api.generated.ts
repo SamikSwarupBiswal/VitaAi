@@ -1932,6 +1932,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/companion/accounts/{account_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sessions */
+        get: operations["list_sessions_api_companion_accounts__account_id__sessions_get"];
+        put?: never;
+        /** Start */
+        post: operations["start_api_companion_accounts__account_id__sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/companion/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_companion_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/companion/sessions/{session_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn */
+        post: operations["turn_api_companion_sessions__session_id__turns_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2397,6 +2449,28 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** Citation */
+        Citation: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "evidence" | "account" | "memory" | "mission" | "outcome" | "execution";
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Source Time */
+            source_time: string | null;
+            /** Text */
+            text: string;
+        };
         /** CoachingPlan */
         CoachingPlan: {
             /**
@@ -2833,6 +2907,83 @@ export interface components {
             task: "analysis" | "drafts";
             /** Action Kind */
             action_kind?: ("manual_review" | "support_escalation" | "renewal_prep" | "optimization_review" | "reactivation" | "follow_up" | "monitor") | null;
+        };
+        /** Conversation */
+        Conversation: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Persona
+             * @enum {string}
+             */
+            persona: "companion" | "executive_advisor" | "mission_guide" | "sales_director" | "operations_advisor";
+        };
+        /** ConversationHistory */
+        ConversationHistory: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            conversation: components["schemas"]["Conversation"];
+            /** Turns */
+            turns: components["schemas"]["Turn"][];
+            /**
+             * Limit
+             * @default 30
+             * @constant
+             */
+            limit: 30;
+        };
+        /** ConversationStart */
+        ConversationStart: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /**
+             * Persona
+             * @default companion
+             * @enum {string}
+             */
+            persona: "companion" | "executive_advisor" | "mission_guide" | "sales_director" | "operations_advisor";
         };
         /** DestinationBinding */
         DestinationBinding: {
@@ -4503,6 +4654,29 @@ export interface components {
              * @default Generated interpretations are unverified hypotheses for human review. Schema and citation validation does not establish truth, account identity, causality, approval or business outcomes. The retained internal baseline and caveats remain authoritative; research changes no facts or authority.
              */
             caveat: string;
+        };
+        /** Navigation */
+        Navigation: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "account" | "evidence" | "mission";
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Mission Id */
+            mission_id?: string | null;
+            /** Step */
+            step?: ("Review" | "Evidence" | "Outreach" | "CRM Note" | "Approval" | "Execution" | "Outcome") | null;
         };
         /** NotePayload */
         NotePayload: {
@@ -7432,6 +7606,93 @@ export interface components {
             body: string;
             /** Due At */
             due_at?: string | null;
+        };
+        /** Turn */
+        Turn: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Request Hash */
+            request_hash: string;
+            /** Number */
+            number: number;
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "answered" | "unknown" | "authority_denied";
+            /**
+             * Mode
+             * @default deterministic_sourced
+             * @constant
+             */
+            mode: "deterministic_sourced";
+            /** Answer */
+            answer: string;
+            /** Citations */
+            citations: components["schemas"]["Citation"][];
+            /** Caveats */
+            caveats: string[];
+            /**
+             * Recalled Ids
+             * @default []
+             */
+            recalled_ids: string[];
+            navigation?: components["schemas"]["Navigation"] | null;
+        };
+        /** TurnRequest */
+        TurnRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Message */
+            message: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -11326,6 +11587,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_api_companion_accounts__account_id__sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_api_companion_accounts__account_id__sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_companion_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationHistory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    turn_api_companion_sessions__session_id__turns_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TurnRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Turn"];
                 };
             };
             /** @description Validation Error */
