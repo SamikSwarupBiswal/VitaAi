@@ -1,0 +1,18 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.23",
+  "version": "1.0.0",
+  "id": "${APP_ID}",
+  "developer": { "name": "VitaAi", "websiteUrl": "${WEB_ORIGIN}", "privacyUrl": "${PRIVACY_URL}", "termsOfUseUrl": "${TERMS_URL}" },
+  "name": { "short": "VitaAi", "full": "VitaAi sourced account companion" },
+  "description": {
+    "short": "Sourced account status and governed preparation links.",
+    "full": "Inspect authorized VitaAi account evidence and deterministic preparation proposals using your mapped Microsoft identity. Approval and execution remain in the authenticated VitaAi exact-preview workflow. This app sends no customer messages."
+  },
+  "icons": { "outline": "outline.png", "color": "color.png" },
+  "accentColor": "#18392F",
+  "staticTabs": [{ "entityId": "vitaai", "name": "Accounts", "contentUrl": "${WEB_ORIGIN}/teams", "websiteUrl": "${WEB_ORIGIN}/teams", "scopes": ["personal"] }],
+  "validDomains": ["${WEB_HOST}"],
+  "webApplicationInfo": { "id": "${APP_ID}", "resource": "api://${WEB_HOST}/${APP_ID}" },
+  "copilotAgents": { "declarativeAgents": [{ "id": "vitaai", "file": "declarative-agent.json" }] }
+}

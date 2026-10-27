@@ -1,0 +1,13 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.4/schema.json",
+  "schema_version": "v2.4",
+  "name_for_human": "VitaAi",
+  "namespace": "VitaAi",
+  "description_for_human": "Authorized sourced account status and preparation proposals.",
+  "description_for_model": "Read the exact accessible account context before requesting an unapproved preparation proposal. No function grants approval, sends messages or executes customer actions.",
+  "functions": [
+    { "name": "platformContext", "description": "Read accessible account facts, evidence IDs, original source dates, assessment, caveats and exact workspace link.", "capabilities": { "security_info": { "data_handling": ["GetPrivateData"] } } },
+    { "name": "platformPreparation", "description": "Inspect a deterministic unapproved preparation proposal bound to the exact current account revision and snapshot. Creates no plan or customer action.", "capabilities": { "confirmation": { "type": "AdaptiveCard", "title": "Inspect VitaAi preparation", "body": "Read a preparation proposal using this exact account snapshot. Customer actions require separate exact approval in VitaAi." }, "security_info": { "data_handling": ["GetPrivateData", "DataTransform"] } } }
+  ],
+  "runtimes": [{ "type": "OpenApi", "auth": { "type": "OAuthPluginVault", "reference_id": "${AUTH_REFERENCE_ID}" }, "spec": { "url": "openapi.json" }, "run_for_functions": ["platformContext", "platformPreparation"] }]
+}

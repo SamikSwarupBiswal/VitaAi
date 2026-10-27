@@ -1,0 +1,4 @@
+# Optional operator CLI only. Install with --no-deps into a separate environment.
+grpcio==1.85.0
+protobuf==4.24.1
+nvidia-ace @ https://raw.githubusercontent.com/NVIDIA/Audio2Face-3D-Samples/a2d0150043be7dc15db2fad8193a78b660e1100f/proto/sample_wheel/nvidia_ace-1.2.0-py3-none-any.whl#sha256=0c36066322406cc4670d6140796650e7020ddb20dee380c6a85222390b3a90a4

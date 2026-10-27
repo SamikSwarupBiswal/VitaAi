@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, type AccountView } from "@/lib/api";
 import { savedRunId } from "@/lib/pipeline-history";
 import { CompanionPanel } from "./companion-panel";
+import { PlatformAdmin } from "./platform-admin";
 import { useSession } from "./session-gate";
 
 export function CompanionPage() {
@@ -31,5 +32,5 @@ function SelectedCompanion({ account, organization }: { account: string; organiz
     return () => { controller?.abort(); events.forEach(event => window.removeEventListener(event, read)); };
   }, [account, organization]);
   return <main><h1>Workspace companion</h1><a href={`/accounts?${new URLSearchParams({ account })}`}>Return to account workspace</a>
-    {error ? <p role="alert">Account unavailable. Return to accounts and refresh.</p> : view ? <><h2>{view.account.name}</h2><CompanionPanel view={view} /></> : <p role="status">Reading selected account…</p>}</main>;
+    {error ? <p role="alert">Account unavailable. Return to accounts and refresh.</p> : view ? <><h2>{view.account.name}</h2><CompanionPanel view={view} /><PlatformAdmin /></> : <p role="status">Reading selected account…</p>}</main>;
 }

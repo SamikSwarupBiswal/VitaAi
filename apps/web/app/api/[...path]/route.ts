@@ -25,8 +25,11 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
   const memoryPath = request.method === "GET"
-    ? new RegExp(`^memory/(?:accounts/${uuid}|${uuid}(?:/events)?)$`).test(joined)
-    : request.method === "POST" && new RegExp(`^memory/(?:accounts/${uuid}(?:/recall)?|${uuid}/lifecycle)$`).test(joined);
+    ? new RegExp(`^memory/(?:accounts/${uuid}|${uuid}(?:/events)?|sources/(?:accounts/${uuid}(?:/preview/(?:source_detection|mission)/${uuid})?|${uuid}(?:/events)?))$`).test(joined)
+    : request.method === "POST" && new RegExp(`^memory/(?:accounts/${uuid}(?:/recall)?|${uuid}/lifecycle|sources/(?:accounts/${uuid}(?:/recall)?|${uuid}/lifecycle))$`).test(joined);
+  const stage5Path = request.method === "GET"
+    ? new RegExp(`^(?:platform/(?:readiness|identities)|collaboration/(?:recipients|accounts/${uuid}/handoffs|handoffs/${uuid})|intelligence/(?:accounts/${uuid}/(?:scenarios|trends)|scenarios/${uuid}(?:/promotion)?|trends/${uuid}))$`).test(joined)
+    : request.method === "POST" && new RegExp(`^(?:platform/identities|collaboration/(?:accounts/${uuid}/handoffs|handoffs/${uuid}/transition)|intelligence/(?:accounts/${uuid}/(?:scenarios|trends)|scenarios/${uuid}/promotion))$`).test(joined);
   const companionPath = request.method === "GET"
     ? new RegExp(`^companion/(?:accounts/${uuid}/sessions|sessions/${uuid})$`).test(joined)
     : request.method === "POST" && new RegExp(`^companion/(?:accounts/${uuid}/sessions|sessions/${uuid}/turns)$`).test(joined);
@@ -50,13 +53,13 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const comparisonPath = request.method === "GET"
     ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}(?:/recovery-readiness)?|accounts/${uuid}/(?:runs|readiness)|providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:test-readiness|tests)|tests/${uuid}(?:/recovery-readiness)?)$`).test(joined)
     : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:discover|test)|accounts/${uuid}/compare|(?:runs|tests)/${uuid}/recover)$`).test(joined);
-  const allowed = request.method === "GET"
+  const allowed = stage5Path || (request.method === "GET"
     ? companionPath || memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined) || pipelineResearchPath || joined === "pipeline/history"
-    : companionPath || memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
+    : companionPath || memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined));
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
   try {
     const body = request.method === "POST" ? await request.text() : undefined;
-    if (body && body.length > (workflowPath ? 262144 : memoryPath || companionPath ? 16384 : joined.endsWith("/quality-reviews") ? 16384
+    if (body && body.length > (workflowPath ? 262144 : stage5Path ? 32768 : memoryPath || companionPath ? 16384 : joined.endsWith("/quality-reviews") ? 16384
       : joined.endsWith("/identity-decisions") ? 32768 : 4096)) {
       return NextResponse.json({ detail: "Request too large" }, { status: 413 });
     }

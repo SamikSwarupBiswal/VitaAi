@@ -10,6 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
+  mocks = { "./account-tools": { AccountTools: () => null }, ...mocks };
   mocks = { "./memory-panel": { MemoryPanel: MemoryMarker }, ...mocks };
   mocks = { "./companion-panel": { CompanionPanel: CompanionMarker }, ...mocks };
   mocks = { "./operations-receipts": { OperationsReceipts: ReceiptsMarker }, ...mocks };

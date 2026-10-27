@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
+
 from vita_api.app import create_app
 from vita_api.config import PROPERTY_SEMANTICS, Settings
 from vita_api.hubspot import HubSpot, HubSpotFailure
@@ -53,6 +54,17 @@ from vita_api.workflow_storage import (
 NOW = datetime(2026, 10, 18, 12, tzinfo=UTC)
 ACCOUNT_ID = sample_records(NOW)[0][0].id
 HEADERS = {"X-VitaAi-Request": "1", "Origin": "http://127.0.0.1:3000"}
+
+
+def remove_empty_stage5_extensions(connection):
+    from vita_api.storage import metadata
+    names = {"source_memory_entries", "source_memory_events", "collaboration_handoffs", "collaboration_events",
+             "platform_identities", "platform_activities", "intelligence_scenarios", "intelligence_promotions", "intelligence_trends"}
+    for table in reversed(metadata.sorted_tables):
+        if table.name in names:
+            if connection.execute(select(table)).first() is not None:
+                raise AssertionError("Historical migration fixture must not discard Stage5 data")
+            table.drop(connection)
 COMPANY = {"id": "123", "archived": False, "createdAt": "2026-09-01T00:00:00Z",
            "updatedAt": "2026-10-17T12:00:00Z",
            "properties": {"name": "Test company", "domain": "example.test", "industry": None}}
@@ -1065,6 +1077,7 @@ class HubSpotApiTests(unittest.TestCase):
 
     def test_source_event_selection_migration_preserves_populated_detection_and_plan_history(self):
         from sqlalchemy import text
+
         from vita_api.companion import sessions as companion_sessions
         from vita_api.companion import turns as companion_turns
         from vita_api.memory import entries as memory_entries
@@ -1081,6 +1094,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
             self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
+            remove_empty_stage5_extensions(connection)
             for table in (companion_turns, companion_sessions, memory_events, memory_entries, identity_decisions, quality_reviews, seed_versions, seeds):
                 self.assertEqual(connection.execute(select(table)).all(), [])
                 table.drop(connection)
@@ -1099,7 +1113,7 @@ class HubSpotApiTests(unittest.TestCase):
         with self.app.state.store.engine.connect() as connection:
             for table in (detections, source_versions, observations, plans, audits, versions):
                 self.assertEqual(list(connection.execute(select(table)).mappings()), before[table.name])
-            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0023")
+            self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0026")
         selected = self.client.post(path, headers=HEADERS, json=body)
         self.assertEqual(selected.status_code, 200, selected.text)
         self.assertEqual(selected.json()["selection"]["detection"], changed)
@@ -1402,6 +1416,7 @@ class HubSpotApiTests(unittest.TestCase):
 
     def test_source_detection_migration_preserves_populated_prior_history(self):
         from sqlalchemy import text
+
         from vita_api.companion import sessions as companion_sessions
         from vita_api.companion import turns as companion_turns
         from vita_api.memory import entries as memory_entries
@@ -1419,6 +1434,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(connection.execute(select(occurrences)).all(), [])
             self.assertEqual(connection.execute(select(ingestions)).all(), [])
             self.assertEqual(connection.execute(select(coaching_reviews)).all(), [])
+            remove_empty_stage5_extensions(connection)
             for table in (companion_turns, companion_sessions, memory_events, memory_entries, identity_decisions, quality_reviews, seed_versions, seeds):
                 self.assertEqual(connection.execute(select(table)).all(), [])
                 table.drop(connection)
@@ -1439,7 +1455,7 @@ class HubSpotApiTests(unittest.TestCase):
             self.assertEqual(upgraded.get("/api/portfolio").json(), before)
             with upgraded.app.state.store.engine.connect() as connection:
                 self.assertEqual(list(connection.execute(select(source_versions)).mappings()), saved)
-                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0023")
+                self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), "0026")
             response = upgraded.post(f"/api/integrations/hubspot/accounts/{ACCOUNT_ID}/detect-changes", headers=HEADERS,
                 json={"expected_account_revision": 3, "expected_source_id": source["id"]})
             self.assertEqual(response.status_code, 200, response.text)

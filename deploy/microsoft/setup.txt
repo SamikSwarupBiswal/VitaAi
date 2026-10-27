@@ -1,0 +1,66 @@
+VitaAi Microsoft application package
+
+This is a Teams personal tab with Microsoft TeamsJS SSO, plus a Microsoft 365
+Copilot declarative agent and two allowlisted API operations. It is not a bot.
+The Teams tab command endpoint returns a sourced card payload and deduplicates
+the tab's exact command ID. It never sends a Teams message or notification.
+
+1. Deploy the existing VitaAi web and API together using HTTPS and session auth.
+   The fixed Next upstream remains loopback port 8000. Configure VITAAI_WEB_ORIGIN
+   as the exact HTTPS web origin. /teams alone allows trusted Microsoft iframe
+   ancestors. Do not enable credential forwarding or open CORS to arbitrary hosts.
+
+2. In an authorized Entra tenant register the API/tab application. Request v2
+   access tokens. Expose api://WEB_HOST/APP_ID/access_as_user and preauthorize
+   only the official Teams clients required by your deployment. Configure an
+   appropriate redirect/consent flow using the Microsoft Teams SSO guidance.
+   Creating or consent-granting this registration is an operator action.
+
+3. Set API runtime VITAAI_PLATFORM_ENABLED=true,
+   VITAAI_PLATFORM_TENANT_ID=tenant GUID, VITAAI_PLATFORM_AUDIENCE=API app GUID,
+   VITAAI_PLATFORM_CLIENT_IDS to a JSON array of approved Teams/Copilot client
+   application GUIDs, VITAAI_PLATFORM_DELEGATED_SCOPE=access_as_user, and
+   VITAAI_PLATFORM_WEB_ORIGIN to the same exact HTTPS web origin. These settings
+   contain no API key. Keep application secrets in the platform secret store.
+
+4. A current VitaAi organization administrator links the exact Entra tenant/object
+   GUID to an existing enabled VitaAi seller/reviewer/admin using the authenticated
+   platform identity controls. Never map by display name or email. Inspect the
+   returned revision before changes. Disable mapping explicitly to revoke it;
+   revocation still works after disabled/demoted/moved membership or configuration
+   disablement. Read APIs revalidate the current mapping and membership each time.
+
+5. For Copilot create the supported Microsoft OAuth authentication configuration
+   in Microsoft 365 Agents Toolkit or the Teams developer portal. Use the same
+   Entra API scope, approved client and tenant. Retain its authentication reference
+   ID; the package contains this reference, never a client secret or access token.
+
+6. Use the installed project Python environment to run
+   scripts/build-microsoft-package.py with --output NEW_FOLDER_OUTSIDE_REPOSITORY,
+   --app-id GUID, --tenant-id GUID, --web-origin HTTPS_ORIGIN,
+   --auth-reference-id AUTH_CONFIG_ID, --privacy-url HTTPS_URL and
+   --terms-url HTTPS_URL. Provide real operator-owned policy URLs. The builder
+   generates a new zip, original icons, all manifests and an OpenAPI subset from
+   the actual executable backend contract. It makes no network or provider call.
+   The OpenAPI server is HTTPS_ORIGIN/api/platform-gateway; the dedicated proxy
+   forwards only bearer context/preparation/tab-command routes, never cookies.
+
+7. Validate the output against the official Microsoft schemas and the current
+   Microsoft package validator, then explicitly upload in an authorized tenant.
+   Validate correct/unbound/cross-tenant identity, member revocation, unavailable
+   permission, source dates/Unknowns, exact snapshot mismatch, repeated tab command,
+   cancellation, and Copilot citations. Approvals and customer execution stay in
+   the separately authenticated exact-preview VitaAi web flow. No API here can
+   approve, execute, send, change facts or assert a VitaAi actor.
+
+Local signed-JWT, mocked fixed-host JWKS, HTTP, persistence, component and package
+schema tests do not establish actual Entra consent, Teams embedding/SSO, Copilot
+availability, licensing, hosted setup or real-tenant acceptance.
+
+Official references checked 2026-10-27:
+https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/how-to/authentication/tab-sso-code
+https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/how-to/authentication/tab-sso-manifest
+https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens
+https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/plugin-manifest-2.4
+https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/plugin-authentication-oauth
+https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/declarative-agent-manifest-1.9

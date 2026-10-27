@@ -16,12 +16,12 @@ from sqlalchemy import (
     select,
 )
 
-from .contracts import Account
 from .governance import PolicyDenied, digest
 from .memory import Memory
 from .memory_retrieval import RecallRequest, recall
+from .memory_sources import SourceMemory, SourceRecallRequest
 from .scoring import assess
-from .storage import accounts, metadata, selected_evidence
+from .storage import metadata, selected_evidence
 from .workflow_contracts import Hash, Record, Revision, Text, WorkflowContract
 
 sessions = Table("companion_sessions", metadata,
@@ -60,11 +60,12 @@ class TurnRequest(WorkflowContract):
 
 
 class Citation(WorkflowContract):
-    kind: Literal["evidence", "account", "memory", "mission", "outcome", "execution"]
+    kind: Literal["evidence", "account", "memory", "mission", "outcome", "execution", "source_change", "coaching"]
     id: str
     label: str
     source_time: str | None
     text: str
+    account_snapshot_hash: Hash | None = None
 
 
 class Navigation(WorkflowContract):
@@ -96,9 +97,10 @@ class ConversationHistory(WorkflowContract):
 
 
 class Companion:
-    def __init__(self, store, token):
+    def __init__(self, store, token, settings=None):
         self.store = store
         self.memory = Memory(store, token)
+        self.settings = settings
 
     def current(self, connection, actor, account_id, expected):
         account = self.memory.account(connection, actor, account_id)
@@ -169,58 +171,22 @@ class Companion:
                 served_ids=served), transaction=nullcontext((connection, actor)))
             citations = tuple(Citation(kind="memory", id=str(row.memory.id), label="Historical proposal",
                 source_time=row.memory.source.started_at.isoformat(), text=row.memory.recommendation.action.rationale) for row in result.items)
+            histories = SourceMemory(self.store, self.memory.session_token, clock=self.memory.clock).source_recall(
+                item.account_id, SourceRecallRequest(expected_snapshot_hash=item.snapshot_hash, served_ids=served),
+                transaction=nullcontext((connection, actor)))
+            citations += tuple(Citation(kind="memory", id=str(row.memory.id), label="Historical source/mission record",
+                source_time=row.memory.source.source_time.isoformat(), text=row.memory.source.summary) for row in histories.items)
             answer = "Historical memory: " + " ".join(c.text for c in citations) if citations else "No additional eligible memory in this bounded window. Previously served advice is not repeated."
-            return "answered" if citations else "unknown", answer, citations, result.caveats, tuple(row.memory.id for row in result.items), None
-        if item.persona == "executive_advisor" and re.search(r"\b(portfolio|brief|priority|priorities)\b", message):
-            rows = connection.execute(select(accounts.c.payload).where(accounts.c.organization_id == actor.organization_id)
-                .order_by(accounts.c.id).limit(50)).scalars().all()
-            ranked = []
-            for payload in rows:
-                current = Account.model_validate(payload)
-                if current.organization_id != actor.organization_id:
-                    raise PolicyDenied("companion_snapshot_changed", 409)
-                result = assess(current, selected_evidence(connection, actor.organization_id, current.id), self.memory.clock().astimezone(UTC).date())
-                ranked.append((result.risk, current, result))
-            for _, current, result in sorted(ranked, key=lambda row: (-row[0], row[1].id))[:5]:
-                citations.append(Citation(kind="account", id=current.id, label=current.name, source_time=current.created_at.isoformat(),
-                    text=f"{current.name}: risk {result.risk}, opportunity {result.opportunity}, confidence {result.confidence}%. {result.recommendation} Revision {current.revision}, assessment {result.as_of}, snapshot {result.snapshot_hash}."))
-                caveats.extend(result.caveats)
-            return "answered" if citations else "unknown", " ".join(c.text for c in citations) or "No accessible accounts.", tuple(citations), tuple(dict.fromkeys([*caveats, "Bounded50-account read; top5 baseline priorities, no inferred customer impact."])), (), None
+            return ("answered" if citations else "unknown", answer, citations,
+                tuple(dict.fromkeys((*result.caveats, *histories.caveats))),
+                tuple(row.memory.id for row in (*result.items, *histories.items)), None)
+        from .workforce import present
+        specialized = present(self, connection, actor, item, message)
+        if specialized is not None:
+            return specialized
         if re.search(r"\b(mission|missions|coaching|outcome|receipt|execution)\b", message):
-            from .workflow_contracts import Execution, Mission, Outcome
-            from .workflow_storage import actions, claims, missions, outcomes
-            payloads = connection.execute(select(missions.c.payload).where(missions.c.organization_id == actor.organization_id)
-                .order_by(missions.c.id).limit(100)).scalars().all()
-            matches = [Mission.model_validate(payload) for payload in payloads]
-            matches = [mission for mission in matches if mission.organization_id == actor.organization_id and mission.account_id == item.account_id]
-            matches.sort(key=lambda mission: (mission.created_at, str(mission.id)), reverse=True)
-            if not matches:
-                return "unknown", "No saved mission for this account in the bounded100-record window. Missing history does not establish no past work.", (), (), (), None
-            mission = next((mission for mission in matches if mission.status not in {"completed", "superseded"}), matches[0])
-            answer = f"Saved mission {mission.id}: {mission.status}; current step {mission.current_step}; revision {mission.revision}. Review blockers in the exact workflow."
-            citations.append(Citation(kind="mission", id=str(mission.id), label="Saved mission", source_time=mission.created_at.isoformat(), text=answer))
-            if item.persona == "sales_director":
-                rows = connection.execute(select(outcomes.c.payload).where(outcomes.c.organization_id == actor.organization_id,
-                    outcomes.c.mission_id == str(mission.id)).order_by(outcomes.c.revision.desc()).limit(1)).scalars().all()
-                for payload in rows:
-                    report = Outcome.model_validate(payload)
-                    if report.organization_id != actor.organization_id or report.mission_id != mission.id:
-                        raise PolicyDenied("conversation_unavailable", 409)
-                    citations.append(Citation(kind="outcome", id=str(report.id), label="Manual report; not verified impact", source_time=report.observed_at.isoformat(), text=f"{report.report.kind}: {report.report.note}"))
-                caveats.append("Recorded owner IDs are not a verified seller directory. Review coaching in Outcome; chat grants no approval.")
-            if item.persona == "operations_advisor":
-                ids = connection.execute(select(actions.c.id).where(actions.c.organization_id == actor.organization_id,
-                    actions.c.mission_id == str(mission.id))).scalars().all()
-                rows = connection.execute(select(claims.c.payload).where(claims.c.organization_id == actor.organization_id,
-                    claims.c.action_id.in_(ids))).scalars().all()
-                for payload in rows:
-                    claim = Execution.model_validate(payload)
-                    if claim.organization_id != actor.organization_id or str(claim.action_id) not in ids:
-                        raise PolicyDenied("conversation_unavailable", 409)
-                    citations.append(Citation(kind="execution", id=str(claim.id), label="Saved execution; not live health", source_time=claim.created_at.isoformat(), text=f"{claim.status}; attempt {claim.attempt}."))
-                caveats.append("Saved execution is not current integration health. Open Execution for authorized diagnostics; no retry follows chat.")
-            navigation = Navigation(target="mission", account_id=item.account_id, mission_id=mission.id, step=mission.current_step)
-            return "answered", answer + " " + " ".join(c.text for c in citations[1:]), tuple(citations), tuple(caveats), (), navigation
+            from .workforce import mission_advice
+            return mission_advice(self, connection, actor, item, message)
         if re.search(r"\b(risk|health|opportunity|renewal|evidence|source|sources|brief|summary|why|help)\b", message):
             citations = tuple(Citation(kind="evidence", id=fact.id, label=fact.source, source_time=fact.observed_at.isoformat(), text=fact.fact) for fact in facts)
             answer = (f"{account.name}: health {assessment.health}, risk {assessment.risk}, opportunity {assessment.opportunity}. "

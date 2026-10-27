@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type AccountView } from "@/lib/api";
-import { conversationScope, conversationHistory, navigationHref, type Conversation, type ConversationHistory, type Persona, type Turn } from "@/lib/companion";
+import { accountCitationHref, accountCitationMatches, conversationScope, conversationHistory, navigationHref, type Conversation, type ConversationHistory, type Persona, type Turn } from "@/lib/companion";
 import { useSession } from "./session-gate";
 import { VoiceControls } from "./voice-controls";
 import { AvatarControls } from "./avatar-controls";
@@ -94,13 +94,34 @@ function ConversationPanel({ view, actor, role }: { view: AccountView; actor: st
         return <li key={turn.id}><p>You: {turn.message}</p><p>{turn.status} / {turn.mode} / {turn.created_at}</p><p>{turn.answer}</p>
           {turn.caveats.map(caveat => <p className="caveat" key={caveat}>{caveat}</p>)}
           <details><summary>Cited records</summary>{turn.citations.map((citation, index) => <p key={`${citation.kind}:${citation.id}:${index}`}>
-            {citation.kind} {citation.id} / {citation.label} / original {citation.source_time ?? "Not recorded"}: {citation.text}</p>)}</details>
+            {citation.kind} {citation.id} / {citation.label} / original {citation.source_time ?? "Not recorded"}: {citation.text}
+            {accountCitationHref(citation) && history.conversation.snapshot_hash === view.assessment.snapshot_hash
+              && <a href={accountCitationHref(citation)!} onClick={async event => {
+                event.preventDefault();
+                if (pending.current || lifetime.current?.signal.aborted || current.current !== history) return;
+                await operate(async (signal, active) => {
+                  const target = await api<AccountView>(`accounts/${citation.id}`, { signal });
+                  if (!accountCitationMatches(citation, target, view.account.organization_id)) throw new Error("Cited account snapshot changed");
+                  if (active() && current.current === history) window.location.assign(accountCitationHref(citation)!);
+                });
+              }}>Open cited account (verify same snapshot)</a>}</p>)}</details>
           {href && history.conversation.snapshot_hash === view.assessment.snapshot_hash && <a href={href} onClick={event => {
             if (pending.current || lifetime.current?.signal.aborted || current.current !== history) event.preventDefault();
           }}>Open cited workspace</a>}</li>; })}</ol>
       <label>Question <textarea disabled={busy} value={message} maxLength={2000} onChange={event => {
         if (!pending.current) { input.current = event.target.value; setMessage(event.target.value); }
       }} /></label>
+      <p>Choose a question to review, then press Ask:</p>
+      {({ companion: ["Explain current risk and evidence", "Recall memory"],
+        executive_advisor: ["Show portfolio priorities, source changes and alternatives", "Recall memory"],
+        mission_guide: ["Resume mission and explain all seven steps and blockers", "Explain mission Approval", "Explain mission Outcome"],
+        sales_director: ["Summarize team missions, outcomes and coaching reviews", "Recall memory"],
+        operations_advisor: ["Show integration readiness, refresh, review queues and receipt remedies", "Recall memory"],
+      } satisfies Record<Persona, string[]>)[history.conversation.persona].map(question => <button key={question}
+        disabled={busy || role === "viewer" || history.conversation.snapshot_hash !== view.assessment.snapshot_hash}
+        onClick={() => { if (!pending.current && current.current === history && !lifetime.current?.signal.aborted) {
+          input.current = question; setMessage(question);
+        } }}>{question}</button>)}
       <VoiceControls key={JSON.stringify([history.conversation.id, history.turns.at(-1)?.id, busy])}
         disabled={busy || role === "viewer" || history.conversation.snapshot_hash !== view.assessment.snapshot_hash}
         text={history.turns.length ? [history.turns.at(-1)!.status, history.turns.at(-1)!.answer, ...history.turns.at(-1)!.caveats].join(" ") : ""}

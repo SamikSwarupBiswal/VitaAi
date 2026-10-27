@@ -23,7 +23,7 @@ def install_companion_routes(app, store, settings):
     def service(request: Request):
         if settings.auth_mode != "session":
             raise PolicyDenied("session_identity_required", 503)
-        return Companion(store, request.cookies.get("vitaai_session"))
+        return Companion(store, request.cookies.get("vitaai_session"), settings)
 
     Service = Annotated[Companion, Depends(service)]
 

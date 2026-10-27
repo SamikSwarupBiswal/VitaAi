@@ -11,6 +11,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .collaboration_api import PREFIX as COLLABORATION_PREFIX
+from .collaboration_api import install_collaboration_routes
 from .companion_api import PREFIX as COMPANION_PREFIX
 from .companion_api import install_companion_routes
 from .config import Settings
@@ -19,6 +21,8 @@ from .hubspot import PREFIX as HUBSPOT_PREFIX
 from .hubspot_refresh import RefreshScheduler, RefreshWorker
 from .hubspot_sync import install_hubspot_routes
 from .identity import Actor, Identity, LoginFailure, LoginRequest, SessionView
+from .intelligence_api import PREFIX as INTELLIGENCE_PREFIX
+from .intelligence_api import install_intelligence_routes
 from .memory_api import PREFIX as MEMORY_PREFIX
 from .memory_api import install_memory_routes
 from .microsoft import PREFIX as MICROSOFT_PREFIX
@@ -26,6 +30,8 @@ from .microsoft import Microsoft, decode_callback
 from .models import AdvisoryProvider
 from .nebius import Nebius
 from .pipeline import Pipeline, PipelineHistory, PipelineRequest, PipelineRun
+from .platform_api import BEARER_POSTS, install_platform_routes
+from .platform_interfaces import PlatformSettings
 from .provider_catalog import PREFIX as COMPARISON_PREFIX
 from .provider_catalog import install_catalog_routes
 from .provider_comparison import install_comparison_routes
@@ -45,8 +51,10 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
                microsoft_transport: httpx.BaseTransport | None = None, microsoft_client_factory=None,
                research_transport: httpx.BaseTransport | None = None,
                narrative_transport: httpx.BaseTransport | None = None,
-               comparison_transport: httpx.BaseTransport | None = None) -> FastAPI:
+               comparison_transport: httpx.BaseTransport | None = None,
+               platform_settings=None, platform_transport=None) -> FastAPI:
     settings = settings or Settings()
+    platform_settings = platform_settings or PlatformSettings()
     store = Store(settings.database_url)
     provider = provider or Nebius(settings)
     identity = Identity(store.engine)
@@ -70,6 +78,9 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     hosts = ["127.0.0.1", "localhost", "testserver"]
     if microsoft.hosted_callback:
         hosts.append(urlsplit(settings.microsoft_redirect_uri).hostname)
+    if platform_settings.enabled:
+        platform_settings.require()
+        hosts.append(urlsplit(platform_settings.web_origin).hostname)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     app.state.store = store
     app.state.refresh_scheduler = refresh_scheduler
@@ -79,7 +90,8 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         if request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
         if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX, RESEARCH_PREFIX,
-                                        COMPARISON_PREFIX, MEMORY_PREFIX, COMPANION_PREFIX)):
+                                        COMPARISON_PREFIX, MEMORY_PREFIX, COMPANION_PREFIX,
+                                        COLLABORATION_PREFIX, INTELLIGENCE_PREFIX, "/api/platform")):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
@@ -118,9 +130,11 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         origin = request.headers.get("origin")
         if request.method == "POST" and not callback and origin and origin not in {
             "http://127.0.0.1:3000", "http://localhost:3000", microsoft.connection_origin,
+            platform_settings.web_origin if platform_settings.enabled else None,
         }:
             return JSONResponse({"detail": "Untrusted request origin"}, status_code=403)
         if (request.method == "POST" and not callback and settings.auth_mode == "session"
+                and request.url.path not in BEARER_POSTS
                 and request.headers.get("x-vitaai-request") != "1"):
             return JSONResponse({"detail": "Expected same-origin application request"}, status_code=403)
         response = await call_next(request)
@@ -264,6 +278,9 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_probe_routes(app, store, identity, settings, comparison_transport)
     install_memory_routes(app, store, settings)
     install_companion_routes(app, store, settings)
+    install_collaboration_routes(app, store, settings)
+    install_intelligence_routes(app, store, settings)
+    install_platform_routes(app, store, settings, platform_settings, platform_transport)
     return app
 
 
