@@ -58,11 +58,12 @@ function QueueInspection({ portfolio, missions }: { portfolio: Portfolio; missio
             {report && <><p>Latest human report {report.id} revision {report.revision} · observed {report.observed_at} · {report.report.kind.replaceAll("_", " ")} · {report.report.basis.replaceAll("_", " ")}.</p>
               {report.supersedes_id && <p>Corrects report {report.supersedes_id}.</p>}</>}
             {review && <p>Latest coaching {review.id} revision {review.revision} · {review.status.replaceAll("_", " ")} · reviewer {review.reviewer_id} · recorded {review.created_at}. Bound to report {review.outcome_id} revision {review.outcome_revision} and mission revision {review.mission_revision}.</p>}
+            {review?.intervention && <p>{review.outcome_id === report?.id ? "Planned internal coaching intervention" : "Historical internal coaching plan; report changed"} · recorded owner {review.intervention_owner_id}. Inspect Outcome for the retained plan; no notification or recipient acceptance is recorded.</p>}
           </>}
           <Link href={`/missions?${new URLSearchParams({ account: mission.account_id, mission: mission.id, step: "Outcome" })}`}>Inspect outcome and coaching for this mission</Link>
         </li>;
       })}</ol>
-      <p>Human reports and coaching do not independently verify customer results. Review or revision requests never reopen missions, authorize customer actions, assign work or notify anyone. Use the exact Outcome link for full history and separately authorized review.</p>
+      <p>Human reports and coaching do not independently verify customer results. These read-only views never reopen missions, authorize customer actions or notify anyone. An internal coaching plan requires the separate exact reviewed Outcome controls. Use the exact Outcome link for full history and separately authorized review.</p>
     </div>}
   </section>;
 }

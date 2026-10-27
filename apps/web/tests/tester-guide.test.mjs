@@ -58,6 +58,18 @@ test("public page and downloaded instructions share actual workflow guidance and
   assert.match(content.guideText, /does not prove external delivery/);
 });
 
+test("versioned coaching guidance distinguishes optional internal planning from customer authority and notification", () => {
+  assert.equal(content.guideVersion, "local-simulation-guide-2");
+  const coaching = content.guideSteps.find(step => step.title === "Review coaching without customer authority");
+  for (const label of ["Reviewed", "Human coaching note", "Record an internal coaching plan for owner", "Coaching focus", "Discussion questions", "Planned practice", "Internal follow-up", "Save coaching review"]) {
+    assert.ok(coaching.action.includes(label), label);
+  }
+  assert.match(coaching.expected, /internal planned intervention/); assert.match(coaching.expected, /plans stay historical/);
+  assert.match(coaching.expected, /no customer-action approval or notification/);
+  assert.match(coaching.expected, /no recipient acceptance or coaching effectiveness/);
+  assert.doesNotMatch(coaching.expected, /no customer-action approval, assignment/);
+});
+
 test("clipboard denial exposes manual fallback; duplicate clicks and unmounted completions are guarded", async t => {
   let reject;
   const app = harness(t, () => new Promise((_resolve, fail) => { reject = fail; }));

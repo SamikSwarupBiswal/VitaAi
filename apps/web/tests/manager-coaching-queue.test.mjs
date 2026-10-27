@@ -138,3 +138,19 @@ test("actor, portfolio and mission identity keys remount the queue; session and 
   const p = app.button().props.onClick(); app.requests.shift().reject(new Error("private details")); await p;
   assert.match(renderToStaticMarkup(app.render()), /queue unavailable or changed/); assert.doesNotMatch(renderToStaticMarkup(app.render()), /private details/);
 });
+
+test("coaching queue shows retained plans as planned or historical and rejects crossed recorded owners", async t => {
+  const plan = { focus: "Evidence review", discussion: "Discuss original report", practice: "Explain unknowns", follow_up: "Internal review" };
+  const historical = { ...review(1, 1), intervention: plan, intervention_owner_id: "owner" };
+  const current = { ...review(2, 2), intervention: plan, intervention_owner_id: "owner" };
+  const app = setup(t);
+  await app.inspect({ total: 2, rows: [{ mission: mission(), data: { outcomes: [report(), report(2)], reviews: [historical] } },
+    { mission: mission("second"), data: { outcomes: [report(), report(2)], reviews: [historical, current] } }] });
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /Historical internal coaching plan; report changed/); assert.match(html, /Planned internal coaching intervention/);
+  assert.match(html, /recorded owner owner/); assert.match(html, /no notification or recipient acceptance/);
+  const valid = library({ records: { mission: { outcomes: [report(), report(2)], reviews: [historical, current] } } });
+  assert.ok((await valid.helper.readCoachingQueue(portfolio, [mission()], new AbortController().signal)).rows[0].data);
+  const crossed = library({ records: { mission: { outcomes: [report(), report(2)], reviews: [{ ...historical, intervention_owner_id: "other" }] } } });
+  assert.equal((await crossed.helper.readCoachingQueue(portfolio, [mission()], new AbortController().signal)).rows[0].data, null);
+});

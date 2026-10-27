@@ -436,6 +436,13 @@ class Outcome(Record):
     supersedes_id: UUID | None = None
 
 
+class CoachingPlan(WorkflowContract):
+    focus: Text
+    discussion: Text
+    practice: Text
+    follow_up: Text
+
+
 class CoachingRequest(WorkflowContract):
     expected_revision: Annotated[StrictInt, Field(ge=0)]
     expected_mission_revision: Revision
@@ -443,6 +450,13 @@ class CoachingRequest(WorkflowContract):
     expected_outcome_revision: Revision
     status: Literal["reviewed", "revision_required"]
     note: Text
+    intervention: CoachingPlan | None = None
+
+    @model_validator(mode="after")
+    def reviewed_plan(self) -> Self:
+        if self.intervention is not None and self.status != "reviewed":
+            raise ValueError("An internal coaching plan requires a reviewed report")
+        return self
 
 
 class CoachingReview(Record):
@@ -454,6 +468,16 @@ class CoachingReview(Record):
     status: Literal["reviewed", "revision_required"]
     note: Text
     supersedes_id: UUID | None = None
+    intervention: CoachingPlan | None = None
+    intervention_owner_id: Reference | None = None
+
+    @model_validator(mode="after")
+    def planned_owner(self) -> Self:
+        if (self.intervention is None) != (self.intervention_owner_id is None):
+            raise ValueError("An internal coaching plan requires its recorded owner")
+        if self.intervention is not None and self.status != "reviewed":
+            raise ValueError("An internal coaching plan requires a reviewed report")
+        return self
 
 
 class AuditEvent(Record):

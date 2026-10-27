@@ -14,8 +14,10 @@ const compiled = ts.transpileModule(readFileSync(filename, "utf8"), {
 const walk = (node, predicate) => Array.isArray(node) ? node.flatMap(item => walk(item, predicate))
   : !node || typeof node !== "object" ? [] : [...(predicate(node) ? [node] : []), ...walk(node.props?.children, predicate)];
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
-const data = { mission: { id: "mission", organization_id: "org", revision: 8, status: "completed" },
-  outcomes: [{ id: "outcome", revision: 2 }, { id: "corrected", revision: 3 }] };
+const report = { kind: "follow_up_required", basis: "manual_report", evidence_ids: ["original-fact"] };
+const data = { mission: { id: "mission", organization_id: "org", owner_id: "recorded-owner", revision: 8, status: "completed" },
+  outcomes: [{ id: "outcome", revision: 2, report, observed_at: "2026-10-22T10:00:00Z" },
+    { id: "corrected", revision: 3, report, observed_at: "2026-10-23T09:00:00Z" }] };
 const review = { id: "review", mission_id: "mission", organization_id: "org", revision: 1,
   mission_revision: 7, outcome_id: "outcome", outcome_revision: 2, supersedes_id: null,
   reviewer_id: "reviewer", created_at: "2026-10-23T10:00:00Z", status: "revision_required", note: "<script>Human note</script>" };
@@ -49,7 +51,7 @@ function setup() {
     const find = type => walk(render(), node => node.type === type)[0];
     return { a, render, find, unmount: () => a.cleanups.forEach(run => run?.()) };
   }
-  return { mount, requests, changes };
+  return { mount, requests, changes, guidance: target.exports.coachingGuidance };
 }
 
 test("history preserves outcome, actor, date and escaped human text without verified impact", async () => {
@@ -105,4 +107,66 @@ test("completion and seller gates expose no mutation; late history stays suppres
   const seller = app.mount("seller"); seller.render(); const request = app.requests.shift(); seller.unmount();
   request.resolve([review]); await flush(); assert.equal(seller.a.slots[0], null);
   assert.equal(seller.find("form"), undefined); seller.unmount(); assert.equal(app.requests.length, 0);
+});
+
+test("discussion guidance cites the exact saved human report without predicting impact or filling missing evidence", () => {
+  const app = setup(), value = app.guidance(data);
+  assert.match(value.focus, /follow up required.*mission/);
+  assert.match(value.discussion, /corrected revision 3.*unverified human/);
+  assert.match(value.practice, /without predicting a customer response/);
+  assert.match(value.follow_up, /does not authorize customer activity/);
+  const missing = { ...data, outcomes: [{ ...data.outcomes[1], report: { ...report, evidence_ids: [] } }] };
+  const view = app.mount("viewer", missing), html = renderToStaticMarkup(view.render());
+  assert.match(html, /None recorded; resolve the source gap/); assert.match(html, /recorded owner recorded-owner/);
+  view.unmount();
+});
+
+test("internal plan is explicit, editable, exact-report bound and omitted from ordinary reviews", async () => {
+  const app = setup(), view = app.mount(); view.render(); app.requests.shift().resolve([]); await flush();
+  view.find("textarea").props.onChange({ target: { value: "Human reviewed the original report." } });
+  const checkbox = walk(view.render(), node => node.type === "input" && node.props.type === "checkbox")[0];
+  assert.equal(checkbox.props.checked, false);
+  checkbox.props.onChange({ target: { checked: true } });
+  const fields = walk(view.render(), node => node.type === "textarea" && node.props["aria-label"] === "Internal follow-up");
+  assert.equal(fields.length, 1); fields[0].props.onChange({ target: { value: "  Follow up on the saved uncertainty.\n " } });
+  const saved = view.find("form").props.onSubmit({ preventDefault() {} }), post = app.requests.shift();
+  assert.equal(post.init.body.intervention.follow_up, "  Follow up on the saved uncertainty.\n ");
+  assert.equal(post.init.body.outcome_id, "corrected"); assert.equal(post.init.body.expected_outcome_revision, 3);
+  assert.equal(post.init.body.expected_mission_revision, 8); assert.equal(post.init.body.intervention_owner_id, undefined);
+  post.resolve({}); await saved; view.unmount();
+});
+
+test("unreviewed, invalid or crossed internal plans cannot submit or become accepted history", async () => {
+  const plan = setup().guidance(data);
+  for (const changed of [{ status: "revision_required" }, { planText: " " }, { planText: "x".repeat(2001) }, { planText: "a\0b" }]) {
+    const app = setup(), view = app.mount(); view.render(); app.requests.shift().resolve([]); await flush();
+    view.find("textarea").props.onChange({ target: { value: "Human note" } });
+    walk(view.render(), node => node.type === "input" && node.props.type === "checkbox")[0].props.onChange({ target: { checked: true } });
+    if (changed.status) view.find("select").props.onChange({ target: { value: changed.status } });
+    if (changed.planText !== undefined) walk(view.render(), node => node.type === "textarea" && node.props["aria-label"] === "Coaching focus")[0]
+      .props.onChange({ target: { value: changed.planText } });
+    await view.find("form").props.onSubmit({ preventDefault() {} }); assert.equal(app.requests.length, 0); view.unmount();
+  }
+  const app = setup(), view = app.mount(); view.render();
+  app.requests.shift().resolve([{ ...review, status: "reviewed", intervention: plan, intervention_owner_id: "foreign" }]); await flush();
+  assert.match(renderToStaticMarkup(view.render()), /Coaching history unavailable/); view.unmount();
+});
+
+test("saved internal plans retain escaped original text, owner and historical report binding", async () => {
+  const app = setup(), view = app.mount("viewer"); view.render();
+  app.requests.shift().resolve([{ ...review, status: "reviewed", intervention_owner_id: "recorded-owner",
+    intervention: { ...app.guidance(data), focus: "<script>Original coaching focus</script>" } }]); await flush();
+  const html = renderToStaticMarkup(view.render());
+  assert.match(html, /Historical internal coaching plan/); assert.match(html, /recorded owner recorded-owner/);
+  assert.match(html, /&lt;script&gt;Original coaching focus/); assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /no notification, recipient acceptance or coaching effectiveness/); view.unmount();
+});
+
+test("a later review without a plan makes an earlier plan historical even for the same report", async () => {
+  const app = setup(), view = app.mount("viewer"), first = { ...review, status: "reviewed", outcome_id: "corrected", outcome_revision: 3,
+    intervention_owner_id: "recorded-owner", intervention: app.guidance(data) };
+  view.render(); app.requests.shift().resolve([first, { ...review, id: "new-review", revision: 2, supersedes_id: first.id,
+    status: "reviewed", outcome_id: "corrected", outcome_revision: 3 }]); await flush();
+  const html = renderToStaticMarkup(view.render()); assert.match(html, /Historical internal coaching plan/);
+  assert.doesNotMatch(html, /Planned internal coaching intervention/); view.unmount();
 });

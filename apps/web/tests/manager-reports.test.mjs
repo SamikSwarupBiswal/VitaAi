@@ -104,3 +104,19 @@ test("empty retained reports and absent coaching are explicit without claiming c
   const html = renderToStaticMarkup(app.render()); assert.match(html, /No retained outcome reports/);
   assert.match(html, /No coaching reviews/); assert.doesNotMatch(html, /Latest report|customer contacted/); app.unmount();
 });
+
+test("manager inspection retains historical and current internal coaching plans with recorded owner and original text", async () => {
+  const plan = { focus: "<script>Original focus</script>", discussion: "Review evidence", practice: "Rehearse uncertainty", follow_up: "Internal review" };
+  const first = { ...review, status: "reviewed", intervention: plan, intervention_owner_id: "owner" };
+  const second = { ...first, id: "review2", revision: 2, supersedes_id: first.id, outcome_id: correction.id, outcome_revision: 2 };
+  const app = setup(), pending = app.inspect(); await finish(app, pending, [outcome, correction], [first, second]);
+  const html = renderToStaticMarkup(app.render());
+  assert.match(html, /Historical internal coaching plan/); assert.match(html, /Planned internal coaching intervention/);
+  assert.match(html, /recorded owner owner/); assert.match(html, /&lt;script&gt;Original focus/); assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /no notification, recipient acceptance or coaching effectiveness/); app.unmount();
+  for (const corrupt of [{ ...first, intervention_owner_id: "foreign" }, { ...first, status: "revision_required" },
+    { ...first, intervention: { ...plan, discussion: " " } }, { ...review, intervention_owner_id: "owner" }]) {
+    const invalid = setup(), read = invalid.inspect(); await finish(invalid, read, [outcome, correction], [corrupt]);
+    assert.match(renderToStaticMarkup(invalid.render()), /Saved reports unavailable or changed/); invalid.unmount();
+  }
+});

@@ -18,6 +18,10 @@ export function validateManagerReports(outcomes: Outcome[], reviews: Review[], m
         || reviews.some((item, index) => item.organization_id !== mission.organization_id || item.mission_id !== mission.id
           || item.revision !== index + 1 || item.mission_revision > mission.revision
           || (item.supersedes_id ?? null) !== (index ? reviews[index - 1].id : null)
+          || (item.intervention == null ? item.intervention_owner_id != null
+            : item.status !== "reviewed" || item.intervention_owner_id !== mission.owner_id
+              || [item.intervention.focus, item.intervention.discussion, item.intervention.practice, item.intervention.follow_up]
+                .some(text => typeof text !== "string" || !text.trim() || text.length > 2000 || text.includes("\0")))
           || !outcomes.some(report => report.id === item.outcome_id && report.revision === item.outcome_revision))) {
         throw new Error("Report bindings changed");
       }

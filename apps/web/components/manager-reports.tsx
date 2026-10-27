@@ -60,6 +60,12 @@ function ReportInspection({ mission }: { mission: Mission }) {
         <p>Mission revision {review.mission_revision} · outcome {review.outcome_id} revision {review.outcome_revision}.</p>
         {review.outcome_id !== latest?.id && <p>Historical coaching for an earlier report; it does not review the latest correction.</p>}
         <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", font: "inherit" }}>{review.note}</pre>
+        {review.intervention && <section aria-label={`Internal coaching plan revision ${review.revision}`}>
+          <p>{review.outcome_id === latest?.id && review.id === result.reviews.at(-1)?.id ? "Planned internal coaching intervention" : "Historical internal coaching plan"} · recorded owner {review.intervention_owner_id}.</p>
+          {([["focus", "Coaching focus"], ["discussion", "Discussion questions"], ["practice", "Planned practice"], ["follow_up", "Internal follow-up"]] as const)
+            .map(([key, label]) => <div key={key}><strong>{label}</strong><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", font: "inherit" }}>{review.intervention![key]}</pre></div>)}
+          <p>Internal planning only; no notification, recipient acceptance or coaching effectiveness is established.</p>
+        </section>}
       </li>)}</ol>
       <p>Use the mission’s Outcome link for full records and separately authorized coaching review. No assignment or notification is made here.</p>
     </div>}

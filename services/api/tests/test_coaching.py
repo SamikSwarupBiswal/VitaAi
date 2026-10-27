@@ -12,7 +12,12 @@ from vita_api.governance import PolicyDenied
 from vita_api.identity import users
 from vita_api.storage import Store
 from vita_api.workflow import Workflow
-from vita_api.workflow_contracts import CoachingRequest, OutcomeRequest
+from vita_api.workflow_contracts import (
+    CoachingPlan,
+    CoachingRequest,
+    CoachingReview,
+    OutcomeRequest,
+)
 from vita_api.workflow_storage import (
     actions,
     claims,
@@ -45,6 +50,58 @@ class CoachingTests(unittest.TestCase):
         with self.store.engine.connect() as connection:
             return {table.name: list(connection.execute(select(table.c.payload)).scalars())
                     for table in (missions, outcomes, plans, actions, decisions, claims, receipts)}
+
+    def planned_review(self):
+        return self.complete().model_copy(update={"status": "reviewed", "intervention": CoachingPlan(
+            focus="  Revisit the saved evidence.\n ", discussion="Separate the report from verified observations.",
+            practice="Rehearse how to explain the remaining unknowns.", follow_up="Agree on the next internal review.")})
+
+    def test_internal_plan_binds_recorded_owner_and_survives_reconstruction_without_workflow_changes(self):
+        body = self.planned_review()
+        before = self.workflow_records()
+        saved = self.workflow.review_coaching(self.reviewer.id, self.mission.id, body)
+        self.assertEqual(saved.intervention, body.intervention)
+        self.assertEqual(saved.intervention_owner_id, self.mission.owner_id)
+        self.assertEqual(self.workflow_records(), before)
+        rebuilt = Store(self.store.engine.url.render_as_string(hide_password=False))
+        try:
+            service = Workflow(rebuilt, clock=lambda: self.now)
+            self.assertEqual(service.list_coaching_reviews(self.seller.id, self.mission.id), [saved])
+            self.assertEqual(service.audit(self.reviewer.id, self.mission.id)[-1].entity_id, saved.id)
+        finally:
+            rebuilt.engine.dispose()
+        legacy = saved.model_dump(exclude={"intervention", "intervention_owner_id"})
+        self.assertIsNone(CoachingReview.model_validate(legacy).intervention)
+        self.assertIsNone(CoachingReview.model_validate(legacy).intervention_owner_id)
+
+    def test_plan_history_keeps_original_report_binding_after_correction_and_explicit_replacement(self):
+        body = self.planned_review()
+        first = self.workflow.review_coaching(self.reviewer.id, self.mission.id, body)
+        corrected = self.workflow.outcome(self.seller.id, self.mission.id, self.report.model_copy(update={
+            "expected_revision": self.mission.revision, "supersedes_id": self.outcome.id, "note": "Corrected human report."}))
+        mission = self.workflow.get_mission(self.seller.id, self.mission.id)
+        with self.assertRaises(PolicyDenied):
+            self.workflow.review_coaching(self.reviewer.id, mission.id, body.model_copy(update={"expected_revision": 1}))
+        changed = body.model_copy(update={"expected_revision": 1, "expected_mission_revision": mission.revision,
+            "outcome_id": corrected.id, "expected_outcome_revision": corrected.revision,
+            "intervention": body.intervention.model_copy(update={"follow_up": "Review the corrected report separately."})})
+        second = self.workflow.review_coaching(self.reviewer.id, mission.id, changed)
+        self.assertEqual(first.intervention.follow_up, body.intervention.follow_up)
+        self.assertEqual(first.outcome_id, self.outcome.id)
+        self.assertEqual(second.outcome_id, corrected.id)
+        self.assertEqual(second.supersedes_id, first.id)
+        self.assertEqual(second.intervention_owner_id, mission.owner_id)
+        self.assertEqual(self.workflow.list_coaching_reviews(self.seller.id, mission.id), [first, second])
+
+    def test_plan_contract_denies_asserted_owner_unreviewed_or_invalid_text(self):
+        body = self.planned_review().model_dump()
+        for changes in ({"intervention_owner_id": "asserted"}, {"status": "revision_required"},
+                        {"intervention": {**body["intervention"], "focus": " "}},
+                        {"intervention": {**body["intervention"], "practice": "x" * 2001}},
+                        {"intervention": {**body["intervention"], "follow_up": "a\0b"}},
+                        {"intervention": {**body["intervention"], "owner_id": "asserted"}}):
+            with self.assertRaises(ValidationError):
+                CoachingRequest.model_validate({**body, **changes})
 
     def test_history_reconstruction_and_no_action_authority(self):
         body = self.complete()
@@ -89,7 +146,7 @@ class CoachingTests(unittest.TestCase):
         self.assertEqual(second.outcome_id, corrected.id)
 
     def test_concurrent_review_and_replay_have_one_winner(self):
-        body = self.complete()
+        body = self.planned_review()
         barrier = Barrier(2)
         def review(_):
             barrier.wait()
@@ -105,7 +162,7 @@ class CoachingTests(unittest.TestCase):
             self.workflow.review_coaching(self.reviewer.id, self.mission.id, body)
 
     def test_roles_scope_and_revocation_rechecked(self):
-        body = self.complete()
+        body = self.planned_review()
         viewer = self.identity.create_user("viewer", "test-password-long", self.seller.organization_id, "viewer")
         foreign = self.identity.create_user("foreign", "test-password-long", "foreign-org", "reviewer")
         for actor, expected in ((self.seller, 403), (viewer, 403), (foreign, 404)):
@@ -159,13 +216,18 @@ class CoachingHttpTests(unittest.TestCase):
         current = self.client.get(path).json()
         body = {"expected_revision": 0, "expected_mission_revision": current["revision"],
             "outcome_id": outcome["id"], "expected_outcome_revision": outcome["revision"],
-            "status": "reviewed", "note": "Human reviewed the report."}
+            "status": "reviewed", "note": "Human reviewed the report.", "intervention": {
+                "focus": "Review retained evidence", "discussion": "Distinguish facts and reports",
+                "practice": "Rehearse open questions", "follow_up": "Agree on another internal review"}}
         self.assertEqual(self.client.post(path + "/coaching-reviews", headers=http.HEADERS, json=body).status_code, 403)
         self.login("reviewer")
-        for extra in ({"reviewer_id": "asserted"}, {"status": "approved"}, {"note": " "}):
+        for extra in ({"reviewer_id": "asserted"}, {"status": "approved"}, {"note": " "},
+                      {"intervention_owner_id": "asserted"}, {"status": "revision_required"}):
             self.assertEqual(self.client.post(path + "/coaching-reviews", headers=http.HEADERS,
                 json={**body, **extra}).status_code, 422)
         saved = self.post(path + "/coaching-reviews", body)
+        self.assertEqual(saved["intervention_owner_id"], current["owner_id"])
+        self.assertEqual(saved["intervention"]["practice"], body["intervention"]["practice"])
         self.assertEqual(self.client.get(path + "/coaching-reviews").json(), [saved])
         self.assertEqual(self.client.get(path).json(), current)
         self.assertEqual(self.client.post(path + "/coaching-reviews", headers=http.HEADERS, json=body).status_code, 409)

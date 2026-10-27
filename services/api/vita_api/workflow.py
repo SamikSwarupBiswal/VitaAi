@@ -1124,7 +1124,8 @@ class Workflow:
             review = CoachingReview(**self._base(actor, revision=body.expected_revision + 1),
                 mission_id=mission.id, mission_revision=mission.revision, outcome_id=latest.id,
                 outcome_revision=latest.revision, reviewer_id=actor.id, status=body.status, note=body.note,
-                supersedes_id=previous.id if previous else None)
+                supersedes_id=previous.id if previous else None, intervention=body.intervention,
+                intervention_owner_id=mission.owner_id if body.intervention is not None else None)
             self._put(connection, coaching_reviews, review, new=True, mission_id=str(mission.id),
                       outcome_id=str(latest.id))
             self._audit(connection, actor, review, "coaching_review_recorded", mission_id=mission.id,

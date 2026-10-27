@@ -2311,6 +2311,23 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** CoachingPlan */
+        CoachingPlan: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Focus */
+            focus: string;
+            /** Discussion */
+            discussion: string;
+            /** Practice */
+            practice: string;
+            /** Follow Up */
+            follow_up: string;
+        };
         /** CoachingRequest */
         CoachingRequest: {
             /**
@@ -2337,6 +2354,7 @@ export interface components {
             status: "reviewed" | "revision_required";
             /** Note */
             note: string;
+            intervention?: components["schemas"]["CoachingPlan"] | null;
         };
         /** CoachingReview */
         CoachingReview: {
@@ -2390,6 +2408,9 @@ export interface components {
             note: string;
             /** Supersedes Id */
             supersedes_id?: string | null;
+            intervention?: components["schemas"]["CoachingPlan"] | null;
+            /** Intervention Owner Id */
+            intervention_owner_id?: string | null;
         };
         /** CommunicationDrafts */
         CommunicationDrafts: {
