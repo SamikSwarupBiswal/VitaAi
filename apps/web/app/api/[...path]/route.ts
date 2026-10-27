@@ -24,6 +24,9 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const analyzePath = /^accounts\/[a-f0-9-]{36}\/analyze$/;
   const pipelinePath = /^pipeline\/[a-f0-9-]{36}$/;
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
+  const memoryPath = request.method === "GET"
+    ? new RegExp(`^memory/(?:accounts/${uuid}|${uuid}(?:/events)?)$`).test(joined)
+    : request.method === "POST" && new RegExp(`^memory/(?:accounts/${uuid}(?:/recall)?|${uuid}/lifecycle)$`).test(joined);
   const pipelineResearchPath = new RegExp(`^pipeline/${uuid}/research/${uuid}$`).test(joined);
   const workflowRead = new RegExp(`^(?:plans/${uuid}|plans/runs/${uuid}|missions(?:/${uuid}(?:/(?:audit|actions|outcomes|coaching-reviews))?)?|actions/${uuid}(?:/(?:history|decisions|executions))?|executions/${uuid}|receipts/${uuid})$`);
   const workflowWrite = new RegExp(`^(?:plans(?:/generate)?|missions(?:/${uuid}/(?:prepare|supersede|outcomes|coaching-reviews))?|actions/${uuid}/(?:submit|review|renew-review|execute)|executions/${uuid}/(?:reconcile|retry))$`);
@@ -45,12 +48,12 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     ? new RegExp(`^provider-comparison/(?:catalog|runs/${uuid}(?:/recovery-readiness)?|accounts/${uuid}/(?:runs|readiness)|providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:test-readiness|tests)|tests/${uuid}(?:/recovery-readiness)?)$`).test(joined)
     : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:discover|test)|accounts/${uuid}/compare|(?:runs|tests)/${uuid}/recover)$`).test(joined);
   const allowed = request.method === "GET"
-    ? workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined) || pipelineResearchPath || joined === "pipeline/history"
-    : workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
+    ? memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined) || pipelineResearchPath || joined === "pipeline/history"
+    : memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined);
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });
   try {
     const body = request.method === "POST" ? await request.text() : undefined;
-    if (body && body.length > (workflowPath ? 262144 : joined.endsWith("/quality-reviews") ? 16384
+    if (body && body.length > (workflowPath ? 262144 : memoryPath ? 16384 : joined.endsWith("/quality-reviews") ? 16384
       : joined.endsWith("/identity-decisions") ? 32768 : 4096)) {
       return NextResponse.json({ detail: "Request too large" }, { status: 413 });
     }

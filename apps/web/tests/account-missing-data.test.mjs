@@ -10,6 +10,7 @@ const ts = require("typescript");
 const { renderToStaticMarkup } = require("react-dom/server");
 
 function load(relative, mocks = {}, extra = "") {
+  mocks = { "./memory-panel": { MemoryPanel: MemoryMarker }, ...mocks };
   mocks = { "./operations-receipts": { OperationsReceipts: ReceiptsMarker }, ...mocks };
   mocks = { "./workspace-guide": { WorkspaceGuide: WorkspaceGuideMarker }, "./manager-coaching-queue": { ManagerCoachingQueue: CoachingQueueMarker }, "./account-timeline": { AccountTimeline: TimelineMarker }, "./saved-pipeline-history": { SavedPipelineHistory: PipelineHistoryMarker },
     "./pipeline-panel": { SavedRunComparison: ComparisonMarker }, ...mocks };
@@ -35,6 +36,7 @@ const api = load("../lib/api.ts");
 const table = load("../components/account-table.tsx", { "@/lib/api": api });
 const detail = load("../components/account-detail.tsx");
 function ReadinessMarker() { return null; }
+function MemoryMarker() { return null; }
 function ReceiptsMarker() { return null; }
 function ManagerReportsMarker() { return null; }
 function WorkspaceGuideMarker() { return null; }
@@ -69,6 +71,7 @@ test("account recommendation history and comparison bind the exact displayed acc
   selected.assessment.as_of = "2026-10-26"; selected.source = { id: "source", kind: "hubspot" };
   const render = value => detail.AccountDetail({ view: value, provider: null, busy: false, onAnalyze() { assert.fail("No analysis"); }, run: null, error: null });
   const timeline = walk(render(selected)).find(x => x.type === TimelineMarker);
+  assert.equal(walk(render(selected)).find(x => x.type === MemoryMarker).props.view, selected);
   assert.ok(timeline); assert.equal(timeline.props.view, selected);
   const history = walk(render(selected)).find(x => x.type === PipelineHistoryMarker);
   assert.ok(history); assert.equal(history.props.accountId, "account"); assert.equal(history.props.organizationId, "org");

@@ -17,6 +17,23 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("memory allows only canonical scoped methods and bounds bodies", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports), id = "29d4bc06-1bb6-483e-bc96-2ed2ff42efc8";
+  for (const [method, suffix, size, status] of [["GET", `accounts/${id}`, 0, 200], ["POST", `accounts/${id}`, 2, 200],
+    ["POST", `accounts/${id}/recall`, 5000, 200], ["GET", `${id}/events`, 0, 200], ["POST", `${id}/lifecycle`, 2, 200],
+    ["GET", `accounts/${id}/recall`, 0, 404], ["HEAD", `accounts/${id}`, 0, 404], ["POST", `${id}/events`, 2, 404],
+    ["POST", `accounts/${id}/recall`, 16385, 413], ["GET", `${id}/extra`, 0, 404]]) {
+    const name = `memory/${suffix}`;
+    const result = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method,
+      headers: { host: "127.0.0.1:3000" }, ...(method === "POST" ? { body: "x".repeat(size) } : {}),
+    }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(result.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 5);
+});
+
 test("pipeline history allows only its canonical GET without implicit HEAD, extra paths or POST", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
     assert.equal(url, "http://127.0.0.1:8000/api/pipeline/history");

@@ -4,6 +4,7 @@ import { AccountChronology } from "./account-chronology";
 import { AccountMissionHistory } from "./account-mission-history";
 import { AccountTimeline } from "./account-timeline";
 import { SavedPipelineHistory } from "./saved-pipeline-history";
+import { MemoryPanel } from "./memory-panel";
 import { SavedRunComparison } from "./pipeline-panel";
 
 export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
@@ -42,6 +43,7 @@ export function AccountDetail({ view, provider, busy, onAnalyze, run, error }: {
       </details>)}
     </div></section>
     <AccountTimeline view={view} />
+    <MemoryPanel view={view} />
     <AccountChronology view={view} />
     <SavedPipelineHistory organizationId={account.organization_id} accountId={account.id}
       snapshots={{ [account.id]: assessment.snapshot_hash }}

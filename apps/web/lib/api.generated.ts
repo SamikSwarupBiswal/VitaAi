@@ -1864,6 +1864,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/memory/accounts/{account_id}/recall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retrieve */
+        post: operations["retrieve_api_memory_accounts__account_id__recall_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memory/{memory_id}": {
         parameters: {
             query?: never;
@@ -5444,6 +5461,119 @@ export interface components {
             source_index: number;
             source: components["schemas"]["ResearchSource"];
             report: components["schemas"]["QualityRequest"];
+        };
+        /** RecallItem */
+        RecallItem: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            memory: components["schemas"]["MemoryEntry"];
+            /** Score */
+            score: number;
+            /** Relevance */
+            relevance: number;
+            /** Significance */
+            significance: number;
+            /** Confidence */
+            confidence: number;
+            /** Age Days */
+            age_days: number;
+            /** Decay Penalty */
+            decay_penalty: number;
+            /** Current Snapshot */
+            current_snapshot: boolean;
+            /** Reasons */
+            reasons: string[];
+        };
+        /** RecallRequest */
+        RecallRequest: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Query
+             * @default
+             */
+            query: string;
+            /**
+             * Purpose
+             * @default recall
+             * @enum {string}
+             */
+            purpose: "recall" | "current_advice";
+            /** Expected Snapshot Hash */
+            expected_snapshot_hash: string;
+            /**
+             * Served Ids
+             * @default []
+             */
+            served_ids: string[];
+        };
+        /** RecallResult */
+        RecallResult: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /**
+             * Policy
+             * @default memory-recall-1
+             * @constant
+             */
+            policy: "memory-recall-1";
+            /**
+             * Evaluated At
+             * Format: date-time
+             */
+            evaluated_at: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "recall" | "current_advice";
+            /**
+             * Candidate Limit
+             * @default 100
+             * @constant
+             */
+            candidate_limit: 100;
+            /**
+             * Result Limit
+             * @default 5
+             * @constant
+             */
+            result_limit: 5;
+            /** Total Count */
+            total_count: number;
+            /** Inspected Count */
+            inspected_count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Excluded */
+            excluded: {
+                [key: string]: number;
+            };
+            /** Caveats */
+            caveats: string[];
+            /** Items */
+            items: components["schemas"]["RecallItem"][];
         };
         /** Receipt */
         Receipt: {
@@ -11064,6 +11194,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retrieve_api_memory_accounts__account_id__recall_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecallRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecallResult"];
                 };
             };
             /** @description Validation Error */

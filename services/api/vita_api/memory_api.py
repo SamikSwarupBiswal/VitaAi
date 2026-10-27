@@ -13,6 +13,7 @@ from .memory_contracts import (
     MemoryHistory,
     MemoryLifecycle,
 )
+from .memory_retrieval import RecallRequest, RecallResult, recall
 
 PREFIX = "/api/memory"
 
@@ -34,6 +35,10 @@ def install_memory_routes(app, store, settings):
     @router.get("/accounts/{account_id}", response_model=MemoryHistory)
     def history(account_id: UUID, memory: Service):
         return memory.history(account_id)
+
+    @router.post("/accounts/{account_id}/recall", response_model=RecallResult)
+    def retrieve(account_id: UUID, body: RecallRequest, memory: Service):
+        return recall(memory, account_id, body)
 
     @router.get("/{memory_id}", response_model=MemoryEntry)
     def get(memory_id: UUID, memory: Service):
