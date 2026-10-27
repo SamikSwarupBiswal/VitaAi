@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type AccountView } from "@/lib/api";
 import { conversationScope, conversationHistory, navigationHref, type Conversation, type ConversationHistory, type Persona, type Turn } from "@/lib/companion";
 import { useSession } from "./session-gate";
+import { VoiceControls } from "./voice-controls";
 
 export function CompanionPanel({ view }: { view: AccountView }) {
   const session = useSession(), actor = session?.actor;
@@ -98,6 +99,12 @@ function ConversationPanel({ view, actor, role }: { view: AccountView; actor: st
       <label>Question <textarea disabled={busy} value={message} maxLength={2000} onChange={event => {
         if (!pending.current) { input.current = event.target.value; setMessage(event.target.value); }
       }} /></label>
+      <VoiceControls key={JSON.stringify([history.conversation.id, history.turns.at(-1)?.id, busy])}
+        disabled={busy || role === "viewer" || history.conversation.snapshot_hash !== view.assessment.snapshot_hash}
+        text={history.turns.length ? [history.turns.at(-1)!.status, history.turns.at(-1)!.answer, ...history.turns.at(-1)!.caveats].join(" ") : ""}
+        onTranscript={text => { if (!pending.current && current.current === history && !lifetime.current?.signal.aborted) {
+          input.current = text; setMessage(text);
+        } }} />
       <button disabled={busy || role === "viewer" || !message.trim() || history.turns.length >= 30
         || history.conversation.snapshot_hash !== view.assessment.snapshot_hash} onClick={ask}>Ask from this context</button>
     </div>}

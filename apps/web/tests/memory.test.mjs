@@ -32,6 +32,7 @@ function setup(t, role = "admin", subject = "memory") {
     useRef(initial) { const i = cursor++; return slots[i] ??= { current: initial }; } };
   const helper = load("../lib/memory.ts");
   const component = load(`../components/${subject}-panel.tsx`, { react: hooks, "@/lib/memory": helper, "@/lib/companion": load("../lib/companion.ts"),
+    "./voice-controls": { VoiceControls: () => null },
     "@/lib/pipeline-history": load("../lib/pipeline-history.ts"), "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) },
     "./session-gate": { useSession: () => ({ mode: "session", actor: { id: "actor", organization_id: "org", role } }) } });
   const render = () => { cursor = 0; const outer = (component.MemoryPanel ?? component.CompanionPanel)({ view: { account: { id: account, organization_id: "org", revision: 1 }, assessment: { snapshot_hash: "hash" } } });
