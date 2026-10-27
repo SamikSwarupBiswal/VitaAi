@@ -150,6 +150,27 @@ test("seller priorities exclude terminal and foreign work and hand off to the ex
   assert.deepEqual(selected[1], ["account", "unknown"]);
 });
 
+test("seller handoff offers exact other-account saved work only when the current account queue is clear", () => {
+  const app = harness("seller"), account = data().account, selected = [];
+  const view = (id, name, organization_id = "org") => ({ account: { id, name, organization_id } });
+  const portfolio = { organization_id: "org", accounts: [account, view("next", "Next <account>"), view("later", "Later"), view("foreign", "Foreign", "other")] };
+  const saved = (id, account_id, status = "draft", organization_id = "org") => ({ id, account_id, status, organization_id,
+    template: "account-action-1", revision: 1, created_at: "2026-10-27T00:00:00Z", evidence: {} });
+  const missions = [saved("outside", "outside"), saved("foreign-mission", "foreign", "draft", "other"),
+    saved("done", "account", "completed"), saved("next-done", "next", "completed"), saved("next-replaced", "next", "superseded"),
+    saved("later-work", "later"), saved("next-work", "next", "reconciliation_required")];
+  const props = { account, missions, selectedId: "done", portfolio, select: (...args) => selected.push(args) }, before = structuredClone(missions);
+  const tree = app.components.priorities(props);
+  assert.match(renderToStaticMarkup(tree), /Next &lt;account&gt;/); assert.match(renderToStaticMarkup(tree), /not a new recommendation or action authorization/);
+  button(tree, "Open saved work for Next <account>").props.onClick(); assert.deepEqual(selected, [["next", "next-work"]]); assert.equal(app.requests.length, 0);
+  const blocked = app.components.priorities({ ...props, missions: [saved("current", "account", "executing"), ...missions], selectedId: "current" });
+  assert.equal(walk(blocked, node => node.type === "button" && [node.props.children].flat().join("").startsWith("Open saved work for ")).length, 0);
+  const empty = app.components.priorities({ ...props, missions: missions.filter(item => ["completed", "superseded"].includes(item.status)) });
+  assert.match(renderToStaticMarkup(empty), /No unfinished saved mission in the current portfolio/);
+  assert.equal(walk(empty, node => node.type === "button").length, 0);
+  assert.deepEqual(props.missions, before);
+});
+
 test("seller mission guidance preserves stale, active and failed blockers and empty queues", () => {
   const app = harness(), account = data().account;
   const mission = { id: "only", account_id: "account", organization_id: "org", template: "account-note-1", revision: 1,

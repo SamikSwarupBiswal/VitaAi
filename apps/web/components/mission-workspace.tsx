@@ -106,13 +106,20 @@ function MicrosoftConnection({ invalidate, changed, blocked = false }: { invalid
   </section>;
 }
 
-function MissionPriorities({ account, missions, selectedId, select }: {
-  account: AccountView; missions: Mission[]; selectedId: string | null;
+function MissionPriorities({ account, missions, selectedId, select, portfolio }: {
+  account: AccountView; missions: Mission[]; selectedId: string | null; portfolio?: Portfolio;
   select: (accountId: string, mission: string) => void;
 }) {
   const unfinished = missions.filter(item => item.account_id === account.account.id
     && item.organization_id === account.account.organization_id && !["completed", "superseded"].includes(item.status));
   const next = unfinished.find(item => item.id !== selectedId);
+  const nextAccount = !unfinished.length && portfolio?.organization_id === account.account.organization_id
+    ? portfolio.accounts.filter(view => view.account.id !== account.account.id && view.account.organization_id === portfolio.organization_id)
+      .flatMap(view => {
+        const mission = missions.find(item => item.account_id === view.account.id && item.organization_id === portfolio.organization_id
+          && !["completed", "superseded"].includes(item.status));
+        return mission ? [{ view, mission }] : [];
+      })[0] : undefined;
   function guidance(mission: Mission) {
     if (mission.status === "reconciliation_required") return "Uncertain result: inspect Execution and request reviewer reconciliation. Do not repeat the write.";
     if (mission.status === "executing") return "Execution is active. Refresh saved state; do not dispatch again.";
@@ -138,6 +145,11 @@ function MissionPriorities({ account, missions, selectedId, select }: {
       <p className="caveat">{guidance(mission)}</p>
     </li>)}</ol>
     {next && <button onClick={() => select(next.account_id, next.id)}>Open next unfinished mission</button>}
+    {nextAccount && <>
+      <p>This account has no unfinished saved missions. Other saved work follows current portfolio account order, then server mission creation order; it is not a new recommendation or action authorization.</p>
+      <button onClick={() => select(nextAccount.mission.account_id, nextAccount.mission.id)}>Open saved work for {nextAccount.view.account.name}</button>
+    </>}
+    {!unfinished.length && portfolio && !nextAccount && <p>No unfinished saved mission in the current portfolio. Planning new work remains explicit.</p>}
     {!next && !!unfinished.length && <p>No other unfinished mission for this account.</p>}
   </section>;
 }
@@ -206,7 +218,7 @@ function MissionDirectory() {
         </nav></details>
       </aside>
       <section className="mission-main" aria-label="Mission workspace">
-        {account && <MissionPriorities account={account} missions={loaded.missions} selectedId={selectedId} select={select} />}
+        {account && <MissionPriorities account={account} missions={loaded.missions} selectedId={selectedId} select={select} portfolio={loaded.portfolio} />}
         {selectedId ? (!selected || selected.account_id !== accountId ? <p role="alert">Mission unavailable for this account. Select a saved mission.</p>
           : <MissionLoader key={`${selected.id}:${generation}`} id={selected.id} configured={loaded.provider.configured} refresh={refresh} />)
           : account && <NewMission key={`${accountId}:${generation}`} account={account} configured={loaded.provider.configured}
