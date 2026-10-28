@@ -17,6 +17,8 @@ from .companion_api import PREFIX as COMPANION_PREFIX
 from .companion_api import install_companion_routes
 from .config import Settings
 from .contracts import AccountView, AnalyzeRequest, ModelRun, Portfolio, ProviderStatus
+from .guardrails import PREFIX as GUARDRAIL_PREFIX
+from .guardrails import install_guardrail_routes
 from .hubspot import PREFIX as HUBSPOT_PREFIX
 from .hubspot_refresh import RefreshScheduler, RefreshWorker
 from .hubspot_sync import install_hubspot_routes
@@ -91,7 +93,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
             return JSONResponse({"detail": "Invalid sign-in request"}, status_code=422)
         if request.url.path.startswith((*WORKFLOW_PREFIXES, HUBSPOT_PREFIX, MICROSOFT_PREFIX, RESEARCH_PREFIX,
                                         COMPARISON_PREFIX, MEMORY_PREFIX, COMPANION_PREFIX,
-                                        COLLABORATION_PREFIX, INTELLIGENCE_PREFIX, "/api/platform")):
+                                        COLLABORATION_PREFIX, INTELLIGENCE_PREFIX, GUARDRAIL_PREFIX, "/api/platform")):
             return safe_error("invalid_workflow_request", 422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
@@ -281,6 +283,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_collaboration_routes(app, store, settings)
     install_intelligence_routes(app, store, settings)
     install_platform_routes(app, store, settings, platform_settings, platform_transport)
+    install_guardrail_routes(app, store, settings)
     return app
 
 

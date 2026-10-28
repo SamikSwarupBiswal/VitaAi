@@ -17,6 +17,19 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("guardrail routes allow only catalog GET and classify POST with bounded bodies", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  for (const [method, suffix, status, body] of [["GET", "scenarios", 200], ["POST", "classify", 200, "{}"], ["HEAD", "scenarios", 404],
+    ["POST", "scenarios", 404, "{}"], ["GET", "classify", 404], ["POST", "classify/extra", 404, "{}"], ["POST", "classify", 413, "x".repeat(4097)]]) {
+    const name = `guardrails/${suffix}`;
+    const response = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method, headers: { host: "127.0.0.1:3000" }, ...(body ? { body } : {}) }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 2);
+});
+
 test("companion session and turn paths have explicit methods and no implicit HEAD", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
   const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
