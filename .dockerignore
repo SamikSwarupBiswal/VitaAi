@@ -1,0 +1,20 @@
+# Deny by default: only original application build inputs enter the context.
+**
+!package.json
+!package-lock.json
+!apps/web/package.json
+!apps/web/next.config.ts
+!apps/web/next-env.d.ts
+!apps/web/tsconfig.json
+!apps/web/app/**/*.tsx
+!apps/web/app/**/*.ts
+!apps/web/app/**/*.css
+!apps/web/components/*.tsx
+!apps/web/lib/*.ts
+!apps/web/public/guides/local-simulation-guide-1.pdf
+!apps/web/public/guides/local-simulation-guide-2.pdf
+!services/api/requirements.txt
+!services/api/vita_api/*.py
+!services/api/vita_api/data/guardrail-evaluation.generated.json
+!services/api/migrations/*.py
+!services/api/migrations/versions/*.py

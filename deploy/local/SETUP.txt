@@ -32,3 +32,58 @@ Existing files are never overwritten. The checker does not clean up its output.
 This establishes only the recorded local fresh-source/build/SQLite HTTP scope.
 Browser/device, PostgreSQL, real tenant/provider, hosted deployment, production
 identity, general factual/injection safety and release acceptance stay separate.
+
+Local Linux containers (source/configuration slice; runtime validation pending)
+
+Prerequisites: operator-managed Docker Engine with Linux containers and Compose
+v2.17 or later. This procedure does not install/start a daemon. Runtime image tags
+are versioned, not immutable digests; requirements/lockfiles pin declared package
+versions, not the complete Linux supply chain. Builds access public image/package
+registries and npm install scripts.
+
+From the repository root, use the same project name on every command:
+  docker compose -p vitaai-local -f deploy/local/compose.json config --quiet
+  docker compose -p vitaai-local -f deploy/local/compose.json build
+  docker compose -p vitaai-local -f deploy/local/compose.json up -d --wait
+  docker compose -p vitaai-local -f deploy/local/compose.json ps
+
+The JSON file uses the standard Compose format. Choose a new project name for
+each separate synthetic instance; never reuse another instance's state volume.
+Only http://127.0.0.1:3000 is published. API listens on 127.0.0.1:8000 inside the
+shared API/web network namespace and is not published to the host. This preserves
+the fixed loopback gateways, Host/Origin checks and cookie filtering. Do not scale
+either service or start web with --no-deps. There is no host networking, source
+mount, Docker socket, local .env or private Markdown in the images. The allowlist
+filters paths, not secret contents or license obligations; build reviewed source.
+Optional Audio2Face dependencies/services are excluded.
+
+The project-scoped named state volume stores SQLite. Existing startup migrations
+and six explicitly synthetic accounts initialize at runtime; builds never run
+application initialization. Auth is session mode, with no default credentials.
+Provision your chosen identity through the existing secure password prompt:
+  docker compose -p vitaai-local -f deploy/local/compose.json exec api python -m vita_api.identity local-reviewer vitaai-sample --role reviewer
+The CLI prompts twice without printing the password. Sign in at the web URL.
+Provision a seller/admin separately only when needed for the local flow; roles
+grant no provider permission. No credentials/gates are inherited from host env or
+.env files. Integrations, external writes and scheduled refresh stay unconfigured
+or disabled. Do not add secrets/provider gates to this local stack.
+
+API health reads /health/ready, including the exact migration head. Web waits for
+API health and checks the actual gateway /api/auth/session path. Healthy means
+that bounded check only, not provider/factual/release safety. Use ps and logs to
+investigate errors, keeping logs private. Failed builds/startup/unhealthy services
+stay failures; no automatic restart/repair/rollback is configured. Preserve the
+volume after a migration failure for inspection; do not delete data to proceed.
+
+Test restart preservation explicitly after local review:
+  docker compose -p vitaai-local -f deploy/local/compose.json down
+  docker compose -p vitaai-local -f deploy/local/compose.json up -d --wait
+Inspect the same identity/retained records. Recreate both services together; an
+API-only replacement may detach web from its namespace. Ordinary down preserves
+the named volume; never use down --volumes or prune data you need. This procedure
+does not back up, restore, clean up or cut over an existing application database.
+
+Actual Linux image build/start/health/volume ownership/namespace/restart behavior
+requires Docker execution. Source tests/native builds cannot establish it. This
+SQLite local stack excludes PostgreSQL, TLS/direct OAuth callback routing, real
+Teams/Copilot tenant operation, workers, hosted and full F46/release acceptance.

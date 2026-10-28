@@ -1,0 +1,25 @@
+{
+  "name": "vitaai-local",
+  "services": {
+    "api": {
+      "build": {"context": "../..", "dockerfile": "deploy/local/api.Dockerfile"},
+      "environment": {"DATABASE_URL": "sqlite:////var/lib/vitaai/vitaai.db", "AUTH_MODE": "session"},
+      "ports": ["127.0.0.1:3000:3000"],
+      "volumes": ["state:/var/lib/vitaai"],
+      "init": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "restart": "no"
+    },
+    "web": {
+      "build": {"context": "../..", "dockerfile": "deploy/local/web.Dockerfile"},
+      "network_mode": "service:api",
+      "depends_on": {"api": {"condition": "service_healthy", "restart": true}},
+      "init": true,
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "restart": "no"
+    }
+  },
+  "volumes": {"state": {}}
+}
