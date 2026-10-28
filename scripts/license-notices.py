@@ -64,6 +64,29 @@ def reject_links(path, boundary):
             raise NoticeError("Linked legal text path")
 
 
+def web_legal_candidates(package):
+    pending, candidates, scanned = [(package, 0)], [], 0
+    while pending:
+        directory, depth = pending.pop()
+        if depth > MAXIMUM_DEPTH:
+            raise NoticeError("Legal directory depth exceeded")
+        reject_links(directory, package)
+        for entry in bounded_children(directory):
+            scanned += 1
+            if scanned > MAXIMUM_ENTRIES:
+                raise NoticeError("Package file bound exceeded")
+            if entry.name.startswith(".") or entry.name == "node_modules":
+                continue
+            name = entry.relative_to(package).as_posix()
+            if LEGAL_NAME.fullmatch(entry.name):
+                candidates.append((package, name))
+            elif entry.is_dir():
+                relative_name(name)
+                reject_links(entry, package)
+                pending.append((entry, depth + 1))
+    return sorted(candidates, key=lambda item: item[1])
+
+
 def web_instances(root):
     pending, visited = [(root / "node_modules", 0)], set()
     result, excluded, scanned = [], 0, 0
@@ -107,8 +130,7 @@ def web_instances(root):
                     [metadata.get("homepage"), repository.get("url") if isinstance(repository, dict) else repository])
                 issues, candidates = [], []
                 if canonical.is_relative_to(modules):
-                    candidates = [(canonical, entry.name) for entry in bounded_children(canonical)
-                                  if LEGAL_NAME.fullmatch(entry.name)]
+                    candidates = web_legal_candidates(canonical)
                 else:
                     issues.append({"code": "unsupported_workspace_location"})
                 result.append((record, candidates, issues, canonical))

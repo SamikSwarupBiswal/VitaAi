@@ -88,6 +88,54 @@ class LicenseNoticeTests(unittest.TestCase):
         self.assertNotIn("legal_compatible", report)
         self.assertNotIn("meets_rubric", report)
 
+    def test_nested_vendored_texts_keep_parent_identity_and_exact_relative_names(self):
+        package = self.package()
+        nested = package / "dist/compiled/vendor"
+        nested.mkdir(parents=True)
+        data = b"Bundled attribution\r\nCopyright Vendor\n"
+        (nested / "LICENSE.md").write_bytes(data)
+        (nested / "package.json").write_text('{"name":"unverified-vendor","version":"9"}')
+        (nested / "private.md").write_text("Not a legal candidate")
+        hidden = package / ".private"
+        hidden.mkdir()
+        (hidden / "LICENSE").write_text("Excluded hidden material")
+        output = self.base / "nested-bundle"
+        with patch.object(socket.socket, "connect", side_effect=AssertionError("Offline only")):
+            report = notices.write_bundle(output, self.root, [])
+        self.assertEqual(report["installed_instances"], 1)
+        self.assertEqual(report["records"][0]["name"], "example")
+        self.assertEqual(report["records"][0]["version"], "1.0")
+        text = report["records"][0]["texts"][0]
+        self.assertEqual(text["source_name"], "dist/compiled/vendor/LICENSE.md")
+        self.assertEqual((output / text["bundle_path"]).read_bytes(), data)
+        self.assertEqual(report["text_count"], 1)
+        self.assert_texts(report, output)
+
+    def test_nested_directory_link_rejects_before_reading_linked_candidates(self):
+        package = self.package()
+        external = self.base / "outside"
+        external.mkdir()
+        (external / "LICENSE").write_text("Private external material")
+        try:
+            (package / "vendor").symlink_to(external, target_is_directory=True)
+        except OSError:
+            self.skipTest("Host does not allow symlink creation")
+        with patch.object(notices, "read_text_bytes", side_effect=AssertionError("Must reject before read")), \
+                self.assertRaises(ValueError):
+            notices.write_bundle(self.base / "linked-vendor", self.root, [])
+        self.assertFalse((self.base / "linked-vendor").exists())
+
+    def test_recursive_file_and_depth_bounds_reject_before_output(self):
+        package = self.package()
+        nested = package / "dist/vendor"
+        nested.mkdir(parents=True)
+        (nested / "LICENSE").write_bytes(b"Legal bytes")
+        for index, (constant, bound) in enumerate((("MAXIMUM_ENTRIES", 3), ("MAXIMUM_DEPTH", 1))):
+            output = self.base / f"recursive-bound-{index}"
+            with patch.object(notices, constant, bound), self.assertRaises(ValueError):
+                notices.write_bundle(output, self.root, [])
+            self.assertFalse(output.exists())
+
     def test_missing_declared_and_unsupported_texts_stay_explicit(self):
         distribution = self.distribution({}, ("missing.txt",))
         package = self.package()

@@ -96,11 +96,18 @@ From the repository root, using the Python environment you want to measure:
 Choose a new external directory whose parent exists. The collector reads the
 current Python distribution metadata and installed web package roots, preserving
 each installed instance separately. It copies bounded package-owned conventional
-LICENSE/LICENCE/COPYING/NOTICE files and Python-declared/distribution legal files,
+LICENSE/LICENCE/COPYING/NOTICE files in bounded npm package subdirectories and
+Python-declared/distribution legal files,
 including third-party legal Markdown, into external .txt files without changing
 their bytes. It never reads private application Markdown/history or executes a
 package, installer, provider or network request. Keep installed sources stable
 during collection; path filtering is not a secret-content or legal audit.
+
+Nested npm texts retain their installed parent package identity and relative
+filename; they do not establish an independent vendored name/version. Hidden
+directories and separately inventoried node_modules are excluded from this scan.
+Linked directories are rejected before traversal; directory depth and per-package
+entry counts are bounded.
 
 manifest.json binds original ecosystem/name/version/declarations/safe source
 links and source-relative filenames to copied paths/byte counts/SHA256 hashes.
