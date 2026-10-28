@@ -1,0 +1,34 @@
+VitaAi local setup verification
+
+This is an original public setup procedure. It contains no private project
+history, credentials or provider configuration. It does not deploy or publish.
+
+Prerequisites: Git, Python with venv/pip, Node.js and npm on PATH. The current
+application declares Node >=20.9; validate an actual runtime using this checker.
+Python 3.13.9 and Node 24.12.0 are the local authoring runtimes, not cross-platform
+certification. Dependency installation accesses the Python/npm package registries.
+
+From the repository root:
+  python scripts/check-clean-setup.py --output C:/private/vitaai-clean-check-001
+
+Choose a new directory outside the repository whose parent already exists. Never
+reuse an earlier output directory. The command exports committed HEAD only into
+that directory, without Git history, private Markdown, .env, local databases,
+dependencies or caches. Uncommitted changes are not tested. Source-path filtering
+is not an independent content-secret or license audit.
+
+The checker creates a fresh Python environment, installs pinned API requirements,
+runs npm ci and a production web build, checks the packaged synthetic assurance
+report, and exercises isolated SQLite API startup/restart through TestClient.
+Synthetic viewer identity/session and all seeded rows must persist across app
+reconstruction. Provider transports are denied during smoke HTTP checks. No
+original database, .env, listener or running server is changed.
+
+result.json records the exported revision, runtime versions, command outcomes,
+logs, measured smoke result and evidence limits. A nonzero exit preserves the
+external source/environment/logs for diagnosis; it does not claim acceptance.
+Existing files are never overwritten. The checker does not clean up its output.
+
+This establishes only the recorded local fresh-source/build/SQLite HTTP scope.
+Browser/device, PostgreSQL, real tenant/provider, hosted deployment, production
+identity, general factual/injection safety and release acceptance stay separate.
