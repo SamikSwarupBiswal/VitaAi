@@ -21,6 +21,7 @@ from .config import Settings
 from .contracts import AccountView, AnalyzeRequest, ModelRun, Portfolio, ProviderStatus
 from .guardrails import PREFIX as GUARDRAIL_PREFIX
 from .guardrails import install_guardrail_routes
+from .health import install_health_routes
 from .hubspot import PREFIX as HUBSPOT_PREFIX
 from .hubspot_refresh import RefreshScheduler, RefreshWorker
 from .hubspot_sync import install_hubspot_routes
@@ -287,6 +288,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
     install_platform_routes(app, store, settings, platform_settings, platform_transport)
     install_guardrail_routes(app, store, settings)
     install_assurance_routes(app, store, settings)
+    install_health_routes(app, store, settings)
     return app
 
 
