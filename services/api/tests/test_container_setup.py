@@ -46,6 +46,8 @@ class ContainerSetupTests(unittest.TestCase):
         rules = [line for line in (ROOT / ".dockerignore").read_text().splitlines()
                  if line and not line.startswith("#")]
         self.assertEqual(rules[0], "**")
+        self.assertIn("!LICENSE", rules)
+        self.assertIn("!apps/web/lib/guide-pdf.generated.json", rules)
         for rule in rules[1:]:
             self.assertTrue(rule.startswith("!"))
             path = rule[1:]
@@ -56,13 +58,15 @@ class ContainerSetupTests(unittest.TestCase):
                 self.assertNotIn(excluded, path)
             if not path.endswith("/"):
                 self.assertNotIn(path, {"*", "**", "**/*"})
-                self.assertIn(Path(path).suffix, {".py", ".ts", ".tsx", ".css", ".json", ".txt", ".pdf"})
+                if path != "LICENSE":
+                    self.assertIn(Path(path).suffix, {".py", ".ts", ".tsx", ".css", ".json", ".txt", ".pdf"})
                 if "*" in path:
                     self.assertIn(Path(path).suffix, {".py", ".ts", ".tsx", ".css"})
 
     def test_recipes_preserve_runtime_layout_without_build_initialization(self):
         api, web = recipe("api.Dockerfile"), recipe("web.Dockerfile")
         for source in (api, web):
+            self.assertIn("COPY LICENSE /opt/vitaai/LICENSE", source)
             self.assertNotIn("COPY . ", source)
             self.assertNotIn("COPY .\n", source)
             self.assertNotIn("--reload", source)

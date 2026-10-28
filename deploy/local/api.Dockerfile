@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     DATABASE_URL=sqlite:////var/lib/vitaai/vitaai.db AUTH_MODE=session
 
 WORKDIR /opt/vitaai/services/api
+COPY LICENSE /opt/vitaai/LICENSE
 COPY services/api/requirements.txt ./requirements.txt
 RUN python -m pip install --no-cache-dir -r requirements.txt \
     && groupadd --gid 10001 vitaai \

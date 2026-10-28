@@ -1,5 +1,6 @@
 # Deny by default: only original application build inputs enter the context.
 **
+!LICENSE
 !package.json
 !package-lock.json
 !apps/web/package.json
@@ -11,6 +12,7 @@
 !apps/web/app/**/*.css
 !apps/web/components/*.tsx
 !apps/web/lib/*.ts
+!apps/web/lib/guide-pdf.generated.json
 !apps/web/public/guides/local-simulation-guide-1.pdf
 !apps/web/public/guides/local-simulation-guide-2.pdf
 !services/api/requirements.txt

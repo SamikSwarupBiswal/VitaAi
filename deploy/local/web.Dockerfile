@@ -10,6 +10,7 @@ RUN npm run build && npm prune --omit=dev
 FROM node:24.12.0-bookworm-slim AS runtime
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 WORKDIR /opt/vitaai/apps/web
+COPY LICENSE /opt/vitaai/LICENSE
 COPY --from=build /opt/vitaai/package.json /opt/vitaai/package.json
 COPY --from=build /opt/vitaai/node_modules /opt/vitaai/node_modules
 COPY --from=build /opt/vitaai/apps/web/package.json ./package.json

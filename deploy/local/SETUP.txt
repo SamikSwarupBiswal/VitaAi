@@ -33,7 +33,7 @@ This establishes only the recorded local fresh-source/build/SQLite HTTP scope.
 Browser/device, PostgreSQL, real tenant/provider, hosted deployment, production
 identity, general factual/injection safety and release acceptance stay separate.
 
-Local Linux containers (source/configuration slice; runtime validation pending)
+Local Linux containers
 
 Prerequisites: operator-managed Docker Engine with Linux containers and Compose
 v2.17 or later. This procedure does not install/start a daemon. Runtime image tags
