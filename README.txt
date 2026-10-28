@@ -68,8 +68,8 @@ files, in a new external directory. See deploy/local/SETUP.txt for its command,
 coverage gaps, and source/output constraints. Installed dependency coverage is
 not complete attribution, source-obligation review, or legal compatibility.
 
-The project's own distribution license has not been selected. Do not infer one
-from dependency declarations or the presence of source. Optional dependencies,
+VitaAi's original project code is licensed under the MIT License; see LICENSE.
+Third-party components retain their own licenses. Optional dependencies,
 base-image/OS components, bundled component identity, live integrations, hosted
 identity/OAuth, device behavior, and full release acceptance require separate
 review or validation. No deployment or publication is performed by these tools.

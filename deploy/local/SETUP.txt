@@ -121,5 +121,6 @@ are never overwritten or cleaned up.
 The bundle measures installed files only. It is not an independent assessment of
 attribution completeness, legal compatibility, source obligations or a release
 pass. Uninstalled/optional dependencies, OS/base-image components and vendored
-subcomponents are not certified complete. Select the project's own license and
-review distribution obligations separately; this command chooses/publishes none.
+subcomponents are not certified complete. The project's MIT License is in the
+root LICENSE file. Review third-party distribution obligations separately;
+this command chooses no license and publishes nothing.
