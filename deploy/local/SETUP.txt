@@ -87,3 +87,32 @@ Actual Linux image build/start/health/volume ownership/namespace/restart behavio
 requires Docker execution. Source tests/native builds cannot establish it. This
 SQLite local stack excludes PostgreSQL, TLS/direct OAuth callback routing, real
 Teams/Copilot tenant operation, workers, hosted and full F46/release acceptance.
+
+Installed third-party notice collection (offline preparation)
+
+From the repository root, using the Python environment you want to measure:
+  python scripts/license-notices.py --output C:/private/vitaai-notices-001
+
+Choose a new external directory whose parent exists. The collector reads the
+current Python distribution metadata and installed web package roots, preserving
+each installed instance separately. It copies bounded package-owned conventional
+LICENSE/LICENCE/COPYING/NOTICE files and Python-declared/distribution legal files,
+including third-party legal Markdown, into external .txt files without changing
+their bytes. It never reads private application Markdown/history or executes a
+package, installer, provider or network request. Keep installed sources stable
+during collection; path filtering is not a secret-content or legal audit.
+
+manifest.json binds original ecosystem/name/version/declarations/safe source
+links and source-relative filenames to copied paths/byte counts/SHA256 hashes.
+Missing, unreadable, unsupported or empty texts remain explicit coverage gaps.
+Non-UTF8/binary candidates are not converted into invented text. Symlink/reparse
+text paths, traversal, source/output overlap, excessive bounds or existing output
+paths fail. A partial write retains INCOMPLETE.txt and cannot be reused; inspect
+privately and choose a new directory for a later attempt. Existing files/sources
+are never overwritten or cleaned up.
+
+The bundle measures installed files only. It is not an independent assessment of
+attribution completeness, legal compatibility, source obligations or a release
+pass. Uninstalled/optional dependencies, OS/base-image components and vendored
+subcomponents are not certified complete. Select the project's own license and
+review distribution obligations separately; this command chooses/publishes none.
