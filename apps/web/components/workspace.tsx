@@ -347,6 +347,7 @@ function WorkspaceContent({ accountDirectory, persona }: { accountDirectory: boo
         <Link href={`/missions${selected ? `?account=${encodeURIComponent(selected.account.id)}` : ""}`}>Missions</Link>
         <Link href={`/walkthrough${selected ? `?account=${encodeURIComponent(selected.account.id)}` : ""}`}>Walkthrough</Link>
         <Link href="/guardrails">Guardrails lab</Link>
+        <Link href="/assurance">AI assurance</Link>
       </nav><footer><p><Settings size={18} />Local workspace</p><p><Code2 size={18} />Local development</p></footer>
     </aside>
     <div className="workspace-body"><header className="topbar"><span>Workspace <span className="slash">/</span> <strong>{title}</strong></span>

@@ -55,7 +55,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     : request.method === "POST" && new RegExp(`^provider-comparison/(?:providers/(?:nebius|openai|anthropic|nvidia|foundry)/(?:discover|test)|accounts/${uuid}/compare|(?:runs|tests)/${uuid}/recover)$`).test(joined);
   const guardrailPath = request.method === "GET" ? joined === "guardrails/scenarios"
     : request.method === "POST" && joined === "guardrails/classify";
-  const allowed = guardrailPath || stage5Path || (request.method === "GET"
+  const assurancePath = request.method === "GET" && joined === "assurance/guardrails";
+  const allowed = assurancePath || guardrailPath || stage5Path || (request.method === "GET"
     ? companionPath || memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "portfolio" || joined === "providers/nebius" || joined === "auth/session" || accountPath.test(joined) || pipelinePath.test(joined) || pipelineResearchPath || joined === "pipeline/history"
     : companionPath || memoryPath || workflowPath || hubspotPath || seedPath || microsoftPath || researchPath || comparisonPath || joined === "providers/nebius/discover" || joined === "auth/login" || joined === "auth/logout" || joined === "pipeline" || analyzePath.test(joined));
   if (!allowed) return NextResponse.json({ detail: "Route not found" }, { status: 404 });

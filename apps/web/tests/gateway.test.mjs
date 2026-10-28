@@ -17,6 +17,18 @@ route.filename = routePath;
 route.paths = Module._nodeModulePaths(path.dirname(routePath));
 route._compile(compiled, routePath);
 
+test("assurance exposes one read-only report route and no implicit HEAD", async t => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
+  const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");
+  const methods = autoImplementMethods(route.exports);
+  for (const [method, suffix, status] of [["GET", "guardrails", 200], ["HEAD", "guardrails", 404], ["POST", "guardrails", 404], ["GET", "guardrails/extra", 404]]) {
+    const name = `assurance/${suffix}`;
+    const response = await methods[method](new NextRequest(`http://127.0.0.1:3000/api/${name}`, { method, headers: { host: "127.0.0.1:3000" }, ...(method === "POST" ? { body: "{}" } : {}) }), { params: Promise.resolve({ path: name.split("/") }) });
+    assert.equal(response.status, status);
+  }
+  assert.equal(upstream.mock.callCount(), 1);
+});
+
 test("guardrail routes allow only catalog GET and classify POST with bounded bodies", async t => {
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({}));
   const { autoImplementMethods } = require("next/dist/server/route-modules/app-route/helpers/auto-implement-methods");

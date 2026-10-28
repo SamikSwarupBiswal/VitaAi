@@ -2364,6 +2364,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assurance/guardrails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Guardrail Report */
+        get: operations["guardrail_report_api_assurance_guardrails_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2735,6 +2752,20 @@ export interface components {
             type_id: number;
             /** Label */
             label: string | null;
+        };
+        /** AssuranceView */
+        AssuranceView: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Organization Id */
+            organization_id: string;
+            /** Actor Id */
+            actor_id: string;
+            report: components["schemas"]["GuardrailReport"];
         };
         /** AuditEvent */
         AuditEvent: {
@@ -3661,6 +3692,63 @@ export interface components {
              */
             requires_human_approval: true;
         };
+        /** GuardrailCase */
+        GuardrailCase: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /** Case Id */
+            case_id: string;
+            /** Scenario Id */
+            scenario_id: string;
+            /** Scenario Title */
+            scenario_title: string;
+            /**
+             * Classifier Mode
+             * @enum {string}
+             */
+            classifier_mode: "disabled" | "mock" | "simulated_failure";
+            /** Text Sha256 */
+            text_sha256: string;
+            /**
+             * Expected Decision
+             * @enum {string}
+             */
+            expected_decision: "explanation_only" | "blocked";
+            /**
+             * Actual Decision
+             * @enum {string}
+             */
+            actual_decision: "explanation_only" | "blocked";
+            /**
+             * Final Decision
+             * @enum {string}
+             */
+            final_decision: "explanation_only" | "blocked";
+            /**
+             * Expected Classifier Status
+             * @enum {string}
+             */
+            expected_classifier_status: "disabled" | "mock" | "failed";
+            /**
+             * Actual Classifier Status
+             * @enum {string}
+             */
+            actual_classifier_status: "disabled" | "mock" | "failed";
+            /** Expected Advisory Flag */
+            expected_advisory_flag: boolean | null;
+            /** Actual Advisory Flag */
+            actual_advisory_flag: boolean | null;
+            /** Expected Error Code */
+            expected_error_code: ("simulated_failure" | "classifier_unavailable") | null;
+            /** Actual Error Code */
+            actual_error_code: ("simulated_failure" | "classifier_unavailable") | null;
+            /** Failures */
+            failures: ("decision_mismatch" | "final_decision_mismatch" | "classifier_status_mismatch" | "classifier_flag_mismatch" | "classifier_error_mismatch")[];
+        };
         /** GuardrailCatalog */
         GuardrailCatalog: {
             /**
@@ -3831,6 +3919,91 @@ export interface components {
             description: string;
             /** Triggered */
             triggered: boolean;
+        };
+        /** GuardrailReport */
+        GuardrailReport: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: "1";
+            /**
+             * Rubric
+             * @default guardrail-matrix-1
+             * @constant
+             */
+            rubric: "guardrail-matrix-1";
+            /**
+             * Dataset Id
+             * @default curated-guardrail-matrix
+             * @constant
+             */
+            dataset_id: "curated-guardrail-matrix";
+            /**
+             * Dataset Version
+             * @default 1
+             * @constant
+             */
+            dataset_version: "1";
+            /**
+             * Policy Version
+             * @default request-constraints-1
+             * @constant
+             */
+            policy_version: "request-constraints-1";
+            /**
+             * Evaluator Version
+             * @default guardrail-evaluator-1
+             * @constant
+             */
+            evaluator_version: "guardrail-evaluator-1";
+            /**
+             * Evidence Tier
+             * @default synthetic
+             * @constant
+             */
+            evidence_tier: "synthetic";
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Policy Source Sha256 */
+            policy_source_sha256: string;
+            /** Evaluator Source Sha256 */
+            evaluator_source_sha256: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Cases */
+            cases: components["schemas"]["GuardrailCase"][];
+            /** Total Cases */
+            total_cases: number;
+            /** Passed Cases */
+            passed_cases: number;
+            /** Failed Cases */
+            failed_cases: number;
+            /** Classifier Failed Cases */
+            classifier_failed_cases: number;
+            /** Meets Rubric */
+            meets_rubric: boolean;
+            /**
+             * Caveats
+             * @default [
+             *       "Synthetic curated cases measure this bounded lexical policy, not general injection safety or live classifier quality.",
+             *       "Expected classifier failures are measured separately from rubric failures; no provider call is made.",
+             *       "Checksums establish source and artifact consistency, not external authenticity or release certification.",
+             *       "This historical report grants no workflow approval, execution authority or customer-outcome evidence."
+             *     ]
+             */
+            caveats: string[];
         };
         /** GuardrailRequest */
         GuardrailRequest: {
@@ -14310,6 +14483,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    guardrail_report_api_assurance_guardrails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssuranceView"];
                 };
             };
         };

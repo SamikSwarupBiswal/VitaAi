@@ -52,7 +52,7 @@ export function GuardrailWorkspace({ actor, organization }: { actor: string; org
     const state = life.current; state.alive = true;
     const clear = () => { state.controller?.abort(); state.epoch++; state.pending = false; setCatalog(null); setResult(null); setScenario(""); setError(""); setPending(false); render(value => value + 1); };
     window.addEventListener("focus", clear);
-    return () => { state.alive = false; state.epoch++; state.controller?.abort(); window.removeEventListener("focus", clear); };
+    return () => { state.alive = false; state.controller?.abort(); state.pending = false; window.removeEventListener("focus", clear); };
   }, [actor, organization]);
   const valid = () => life.current.alive && life.current.epoch === epoch;
   const run = async (read: (signal: AbortSignal) => Promise<() => void>) => {

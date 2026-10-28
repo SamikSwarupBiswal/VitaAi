@@ -34,21 +34,26 @@ test("guardrail validators reject malformed rendered text, crossed scope/verdict
   }
 });
 function setup(t) {
-  const slots = [], cleanups = [], requests = [], listeners = new Map(); let cursor = 0, effects = [];
+  const slots = [], cleanups = [], callbacks = [], requests = [], listeners = new Map(); let cursor = 0, effects = [], changed = false, currentTree;
   const oldWindow = globalThis.window;
   globalThis.window = { addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); } };
-  const hooks = { ...React, useEffect(fn, deps) { const index = cursor++; if (!(index in slots) || deps.some((item, n) => item !== slots[index][n])) { slots[index] = deps; effects.push(() => { cleanups[index]?.(); cleanups[index] = fn(); }); } },
-    useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], value => { slots[index] = typeof value === "function" ? value(slots[index]) : value; }]; },
+  const hooks = { ...React, useEffect(fn, deps) { const index = cursor++; callbacks[index] = fn; if (!(index in slots) || deps.some((item, n) => item !== slots[index][n])) { slots[index] = deps; effects.push(() => { cleanups[index]?.(); cleanups[index] = fn(); }); } },
+    useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], value => { changed = true; slots[index] = typeof value === "function" ? value(slots[index]) : value; }]; },
     useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; } };
   const component = load({ react: hooks, "@/lib/api": { api: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })) } });
-  const render = () => { cursor = 0; const tree = component.GuardrailWorkspace({ actor: "actor", organization: "org" }); const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; };
+  const render = () => { cursor = 0; changed = false; currentTree = component.GuardrailWorkspace({ actor: "actor", organization: "org" }); const pending = effects; effects = []; pending.forEach(fn => fn()); return currentTree; };
   const unmount = () => cleanups.forEach(fn => fn?.()); t.after(() => { unmount(); globalThis.window = oldWindow; }); render();
   return { requests, render, unmount, html: () => renderToStaticMarkup(render()),
     button(name) { const node = walk(render()).find(node => node.type === "button" && text(node.props.children) === name); assert.ok(node); return node; },
     field(name, value) { const label = walk(render()).find(node => node.type === "label" && text(node.props.children).startsWith(name)); walk(label).find(node => node.type === "select").props.onChange({ target: { value } }); render(); },
     async load() { const pending = this.button("Load scenario catalog").props.onClick(); requests.shift().resolve(catalog()); await pending; render(); },
-    focus() { listeners.get("focus")(); render(); } };
+    focus() { listeners.get("focus")(); render(); },
+    replay() { changed = false; cleanups.forEach(fn => fn?.()); callbacks.forEach((fn, index) => { cleanups[index] = fn(); }); if (changed) render(); return walk(currentTree).find(node => node.type === "button"); } };
 }
+test("StrictMode effect reactivation leaves the visible catalog handler usable", async t => {
+  const app = setup(t), pending = app.replay().props.onClick(); assert.equal(app.requests.length, 1); app.requests.shift().resolve(catalog()); await pending;
+  assert.match(app.html(), /Curated scenario/);
+});
 test("captured and duplicate controls cannot evaluate an obsolete selection or completed inspection", async t => {
   const app = setup(t); await app.load(); app.field("Curated scenario", "approval-shortcut"); app.field("Classifier demonstration", "mock");
   const stale = app.button("Inspect deterministic decision"); app.field("Curated scenario", "external-action"); await stale.props.onClick(); assert.equal(app.requests.length, 0);
