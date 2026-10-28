@@ -19,6 +19,7 @@ h4 { font-size: 14px; margin: 16px 0 8px; }
 .workspace { display: flex; min-height: 100vh; }
 .entry { max-width: 1040px; margin: 0 auto; padding: 48px 24px; }
 .entry > p, .entry > h1 { margin-top: 24px; max-width: 680px; }
+.entry [aria-label="Guardrail evaluation report"] details { overflow-wrap: anywhere; }
 .persona-entry { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 24px; margin: 40px 0; }
 .persona-entry a { display: grid; align-items: start; gap: 16px; border-top: 2px solid var(--green); padding: 20px 0; }
 .persona-entry strong { color: var(--ink); font-size: 22px; }
