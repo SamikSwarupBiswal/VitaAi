@@ -103,6 +103,18 @@ their bytes. It never reads private application Markdown/history or executes a
 package, installer, provider or network request. Keep installed sources stable
 during collection; path filtering is not a secret-content or legal audit.
 
+The default --ecosystem all reads both ecosystems. For a Python-only API
+environment without node_modules, use --ecosystem python. For an independently
+preserved web installation, select its workspace root and npm alone:
+  python scripts/license-notices.py --root C:/private/web-image-root --ecosystem npm --output C:/private/web-image-notices-001
+The selected root must exist; npm collection requires its node_modules tree and
+any in-root workspace targets. --root does not select a Python environment:
+Python collection always inspects the interpreter running the collector. Run it
+in the intended environment. The manifest records the selected ecosystems;
+omitted ecosystems are outside coverage. Output must be outside the selected
+root, this collector checkout and all inspected Python installation roots.
+These flags neither start containers nor fetch dependencies or missing texts.
+
 Nested npm texts retain their installed parent package identity and relative
 filename; they do not establish an independent vendored name/version. Hidden
 directories and separately inventoried node_modules are excluded from this scan.

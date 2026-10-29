@@ -76,6 +76,7 @@ class LicenseNoticeTests(unittest.TestCase):
         with patch.object(socket.socket, "connect", side_effect=AssertionError("Offline only")):
             report = notices.write_bundle(output, self.root, [distribution, distribution])
         self.assertEqual(report["installed_instances"], 5)
+        self.assertEqual(report["ecosystems"], ["python", "npm"])
         self.assertEqual(report["text_count"], 7)
         self.assertEqual(report["instances_with_gaps"], 0)
         self.assertEqual(len({row["instance_id"] for row in report["records"]}), 5)
@@ -87,6 +88,66 @@ class LicenseNoticeTests(unittest.TestCase):
             self.assertNotIn(private, serialized)
         self.assertNotIn("legal_compatible", report)
         self.assertNotIn("meets_rubric", report)
+
+    def test_python_only_environment_needs_no_web_tree_and_preserves_source_fence(self):
+        (self.root / "node_modules").rmdir()
+        distribution = self.distribution({"licenses/LICENSE": b"Python-only legal bytes\r\n"})
+        output = self.base / "python-only"
+        with patch.object(notices, "web_instances", side_effect=AssertionError("No npm scan")), \
+                patch.object(socket.socket, "connect", side_effect=AssertionError("Offline only")):
+            report = notices.write_bundle(output, self.root, [distribution], ecosystem="python")
+        self.assertEqual(report["ecosystems"], ["python"])
+        self.assertEqual([row["ecosystem"] for row in report["records"]], ["python"])
+        self.assertEqual(report["installed_instances"], 1)
+        self.assert_texts(report, output)
+        with self.assertRaises(ValueError):
+            notices.write_bundle(self.site / "inside-python", self.root, [distribution], ecosystem="python")
+        self.assertFalse((self.site / "inside-python").exists())
+
+    def test_npm_only_does_not_enumerate_collector_python_environment(self):
+        package = self.package()
+        (package / "LICENSE").write_bytes(b"Selected npm legal bytes\n")
+        output = self.base / "npm-only"
+        with patch.object(notices, "python_instances", side_effect=AssertionError("No Python scan")), \
+                patch.object(notices.importlib.metadata, "distributions", side_effect=AssertionError("No Python metadata")), \
+                patch.object(socket.socket, "connect", side_effect=AssertionError("Offline only")):
+            report = notices.write_bundle(output, self.root, ecosystem="npm")
+        self.assertEqual(report["ecosystems"], ["npm"])
+        self.assertEqual([row["ecosystem"] for row in report["records"]], ["npm"])
+        self.assert_texts(report, output)
+
+    def test_invalid_ecosystem_rejects_before_read_or_output(self):
+        output = self.base / "invalid-scope"
+        with patch.object(notices, "web_instances", side_effect=AssertionError("Must reject first")), \
+                patch.object(notices, "python_instances", side_effect=AssertionError("Must reject first")), \
+                self.assertRaises(ValueError):
+            notices.write_bundle(output, self.root, ecosystem="private-invalid-value")
+        self.assertFalse(output.exists())
+
+    def test_custom_root_cannot_write_into_collector_contribution_checkout(self):
+        output = SCRIPT.parent.parent / ".notice-output-must-not-exist"
+        with patch.object(notices, "collect", side_effect=AssertionError("Must reject before scan")), \
+                self.assertRaises(ValueError):
+            notices.write_bundle(output, self.root, ecosystem="npm")
+        self.assertFalse(output.exists())
+
+    def test_cli_explicit_root_and_npm_scope_collects_exact_bytes_and_safe_errors(self):
+        package = self.package()
+        (package / "LICENSE").write_bytes(b"CLI-selected legal bytes\r\n")
+        output = self.base / "cli-selected"
+        result = subprocess.run([sys.executable, str(SCRIPT), "--root", str(self.root), "--ecosystem", "npm",
+            "--output", str(output)], capture_output=True, text=True, check=False, cwd=self.base)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(report["ecosystems"], ["npm"])
+        self.assertEqual(report["installed_instances"], 1)
+        self.assert_texts(report, output)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--root", str(self.root),
+            "--ecosystem", "private-invalid-value", "--output", str(self.base / "invalid-cli")],
+            capture_output=True, text=True, check=False, cwd=self.base)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("private-invalid-value", result.stderr)
+        self.assertFalse((self.base / "invalid-cli").exists())
 
     def test_nested_vendored_texts_keep_parent_identity_and_exact_relative_names(self):
         package = self.package()

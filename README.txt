@@ -64,7 +64,9 @@ Third-party notices and distribution
 The offline scripts/license-inventory.py and scripts/license-notices.py inspect
 installed dependency declarations and package-owned legal texts. The notice
 collector preserves exact bytes and hashes, including bounded nested npm legal
-files, in a new external directory. See deploy/local/SETUP.txt for its command,
+files, in a new external directory. Explicit --ecosystem python or npm and
+--root select a standalone environment or preserved web installation; Python
+always comes from the running interpreter. See deploy/local/SETUP.txt for commands,
 coverage gaps, and source/output constraints. Installed dependency coverage is
 not complete attribution, source-obligation review, or legal compatibility.
 

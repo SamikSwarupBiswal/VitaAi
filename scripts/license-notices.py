@@ -216,11 +216,16 @@ def read_text_bytes(base, name):
     return data
 
 
-def collect(root=ROOT, distributions=None):
+def collect(root=ROOT, distributions=None, *, ecosystem="all"):
+    if ecosystem not in {"all", "python", "npm"}:
+        raise NoticeError("Unsupported ecosystem selection")
     root = root.resolve(strict=True)
-    web, excluded = web_instances(root)
-    distributions = importlib.metadata.distributions() if distributions is None else distributions
-    entries = [*python_instances(distributions), *web]
+    web, excluded = web_instances(root) if ecosystem != "python" else ([], 0)
+    python = []
+    if ecosystem != "npm":
+        distributions = importlib.metadata.distributions() if distributions is None else distributions
+        python = python_instances(distributions)
+    entries = [*python, *web]
     if len(entries) > MAXIMUM_INSTANCES:
         raise NoticeError("Package bound exceeded")
     records, blobs, source_roots, total = [], [], {root}, 0
@@ -256,6 +261,7 @@ def collect(root=ROOT, distributions=None):
                         "coverage": "collected" if texts and not issues else "partial" if texts else "unavailable"})
     report = {"schema_version": "1", "generated_at": datetime.now(UTC).isoformat(),
         "evidence_tier": "installed_notice_bytes", "status": "collected_with_gaps" if any(r["issues"] for r in records) else "collected",
+        "ecosystems": ["python", "npm"] if ecosystem == "all" else [ecosystem],
         "installed_instances": len(records), "workspace_packages_excluded": excluded, "text_count": len(blobs),
         "text_bytes": total, "instances_with_gaps": sum(bool(r["issues"]) for r in records),
         "records": records, "limitations": LIMITS}
@@ -265,14 +271,16 @@ def collect(root=ROOT, distributions=None):
     return report, encoded, blobs, source_roots
 
 
-def write_bundle(output, root=ROOT, distributions=None):
+def write_bundle(output, root=ROOT, distributions=None, *, ecosystem="all"):
     if output.exists() or output.is_symlink():
         raise NoticeError("Use a new output directory")
     destination = output.resolve()
     root = root.resolve(strict=True)
-    if destination.is_relative_to(root) or root.is_relative_to(destination) or not destination.parent.is_dir():
+    boundaries = {root, ROOT.resolve(strict=True)}
+    if (any(destination.is_relative_to(boundary) or boundary.is_relative_to(destination) for boundary in boundaries)
+            or not destination.parent.is_dir()):
         raise NoticeError("Use an external output directory")
-    report, encoded, blobs, source_roots = collect(root, distributions)
+    report, encoded, blobs, source_roots = collect(root, distributions, ecosystem=ecosystem)
     if any(destination.is_relative_to(source) or source.is_relative_to(destination) for source in source_roots):
         raise NoticeError("Output overlaps installed source")
     destination.mkdir()
@@ -292,9 +300,11 @@ def write_bundle(output, root=ROOT, distributions=None):
 def main():
     parser = argparse.ArgumentParser(description="Collect installed third-party legal texts offline, without legal certification")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--root", type=Path, default=ROOT, help="Workspace root containing node_modules; defaults to this checkout")
+    parser.add_argument("--ecosystem", default="all", help="all, python, or npm (default: all)")
     args = parser.parse_args()
     try:
-        report = write_bundle(args.output)
+        report = write_bundle(args.output, args.root, ecosystem=args.ecosystem)
     except (OSError, ValueError, TypeError, RecursionError):
         parser.exit(2, "Notice collection unavailable; inspect installed sources and the external destination privately.\n")
     print(f"Collected {report['text_count']} texts from {report['installed_instances']} installed instances; "
