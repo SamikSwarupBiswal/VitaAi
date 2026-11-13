@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["sample", "session"] = "sample"
     session_hours: int = Field(default=8, ge=1, le=24)
     session_cookie_secure: bool = False
+    web_origin: str = Field(default="", max_length=256)
     nebius_api_key: SecretStr = SecretStr("")
     nebius_model: str = ""
     nebius_base_url: str = "https://api.tokenfactory.nebius.com/v1"
@@ -135,6 +136,19 @@ class Settings(BaseSettings):
     microsoft_token_key: SecretStr = SecretStr("")
     microsoft_redirect_uri: str = Field(default="http://127.0.0.1:8000/api/integrations/microsoft/callback", max_length=256)
     microsoft_web_origin: str = Field(default="", max_length=256)
+
+    @field_validator("web_origin")
+    @classmethod
+    def session_web_origin(cls, value):
+        if value and not re.fullmatch(r"https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", value):
+            raise ValueError("Use an exact lowercase HTTPS DNS origin without a port, path, query or fragment")
+        return value
+
+    @model_validator(mode="after")
+    def hosted_session_boundary(self):
+        if self.web_origin and (self.auth_mode != "session" or not self.session_cookie_secure):
+            raise ValueError("Hosted web origins require session authentication and secure session cookies")
+        return self
 
     @field_validator("microsoft_redirect_uri", "microsoft_web_origin")
     @classmethod

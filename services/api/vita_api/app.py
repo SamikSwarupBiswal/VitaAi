@@ -81,6 +81,8 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
 
     app = FastAPI(title="VitaAi local foundation", version="0.1.0", lifespan=lifespan)
     hosts = ["127.0.0.1", "localhost", "testserver"]
+    if settings.web_origin:
+        hosts.append(urlsplit(settings.web_origin).hostname)
     if microsoft.hosted_callback:
         hosts.append(urlsplit(settings.microsoft_redirect_uri).hostname)
     if platform_settings.enabled:
@@ -135,6 +137,7 @@ def create_app(settings: Settings | None = None, provider: AdvisoryProvider | No
         origin = request.headers.get("origin")
         if request.method == "POST" and not callback and origin and origin not in {
             "http://127.0.0.1:3000", "http://localhost:3000", microsoft.connection_origin,
+            settings.web_origin or None,
             platform_settings.web_origin if platform_settings.enabled else None,
         }:
             return JSONResponse({"detail": "Untrusted request origin"}, status_code=403)
