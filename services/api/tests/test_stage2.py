@@ -57,7 +57,7 @@ NOW = datetime(2026, 10, 15, 10, tzinfo=UTC)
 
 
 class Stage2Tests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, *, now=NOW):
         self.temp = tempfile.TemporaryDirectory()
         self.pg_admin = None
         url = f"sqlite:///{Path(self.temp.name) / 'workflow.sqlite'}"
@@ -71,15 +71,15 @@ class Stage2Tests(unittest.TestCase):
             }).render_as_string(hide_password=False)
         self.store = Store(url)
         self.store.initialize()
-        self.store.seed(sample_records(NOW))
+        self.store.seed(sample_records(now))
         self.identity = Identity(self.store.engine)
         self.seller = self.identity.create_user("seller", "test-password-long", SAMPLE_ORG, "seller")
         self.reviewer = self.identity.create_user("reviewer", "test-password-long", SAMPLE_ORG, "reviewer")
-        self.now = NOW
+        self.now = now
         self.workflow = Workflow(self.store, clock=lambda: self.now)
         self.account = self.store.list_accounts(SAMPLE_ORG)[0]
         evidence = self.store.account_evidence(SAMPLE_ORG, self.account.id)
-        self.snapshot = assess(self.account, evidence, NOW.date()).snapshot_hash
+        self.snapshot = assess(self.account, evidence, now.date()).snapshot_hash
 
     def tearDown(self):
         self.store.engine.dispose()

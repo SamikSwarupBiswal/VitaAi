@@ -3,7 +3,7 @@ import copy
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -33,9 +33,12 @@ MAILBOX = "22222222-2222-4222-8222-222222222222"
 
 
 class MicrosoftTests(unittest.TestCase):
-    setUp = fixtures.Stage2Tests.setUp
     tearDown = fixtures.Stage2Tests.tearDown
     prepare = fixtures.Stage2Tests.prepare
+
+    def setUp(self):
+        # HTTP workflows use the real clock; keep their isolated evidence fresh.
+        fixtures.Stage2Tests.setUp(self, now=datetime.now(UTC).replace(microsecond=0))
 
     def configure(self):
         self.calls, self.saved = [], None

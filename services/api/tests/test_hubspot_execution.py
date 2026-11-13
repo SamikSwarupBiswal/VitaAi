@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import unittest
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import httpx
@@ -28,10 +28,13 @@ from vita_api.workflow_storage import claims, receipts, resources
 
 
 class HubSpotExecutionTests(unittest.TestCase):
-    setUp = fixtures.Stage2Tests.setUp
     tearDown = fixtures.Stage2Tests.tearDown
     prepare = fixtures.Stage2Tests.prepare
     approve = fixtures.Stage2Tests.approve
+
+    def setUp(self):
+        # HTTP workflows use the real clock; keep their isolated evidence fresh.
+        fixtures.Stage2Tests.setUp(self, now=datetime.now(UTC).replace(microsecond=0))
 
     def configure(self):
         self.calls, self.saved = [], {}
