@@ -20,3 +20,4 @@
 !services/api/vita_api/data/guardrail-evaluation.generated.json
 !services/api/migrations/*.py
 !services/api/migrations/versions/*.py
+!deploy/hosted/launch.py

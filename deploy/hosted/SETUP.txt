@@ -1,0 +1,63 @@
+VitaAi hosted candidate (single container)
+
+This original package prepares a web/API pair for a TLS-terminating host.
+It does not publish, provision an identity, or grant provider/write permission.
+Build only reviewed source; preserve existing data and unrelated services.
+
+From the repository root:
+  docker build -f deploy/hosted/Dockerfile -t vitaai-hosted:candidate .
+
+The default-deny context excludes private Markdown, .env, Git history, databases
+and caches. No runtime configuration or secret build arguments are declared.
+Versioned base tags are mutable; this is not complete supply-chain certification.
+The non-root runtime includes Python and Node; API binds only 127.0.0.1:8000.
+Web alone binds 0.0.0.0:PORT (default10000). Fixed Next gateways are unchanged.
+
+Supply runtime configuration through the host's private environment settings:
+  AUTH_MODE=session
+  SESSION_COOKIE_SECURE=true
+  WEB_ORIGIN=https://your-reviewed-service.example
+  VITAAI_WEB_ORIGIN=https://your-reviewed-service.example
+  DATABASE_URL=<private PostgreSQL connection URL>
+  PORT=10000
+
+Origins must be the same exact lowercase HTTPS DNS origin, with no port/path.
+PostgreSQL is mandatory: ephemeral SQLite is refused. PostgreSQL URLs are mapped
+to the installed psycopg driver, with TLS required unless stronger verification
+is explicitly configured. Do not print credentials, commit env files or place
+secrets in build arguments. Only the API child receives database/provider secrets.
+Keep integration/write/worker gates disabled unless separately authorized.
+
+Startup performs the existing API migrations and missing-only synthetic sample
+initialization against the configured database. No default account/password is
+created. Review a new database before initialization; never point a test candidate
+at another application's database. Provision chosen users through the existing
+vita_api.identity CLI from an authorized private environment with a secure prompt.
+For that CLI, set DATABASE_URL explicitly to the postgresql+psycopg:// form with
+sslmode=require (or stronger verification); URL normalization occurs in the
+hosted launcher, not in a separately invoked identity CLI.
+The API must pass schema readiness before web starts. Failure or unexpected exit
+of either child stops/reaps both; SIGTERM/SIGINT requests graceful pair shutdown.
+No automatic child restart or data cleanup occurs.
+
+Render settings, when separately reviewed for deployment:
+  Runtime: Docker; repository root context; Dockerfile: deploy/hosted/Dockerfile.
+  Use a dedicated reviewed service in the database's region; preserve others.
+  Keep auto-deploy off until the exact candidate/source is approved.
+  Set HTTP health path /api/auth/session and confirm its actual Host is the
+  configured origin's hostname. The container health probe also checks API
+  schema readiness. TLS terminates at the platform; do not publish port8000.
+
+Render Free has ephemeral files, idle spin-down and no shell/one-off jobs. Use
+an authorized external PostgreSQL CLI environment for explicit provisioning.
+Free PostgreSQL expires30days after creation; it does not establish durable
+release/judging availability. Never upgrade or create replacement resources
+without authority. Cold-start, resource limits, TLS, session/restart storage,
+browser/provider/OAuth and release acceptance require actual measured evidence.
+Local tests or an image build alone establish none of those external claims.
+
+Official references checked2026-11-13:
+https://render.com/docs/web-services
+https://render.com/docs/health-checks
+https://render.com/docs/docker
+https://render.com/docs/free

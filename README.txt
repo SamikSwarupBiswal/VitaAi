@@ -58,6 +58,13 @@ Installation accesses package registries. Existing output is never overwritten.
 Uncommitted changes are not tested; this does not establish Docker, browser,
 real-provider, tenant, or hosted acceptance. Full procedure: deploy/local/SETUP.txt.
 
+Prepare a hosted candidate
+--------------------------
+
+Read deploy/hosted/SETUP.txt for the separate single-container web/API candidate.
+It requires matching HTTPS origins, secure sessions and external PostgreSQL;
+it does not deploy, provision default accounts or establish hosted acceptance.
+
 Third-party notices and distribution
 -----------------------------------
 
