@@ -58,6 +58,15 @@ database audit. Remove the override after first successful startup and before
 any restart/redeploy; the normal Dockerfile command preserves existing data.
 It creates no identity and prints no credentials.
 
+The explicit deploy/hosted/render.yaml Blueprint targets the existing reviewed
+vitaai-stage6 service only. Use existingResources=adopt and autoSync=false;
+inspect the plan for that exact service before approval. It defines no database,
+secret or environment variable; existing private environment values are retained.
+After first successful initialization, change its dockerCommand to
+  python /opt/vitaai/deploy/hosted/launch.py
+and review/sync that correction before restart. Future Blueprint syncs remain
+manual; do not apply the empty-database command to an initialized database.
+
 Render Free has ephemeral files, idle spin-down and no shell/one-off jobs. Use
 an authorized external PostgreSQL CLI environment for explicit provisioning.
 Free PostgreSQL expires30days after creation; it does not establish durable

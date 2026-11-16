@@ -1,0 +1,17 @@
+# Adopt the reviewed existing service only; preserve its private environment.
+# Create with existingResources=adopt and autoSync=false; inspect the plan first.
+services:
+  - type: web
+    name: vitaai-stage6
+    runtime: docker
+    plan: free
+    region: singapore
+    repo: https://github.com/SamikSwarupBiswal/VitaAi
+    branch: main
+    numInstances: 1
+    autoDeployTrigger: "off"
+    dockerfilePath: deploy/hosted/Dockerfile
+    dockerContext: .
+    dockerCommand: python /opt/vitaai/deploy/hosted/preflight.py
+    healthCheckPath: /api/auth/session
+    renderSubdomainPolicy: enabled
