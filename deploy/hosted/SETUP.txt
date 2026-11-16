@@ -48,6 +48,16 @@ Render settings, when separately reviewed for deployment:
   configured origin's hostname. The container health probe also checks API
   schema readiness. TLS terminates at the platform; do not publish port8000.
 
+For the first initialization of an explicitly reviewed empty dedicated database,
+use this one-time Docker Command instead of an inline Python command:
+  python /opt/vitaai/deploy/hosted/preflight.py
+It validates the same configuration, inspects visible non-system tables in a
+read-only transaction, and launches only when that count is zero. Failure or a
+nonzero count stops without migration or cleanup. This is not a full pristine
+database audit. Remove the override after first successful startup and before
+any restart/redeploy; the normal Dockerfile command preserves existing data.
+It creates no identity and prints no credentials.
+
 Render Free has ephemeral files, idle spin-down and no shell/one-off jobs. Use
 an authorized external PostgreSQL CLI environment for explicit provisioning.
 Free PostgreSQL expires30days after creation; it does not establish durable

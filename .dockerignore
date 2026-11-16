@@ -21,3 +21,4 @@
 !services/api/migrations/*.py
 !services/api/migrations/versions/*.py
 !deploy/hosted/launch.py
+!deploy/hosted/preflight.py

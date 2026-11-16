@@ -1,5 +1,7 @@
 """Real isolated child processes and local HTTP probes; no deployed-service proof."""
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -7,7 +9,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location("hosted_launch", ROOT / "deploy/hosted/launch.py")
@@ -135,3 +137,68 @@ class HostedRuntimeTests(unittest.TestCase):
         self.assertNotIn("COPY . ", source)
         self.assertIn("!deploy/hosted/launch.py", (ROOT / ".dockerignore").read_text())
         self.assertIn("--check", source)
+
+
+class HostedPreflightTests(unittest.TestCase):
+    environment = HostedRuntimeTests.environment
+
+    def preflight(self):
+        spec = importlib.util.spec_from_file_location("hosted_preflight", ROOT / "deploy/hosted/preflight.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"launch": runtime}):
+            spec.loader.exec_module(module)
+        return module
+
+    def test_empty_database_uses_read_only_inspection_then_executes_normal_launcher(self):
+        module = self.preflight()
+        engine = MagicMock()
+        connection = engine.connect.return_value.__enter__.return_value
+        connection.execute.return_value.scalar_one.return_value = 0
+        with patch.dict(os.environ, self.environment(), clear=True), \
+                patch.object(module, "create_engine", return_value=engine) as create, \
+                patch.object(module.os, "execve") as execute, contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(module.main(), 0)
+        self.assertEqual([str(call.args[0]) for call in connection.execute.call_args_list], [
+            "SET TRANSACTION READ ONLY",
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')",
+        ])
+        self.assertIn("sslmode=require", create.call_args.args[0])
+        engine.dispose.assert_called_once()
+        self.assertEqual(execute.call_args.args[:2], (sys.executable, [sys.executable,
+                         str(ROOT / "deploy/hosted/launch.py")]))
+        self.assertIn("postgresql+psycopg://", execute.call_args.args[2]["DATABASE_URL"])
+        self.assertEqual(output.getvalue().strip(), "VITAAI_PREFLIGHT_NON_SYSTEM_TABLES=0")
+
+    def test_nonempty_database_never_starts_or_initializes_application(self):
+        module = self.preflight()
+        for count in (1, 49):
+            engine = MagicMock()
+            engine.connect.return_value.__enter__.return_value.execute.return_value.scalar_one.return_value = count
+            with self.subTest(count=count), patch.dict(os.environ, self.environment(), clear=True), \
+                    patch.object(module, "create_engine", return_value=engine), \
+                    patch.object(module.os, "execve") as execute, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(module.main(), 1)
+                execute.assert_not_called()
+                engine.dispose.assert_called_once()
+
+    def test_storage_failure_omits_private_details_and_never_executes_launcher(self):
+        module = self.preflight()
+        engine = MagicMock()
+        engine.connect.side_effect = RuntimeError("private-database-url")
+        with patch.dict(os.environ, self.environment(), clear=True), \
+                patch.object(module, "create_engine", return_value=engine), \
+                patch.object(module.os, "execve") as execute, contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(module.main(), 1)
+            execute.assert_not_called()
+        self.assertEqual(output.getvalue().strip(), "VITAAI_PREFLIGHT_FAILED")
+        engine.dispose.assert_called_once()
+
+    def test_invalid_configuration_denies_before_database_access(self):
+        module = self.preflight()
+        with patch.dict(os.environ, self.environment(DATABASE_URL="private-invalid-url"), clear=True), \
+                patch.object(module, "create_engine") as create, \
+                patch.object(module.os, "execve") as execute, contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(module.main(), 1)
+            create.assert_not_called()
+            execute.assert_not_called()
+        self.assertEqual(output.getvalue().strip(), "VITAAI_PREFLIGHT_FAILED")

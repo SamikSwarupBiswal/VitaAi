@@ -29,6 +29,7 @@ COPY --from=web-build /opt/vitaai/apps/web/public ./apps/web/public
 COPY services/api/vita_api ./services/api/vita_api
 COPY services/api/migrations ./services/api/migrations
 COPY deploy/hosted/launch.py ./deploy/hosted/launch.py
+COPY deploy/hosted/preflight.py ./deploy/hosted/preflight.py
 USER 10001:10001
 EXPOSE 10000
 HEALTHCHECK --interval=15s --timeout=6s --start-period=90s --retries=4 \
