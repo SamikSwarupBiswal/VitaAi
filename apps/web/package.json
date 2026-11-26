@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@microsoft/teams-js": "2.58.0",
-    "next": "16.4.2",
+    "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "lucide-react": "1.57.0"
@@ -22,6 +22,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "10.12.0",
-    "eslint-config-next": "16.4.2"
+    "eslint-config-next": "16.4.6"
   }
 }
