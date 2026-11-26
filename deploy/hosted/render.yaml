@@ -12,6 +12,6 @@ services:
     autoDeployTrigger: "off"
     dockerfilePath: deploy/hosted/Dockerfile
     dockerContext: .
-    dockerCommand: python /opt/vitaai/deploy/hosted/preflight.py
+    dockerCommand: python /opt/vitaai/deploy/hosted/launch.py
     healthCheckPath: /api/auth/session
     renderSubdomainPolicy: enabled
