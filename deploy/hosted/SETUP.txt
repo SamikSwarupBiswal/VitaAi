@@ -75,6 +75,55 @@ without authority. Cold-start, resource limits, TLS, session/restart storage,
 browser/provider/OAuth and release acceptance require actual measured evidence.
 Local tests or an image build alone establish none of those external claims.
 
+PostgreSQL backup and recovery rehearsal
+
+Run these steps from an authorized operator environment. Use the PostgreSQL
+client for the source server's major version. Configure separate libpq service
+entries named vitaai_backup and vitaai_restore with the approved connection and
+TLS settings. Obtain credentials through the operator's secret store and keep
+them out of commands, logs and artifacts. Work in a new directory in encrypted,
+access-controlled storage. Record the source database, backup time, schema head
+and application revision in the private recovery record.
+
+  pg_dump --dbname=service=vitaai_backup --format=custom --file=vitaai-recovery.dump
+  pg_restore --list vitaai-recovery.dump
+
+Record the archive's byte count and SHA-256. Check the digest again before
+restoring. Confirm the restore service points to a separate, empty database on
+an isolated network. Keep the source and its running service intact.
+
+  pg_restore --dbname=service=vitaai_restore --single-transaction --no-owner --no-privileges vitaai-recovery.dump
+
+This procedure restores one database. Recreate and review the destination's
+roles, ownership and grants separately. Compare the restored schema, including
+constraints and migration head, with the source and verify counts and contents
+against the same recovery point. Include users, sessions, approvals, audits and
+receipts when the source has those records. Record the actual recovery point,
+elapsed restore time and any data omitted from the rehearsal.
+
+Start the exact candidate image against the restored database, with provider
+writes and workers disabled. Verify API schema readiness, web startup and
+authorized sign-in. Reopen retained workflow and assurance records and confirm
+session and audit readback across an application restart. Use an approved HTTPS
+endpoint to verify browser access and cookie behavior before any cutover.
+
+During a database outage the private API's /health/live can return 200 while
+/health/ready returns 503. Alert on readiness failure and keep write traffic
+paused during recovery. After database recovery, verify readiness, session
+access and protected record readback before resuming write traffic.
+
+Require explicit cutover approval. Account for writes after the backup by
+quiescing writes for a final backup or reconciling later changes before moving
+traffic. Preserve the prior service and database as recovery options. Verify
+schema compatibility before moving traffic back to an older application image.
+Before switching back to the prior database, pause writes and reconcile changes
+committed to the new database since cutover. Use forward recovery if schema
+compatibility or reconciliation cannot be verified.
+
+PostgreSQL 17 recovery references
+https://www.postgresql.org/docs/17/app-pgdump.html
+https://www.postgresql.org/docs/17/app-pgrestore.html
+
 Official references checked2026-11-13:
 https://render.com/docs/web-services
 https://render.com/docs/health-checks
